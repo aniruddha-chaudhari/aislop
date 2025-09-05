@@ -1,0 +1,83 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Session {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Session name based on conversation topic
+  name        String?
+
+  // Audio generation parameters
+  exaggeration      Float
+  temperature       Float
+  seedNum           Int
+  cfgWeight         Float
+  minP              Float
+  topP              Float
+  repetitionPenalty Float
+
+  // Session metadata
+  totalDialogues     Int     @default(0)
+  audioFilesGenerated Int    @default(0)
+  allSuccessful      Boolean @default(false)
+
+  // Relations
+  dialogues   Dialogue[]
+  audioFiles  AudioFile[]
+
+  @@map("sessions")
+}
+
+model Dialogue {
+  id        String @id @default(cuid())
+  sessionId String
+
+  // Dialogue content
+  text      String
+  character String // "Stewie" or "Peter"
+  order     Int    // Position in conversation (1-based)
+
+  // Timestamps
+  createdAt DateTime @default(now())
+
+  // Relations
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  audioFile AudioFile?
+
+  @@map("dialogues")
+}
+
+model AudioFile {
+  id        String @id @default(cuid())
+  sessionId String
+  dialogueId String? @unique
+
+  // File information
+  filename    String
+  filePath    String @unique
+  fileSize    Int?
+  duration    Float? // in seconds
+
+  // Generation metadata
+  generatedAt DateTime @default(now())
+  success     Boolean  @default(true)
+  errorMessage String?
+
+  // Relations
+  session   Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  dialogue  Dialogue? @relation(fields: [dialogueId], references: [id], onDelete: SetNull)
+
+  @@map("audio_files")
+}
