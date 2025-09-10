@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { assistant } from '../service/assistant';
+// import { assistant } from '../service/assistant'; // This file doesn't exist
 import { ttsService } from '../service/tts';
 import { CharacterName } from '../config/tts-config';
 import fs from 'fs';
@@ -17,8 +17,12 @@ export const generateScript = async (req: Request, res: Response) => {
     }
 
     // Call the assistant function to generate only the script
-    const result = await assistant(prompt);
-    const conversation = result.object;
+    // const result = await assistant(prompt);
+    // const conversation = result.object;
+    
+    // Use the function from assistants.ts
+    const { generateConversation: generateConv } = await import('../service/assistants');
+    const conversation = await generateConv(prompt);
 
     // Return only the generated conversation script
     return res.status(200).json({
@@ -101,8 +105,12 @@ export const generateConversation = async (req: Request, res: Response) => {
     }
 
     // Call the assistant function
-    const result = await assistant(prompt);
-    const conversation = result.object;
+    // const result = await assistant(prompt);
+    // const conversation = result.object;
+    
+    // Use the function from assistants.ts
+    const { generateConversation: generateConv } = await import('../service/assistants');
+    const conversation = await generateConv(prompt);
 
     let audioFiles: string[] = [];
     
@@ -358,6 +366,78 @@ export const setSoVITSWeights = async (req: Request, res: Response) => {
     return res.status(400).json({
       message: 'change sovits weight failed',
       Exception: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+};
+
+export const testAssistants = async (req: Request, res: Response) => {
+  try {
+    const { topic } = req.body;
+
+    // Validate topic
+    if (!topic || typeof topic !== 'string' || topic.trim() === '') {
+      return res.status(400).json({
+        error: 'Topic is required and must be a non-empty string'
+      });
+    }
+
+    // Import the functions dynamically to avoid conflicts
+    const { generateConversation } = await import('../service/assistants');
+
+    // Call generateConversation
+    const conversationResult = await generateConversation(topic);
+
+    // Return the results
+    return res.status(200).json({
+      success: true,
+      data: {
+        topic,
+        conversation: conversationResult
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in testAssistants controller:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Internal server error occurred while testing assistants',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+};
+
+export const testResearch = async (req: Request, res: Response) => {
+  try {
+    const { topic } = req.body;
+
+    // Validate topic
+    if (!topic || typeof topic !== 'string' || topic.trim() === '') {
+      return res.status(400).json({
+        error: 'Topic is required and must be a non-empty string'
+      });
+    }
+
+    // Import the research function
+    const { researchontopicwithlinks } = await import('../service/assistants');
+
+    // Call research function
+    const researchResult = await researchontopicwithlinks(topic);
+
+    // Return the results
+    return res.status(200).json({
+      success: true,
+      data: {
+        topic,
+        research: researchResult
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in testResearch controller:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Internal server error occurred while testing research',
+      details: error instanceof Error ? error.message : 'Unknown error'
     });
   }
 };

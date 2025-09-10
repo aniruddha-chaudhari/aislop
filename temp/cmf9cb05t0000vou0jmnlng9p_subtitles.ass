@@ -1,0 +1,380 @@
+[Script Info]
+Title: Mobile-Optimized Dialogue with 3-Word Rolling Display
+ScriptType: v4.00+
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+YCbCr Matrix: TV.601
+PlayResX: 1080
+PlayResY: 1920
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Normal,Arial-Black,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,2,2,30,30,800,1
+Style: Highlight,Arial-Black,48,&H0000FFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,2,2,30,30,800,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:00.62,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}Peter,{\c&H00FFFFFF&} you are
+Dialogue: 0,0:00:00.62,0:00:00.86,Normal,Stewie,0,0,0,,Peter, {\c&H0000FFFF&}you{\c&H00FFFFFF&} are
+Dialogue: 0,0:00:00.86,0:00:00.98,Normal,Stewie,0,0,0,,Peter, you {\c&H0000FFFF&}are{\c&H00FFFFFF&}
+Dialogue: 0,0:00:00.98,0:00:01.12,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}a{\c&H00FFFFFF&} veritable monument
+Dialogue: 0,0:00:01.12,0:00:01.66,Normal,Stewie,0,0,0,,a {\c&H0000FFFF&}veritable{\c&H00FFFFFF&} monument
+Dialogue: 0,0:00:01.66,0:00:02.05,Normal,Stewie,0,0,0,,a veritable {\c&H0000FFFF&}monument{\c&H00FFFFFF&}
+Dialogue: 0,0:00:02.05,0:00:02.15,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}to{\c&H00FFFFFF&} sloth, but
+Dialogue: 0,0:00:02.15,0:00:02.71,Normal,Stewie,0,0,0,,to {\c&H0000FFFF&}sloth,{\c&H00FFFFFF&} but
+Dialogue: 0,0:00:02.71,0:00:02.89,Normal,Stewie,0,0,0,,to sloth, {\c&H0000FFFF&}but{\c&H00FFFFFF&}
+Dialogue: 0,0:00:02.89,0:00:03.05,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}even{\c&H00FFFFFF&} you should
+Dialogue: 0,0:00:03.05,0:00:03.19,Normal,Stewie,0,0,0,,even {\c&H0000FFFF&}you{\c&H00FFFFFF&} should
+Dialogue: 0,0:00:03.19,0:00:03.39,Normal,Stewie,0,0,0,,even you {\c&H0000FFFF&}should{\c&H00FFFFFF&}
+Dialogue: 0,0:00:03.39,0:00:03.72,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}grasp{\c&H00FFFFFF&} the brilliance
+Dialogue: 0,0:00:03.72,0:00:03.83,Normal,Stewie,0,0,0,,grasp {\c&H0000FFFF&}the{\c&H00FFFFFF&} brilliance
+Dialogue: 0,0:00:03.83,0:00:04.36,Normal,Stewie,0,0,0,,grasp the {\c&H0000FFFF&}brilliance{\c&H00FFFFFF&}
+Dialogue: 0,0:00:04.36,0:00:04.48,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}of{\c&H00FFFFFF&} Docker. It
+Dialogue: 0,0:00:04.48,0:00:05.30,Normal,Stewie,0,0,0,,of {\c&H0000FFFF&}Docker.{\c&H00FFFFFF&} It
+Dialogue: 0,0:00:05.30,0:00:05.42,Normal,Stewie,0,0,0,,of Docker. {\c&H0000FFFF&}It{\c&H00FFFFFF&}
+Dialogue: 0,0:00:05.42,0:00:05.52,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}is{\c&H00FFFFFF&} a revolutionary
+Dialogue: 0,0:00:05.52,0:00:05.61,Normal,Stewie,0,0,0,,is {\c&H0000FFFF&}a{\c&H00FFFFFF&} revolutionary
+Dialogue: 0,0:00:05.61,0:00:06.19,Normal,Stewie,0,0,0,,is a {\c&H0000FFFF&}revolutionary{\c&H00FFFFFF&}
+Dialogue: 0,0:00:06.19,0:00:06.55,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}concept{\c&H00FFFFFF&} for software
+Dialogue: 0,0:00:06.55,0:00:06.67,Normal,Stewie,0,0,0,,concept {\c&H0000FFFF&}for{\c&H00FFFFFF&} software
+Dialogue: 0,0:00:06.67,0:00:07.05,Normal,Stewie,0,0,0,,concept for {\c&H0000FFFF&}software{\c&H00FFFFFF&}
+Dialogue: 0,0:00:07.05,0:00:07.62,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}development.{\c&H00FFFFFF&}
+Dialogue: 0,0:00:07.59,0:00:08.62,Normal,Peter,0,0,0,,{\c&H0000FFFF&}Docker?{\c&H00FFFFFF&} Is that
+Dialogue: 0,0:00:08.62,0:00:08.70,Normal,Peter,0,0,0,,Docker? {\c&H0000FFFF&}Is{\c&H00FFFFFF&} that
+Dialogue: 0,0:00:08.70,0:00:08.84,Normal,Peter,0,0,0,,Docker? Is {\c&H0000FFFF&}that{\c&H00FFFFFF&}
+Dialogue: 0,0:00:08.84,0:00:09.00,Normal,Peter,0,0,0,,{\c&H0000FFFF&}like{\c&H00FFFFFF&} when I
+Dialogue: 0,0:00:09.00,0:00:09.15,Normal,Peter,0,0,0,,like {\c&H0000FFFF&}when{\c&H00FFFFFF&} I
+Dialogue: 0,0:00:09.15,0:00:09.27,Normal,Peter,0,0,0,,like when {\c&H0000FFFF&}I{\c&H00FFFFFF&}
+Dialogue: 0,0:00:09.27,0:00:09.47,Normal,Peter,0,0,0,,{\c&H0000FFFF&}dock{\c&H00FFFFFF&} my boat
+Dialogue: 0,0:00:09.47,0:00:09.59,Normal,Peter,0,0,0,,dock {\c&H0000FFFF&}my{\c&H00FFFFFF&} boat
+Dialogue: 0,0:00:09.59,0:00:09.79,Normal,Peter,0,0,0,,dock my {\c&H0000FFFF&}boat{\c&H00FFFFFF&}
+Dialogue: 0,0:00:09.79,0:00:09.85,Normal,Peter,0,0,0,,{\c&H0000FFFF&}at{\c&H00FFFFFF&} the lake?
+Dialogue: 0,0:00:09.85,0:00:09.97,Normal,Peter,0,0,0,,at {\c&H0000FFFF&}the{\c&H00FFFFFF&} lake?
+Dialogue: 0,0:00:09.97,0:00:10.41,Normal,Peter,0,0,0,,at the {\c&H0000FFFF&}lake?{\c&H00FFFFFF&}
+Dialogue: 0,0:00:10.41,0:00:10.55,Normal,Peter,0,0,0,,{\c&H0000FFFF&}You{\c&H00FFFFFF&} pull it
+Dialogue: 0,0:00:10.55,0:00:10.74,Normal,Peter,0,0,0,,You {\c&H0000FFFF&}pull{\c&H00FFFFFF&} it
+Dialogue: 0,0:00:10.74,0:00:10.82,Normal,Peter,0,0,0,,You pull {\c&H0000FFFF&}it{\c&H00FFFFFF&}
+Dialogue: 0,0:00:10.82,0:00:10.96,Normal,Peter,0,0,0,,{\c&H0000FFFF&}in{\c&H00FFFFFF&} slow, tie
+Dialogue: 0,0:00:10.96,0:00:11.34,Normal,Peter,0,0,0,,in {\c&H0000FFFF&}slow,{\c&H00FFFFFF&} tie
+Dialogue: 0,0:00:11.34,0:00:11.54,Normal,Peter,0,0,0,,in slow, {\c&H0000FFFF&}tie{\c&H00FFFFFF&}
+Dialogue: 0,0:00:11.54,0:00:11.68,Normal,Peter,0,0,0,,{\c&H0000FFFF&}it{\c&H00FFFFFF&} up. I
+Dialogue: 0,0:00:11.68,0:00:12.00,Normal,Peter,0,0,0,,it {\c&H0000FFFF&}up.{\c&H00FFFFFF&} I
+Dialogue: 0,0:00:12.00,0:00:12.12,Normal,Peter,0,0,0,,it up. {\c&H0000FFFF&}I{\c&H00FFFFFF&}
+Dialogue: 0,0:00:12.12,0:00:12.25,Normal,Peter,0,0,0,,{\c&H0000FFFF&}am{\c&H00FFFFFF&} good at
+Dialogue: 0,0:00:12.25,0:00:12.41,Normal,Peter,0,0,0,,am {\c&H0000FFFF&}good{\c&H00FFFFFF&} at
+Dialogue: 0,0:00:12.41,0:00:12.49,Normal,Peter,0,0,0,,am good {\c&H0000FFFF&}at{\c&H00FFFFFF&}
+Dialogue: 0,0:00:12.49,0:00:12.83,Normal,Peter,0,0,0,,{\c&H0000FFFF&}docking{\c&H00FFFFFF&} boats, Stewie.
+Dialogue: 0,0:00:12.83,0:00:13.07,Normal,Peter,0,0,0,,docking {\c&H0000FFFF&}boats,{\c&H00FFFFFF&} Stewie.
+Dialogue: 0,0:00:13.07,0:00:13.61,Normal,Peter,0,0,0,,docking boats, {\c&H0000FFFF&}Stewie.{\c&H00FFFFFF&}
+Dialogue: 0,0:00:13.59,0:00:14.32,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}No,{\c&H00FFFFFF&} you brain
+Dialogue: 0,0:00:14.32,0:00:14.62,Normal,Stewie,0,0,0,,No, {\c&H0000FFFF&}you{\c&H00FFFFFF&} brain
+Dialogue: 0,0:00:14.62,0:00:15.08,Normal,Stewie,0,0,0,,No, you {\c&H0000FFFF&}brain{\c&H00FFFFFF&}
+Dialogue: 0,0:00:15.08,0:00:15.36,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}dead{\c&H00FFFFFF&} imbecile! It
+Dialogue: 0,0:00:15.36,0:00:16.30,Normal,Stewie,0,0,0,,dead {\c&H0000FFFF&}imbecile!{\c&H00FFFFFF&} It
+Dialogue: 0,0:00:16.30,0:00:16.40,Normal,Stewie,0,0,0,,dead imbecile! {\c&H0000FFFF&}It{\c&H00FFFFFF&}
+Dialogue: 0,0:00:16.40,0:00:16.62,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}has{\c&H00FFFFFF&} nothing to
+Dialogue: 0,0:00:16.62,0:00:16.91,Normal,Stewie,0,0,0,,has {\c&H0000FFFF&}nothing{\c&H00FFFFFF&} to
+Dialogue: 0,0:00:16.91,0:00:17.03,Normal,Stewie,0,0,0,,has nothing {\c&H0000FFFF&}to{\c&H00FFFFFF&}
+Dialogue: 0,0:00:17.03,0:00:17.39,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}do{\c&H00FFFFFF&} with maritime
+Dialogue: 0,0:00:17.39,0:00:17.59,Normal,Stewie,0,0,0,,do {\c&H0000FFFF&}with{\c&H00FFFFFF&} maritime
+Dialogue: 0,0:00:17.59,0:00:18.11,Normal,Stewie,0,0,0,,do with {\c&H0000FFFF&}maritime{\c&H00FFFFFF&}
+Dialogue: 0,0:00:18.11,0:00:19.13,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}parking.{\c&H00FFFFFF&} Docker creates
+Dialogue: 0,0:00:19.13,0:00:19.49,Normal,Stewie,0,0,0,,parking. {\c&H0000FFFF&}Docker{\c&H00FFFFFF&} creates
+Dialogue: 0,0:00:19.49,0:00:19.89,Normal,Stewie,0,0,0,,parking. Docker {\c&H0000FFFF&}creates{\c&H00FFFFFF&}
+Dialogue: 0,0:00:19.89,0:00:20.66,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}isolated{\c&H00FFFFFF&} environments,\Ncalled
+Dialogue: 0,0:00:20.66,0:00:21.38,Normal,Stewie,0,0,0,,isolated {\c&H0000FFFF&}environments,{\c&H00FFFFFF&}\Ncalled
+Dialogue: 0,0:00:21.38,0:00:21.70,Normal,Stewie,0,0,0,,isolated environments,\N{\c&H0000FFFF&}called{\c&H00FFFFFF&}
+Dialogue: 0,0:00:21.70,0:00:22.36,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}containers,{\c&H00FFFFFF&} for\Napplications.
+Dialogue: 0,0:00:22.36,0:00:22.56,Normal,Stewie,0,0,0,,containers, {\c&H0000FFFF&}for{\c&H00FFFFFF&}\Napplications.
+Dialogue: 0,0:00:22.56,0:00:23.94,Normal,Stewie,0,0,0,,containers, for\N{\c&H0000FFFF&}applications.{\c&H00FFFFFF&}
+Dialogue: 0,0:00:23.94,0:00:24.13,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}It{\c&H00FFFFFF&} packages your
+Dialogue: 0,0:00:24.13,0:00:24.57,Normal,Stewie,0,0,0,,It {\c&H0000FFFF&}packages{\c&H00FFFFFF&} your
+Dialogue: 0,0:00:24.57,0:00:24.77,Normal,Stewie,0,0,0,,It packages {\c&H0000FFFF&}your{\c&H00FFFFFF&}
+Dialogue: 0,0:00:24.77,0:00:25.21,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}code{\c&H00FFFFFF&} with everything
+Dialogue: 0,0:00:25.21,0:00:25.55,Normal,Stewie,0,0,0,,code {\c&H0000FFFF&}with{\c&H00FFFFFF&} everything
+Dialogue: 0,0:00:25.55,0:00:25.97,Normal,Stewie,0,0,0,,code with {\c&H0000FFFF&}everything{\c&H00FFFFFF&}
+Dialogue: 0,0:00:25.97,0:00:26.11,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}it{\c&H00FFFFFF&} needs to
+Dialogue: 0,0:00:26.11,0:00:26.53,Normal,Stewie,0,0,0,,it {\c&H0000FFFF&}needs{\c&H00FFFFFF&} to
+Dialogue: 0,0:00:26.53,0:00:26.71,Normal,Stewie,0,0,0,,it needs {\c&H0000FFFF&}to{\c&H00FFFFFF&}
+Dialogue: 0,0:00:26.71,0:00:27.33,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}run.{\c&H00FFFFFF&}
+Dialogue: 0,0:00:27.32,0:00:28.26,Normal,Peter,0,0,0,,{\c&H0000FFFF&}Oh,{\c&H00FFFFFF&} so it
+Dialogue: 0,0:00:28.26,0:00:28.42,Normal,Peter,0,0,0,,Oh, {\c&H0000FFFF&}so{\c&H00FFFFFF&} it
+Dialogue: 0,0:00:28.42,0:00:28.54,Normal,Peter,0,0,0,,Oh, so {\c&H0000FFFF&}it{\c&H00FFFFFF&}
+Dialogue: 0,0:00:28.54,0:00:28.68,Normal,Peter,0,0,0,,{\c&H0000FFFF&}is{\c&H00FFFFFF&} like putting
+Dialogue: 0,0:00:28.68,0:00:28.88,Normal,Peter,0,0,0,,is {\c&H0000FFFF&}like{\c&H00FFFFFF&} putting
+Dialogue: 0,0:00:28.88,0:00:29.16,Normal,Peter,0,0,0,,is like {\c&H0000FFFF&}putting{\c&H00FFFFFF&}
+Dialogue: 0,0:00:29.16,0:00:29.34,Normal,Peter,0,0,0,,{\c&H0000FFFF&}your{\c&H00FFFFFF&} action figures
+Dialogue: 0,0:00:29.34,0:00:29.64,Normal,Peter,0,0,0,,your {\c&H0000FFFF&}action{\c&H00FFFFFF&} figures
+Dialogue: 0,0:00:29.64,0:00:30.05,Normal,Peter,0,0,0,,your action {\c&H0000FFFF&}figures{\c&H00FFFFFF&}
+Dialogue: 0,0:00:30.05,0:00:30.17,Normal,Peter,0,0,0,,{\c&H0000FFFF&}in{\c&H00FFFFFF&} little plastic
+Dialogue: 0,0:00:30.17,0:00:30.41,Normal,Peter,0,0,0,,in {\c&H0000FFFF&}little{\c&H00FFFFFF&} plastic
+Dialogue: 0,0:00:30.41,0:00:30.85,Normal,Peter,0,0,0,,in little {\c&H0000FFFF&}plastic{\c&H00FFFFFF&}
+Dialogue: 0,0:00:30.85,0:00:31.73,Normal,Peter,0,0,0,,{\c&H0000FFFF&}boxes?{\c&H00FFFFFF&} And the
+Dialogue: 0,0:00:31.73,0:00:31.85,Normal,Peter,0,0,0,,boxes? {\c&H0000FFFF&}And{\c&H00FFFFFF&} the
+Dialogue: 0,0:00:31.85,0:00:31.95,Normal,Peter,0,0,0,,boxes? And {\c&H0000FFFF&}the{\c&H00FFFFFF&}
+Dialogue: 0,0:00:31.95,0:00:32.23,Normal,Peter,0,0,0,,{\c&H0000FFFF&}box{\c&H00FFFFFF&} has all
+Dialogue: 0,0:00:32.23,0:00:32.45,Normal,Peter,0,0,0,,box {\c&H0000FFFF&}has{\c&H00FFFFFF&} all
+Dialogue: 0,0:00:32.45,0:00:32.71,Normal,Peter,0,0,0,,box has {\c&H0000FFFF&}all{\c&H00FFFFFF&}
+Dialogue: 0,0:00:32.71,0:00:32.96,Normal,Peter,0,0,0,,{\c&H0000FFFF&}their{\c&H00FFFFFF&} tiny accessories
+Dialogue: 0,0:00:32.96,0:00:33.28,Normal,Peter,0,0,0,,their {\c&H0000FFFF&}tiny{\c&H00FFFFFF&} accessories
+Dialogue: 0,0:00:33.28,0:00:33.86,Normal,Peter,0,0,0,,their tiny {\c&H0000FFFF&}accessories{\c&H00FFFFFF&}
+Dialogue: 0,0:00:33.86,0:00:34.72,Normal,Peter,0,0,0,,{\c&H0000FFFF&}inside,{\c&H00FFFFFF&} like a
+Dialogue: 0,0:00:34.72,0:00:34.88,Normal,Peter,0,0,0,,inside, {\c&H0000FFFF&}like{\c&H00FFFFFF&} a
+Dialogue: 0,0:00:34.88,0:00:34.96,Normal,Peter,0,0,0,,inside, like {\c&H0000FFFF&}a{\c&H00FFFFFF&}
+Dialogue: 0,0:00:34.96,0:00:35.22,Normal,Peter,0,0,0,,{\c&H0000FFFF&}little{\c&H00FFFFFF&} laser gun
+Dialogue: 0,0:00:35.22,0:00:35.59,Normal,Peter,0,0,0,,little {\c&H0000FFFF&}laser{\c&H00FFFFFF&} gun
+Dialogue: 0,0:00:35.59,0:00:35.91,Normal,Peter,0,0,0,,little laser {\c&H0000FFFF&}gun{\c&H00FFFFFF&}
+Dialogue: 0,0:00:35.91,0:00:36.01,Normal,Peter,0,0,0,,{\c&H0000FFFF&}or{\c&H00FFFFFF&} a mini
+Dialogue: 0,0:00:36.01,0:00:36.07,Normal,Peter,0,0,0,,or {\c&H0000FFFF&}a{\c&H00FFFFFF&} mini
+Dialogue: 0,0:00:36.07,0:00:36.35,Normal,Peter,0,0,0,,or a {\c&H0000FFFF&}mini{\c&H00FFFFFF&}
+Dialogue: 0,0:00:36.35,0:00:37.19,Normal,Peter,0,0,0,,{\c&H0000FFFF&}sandwich.{\c&H00FFFFFF&} So they
+Dialogue: 0,0:00:37.19,0:00:37.33,Normal,Peter,0,0,0,,sandwich. {\c&H0000FFFF&}So{\c&H00FFFFFF&} they
+Dialogue: 0,0:00:37.33,0:00:37.49,Normal,Peter,0,0,0,,sandwich. So {\c&H0000FFFF&}they{\c&H00FFFFFF&}
+Dialogue: 0,0:00:37.49,0:00:37.67,Normal,Peter,0,0,0,,{\c&H0000FFFF&}are{\c&H00FFFFFF&} safe.
+Dialogue: 0,0:00:37.67,0:00:38.46,Normal,Peter,0,0,0,,are {\c&H0000FFFF&}safe.{\c&H00FFFFFF&}
+Dialogue: 0,0:00:38.43,0:00:39.32,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}Precisely,{\c&H00FFFFFF&} but for
+Dialogue: 0,0:00:39.32,0:00:39.58,Normal,Stewie,0,0,0,,Precisely, {\c&H0000FFFF&}but{\c&H00FFFFFF&} for
+Dialogue: 0,0:00:39.58,0:00:39.72,Normal,Stewie,0,0,0,,Precisely, but {\c&H0000FFFF&}for{\c&H00FFFFFF&}
+Dialogue: 0,0:00:39.72,0:00:40.52,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}software,{\c&H00FFFFFF&} not your
+Dialogue: 0,0:00:40.52,0:00:40.74,Normal,Stewie,0,0,0,,software, {\c&H0000FFFF&}not{\c&H00FFFFFF&} your
+Dialogue: 0,0:00:40.74,0:00:40.92,Normal,Stewie,0,0,0,,software, not {\c&H0000FFFF&}your{\c&H00FFFFFF&}
+Dialogue: 0,0:00:40.92,0:00:41.34,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}childish{\c&H00FFFFFF&} playthings.\NThese
+Dialogue: 0,0:00:41.34,0:00:42.57,Normal,Stewie,0,0,0,,childish {\c&H0000FFFF&}playthings.{\c&H00FFFFFF&}\NThese
+Dialogue: 0,0:00:42.57,0:00:42.85,Normal,Stewie,0,0,0,,childish playthings.\N{\c&H0000FFFF&}These{\c&H00FFFFFF&}
+Dialogue: 0,0:00:42.85,0:00:43.41,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}containers{\c&H00FFFFFF&} ensure your
+Dialogue: 0,0:00:43.41,0:00:43.75,Normal,Stewie,0,0,0,,containers {\c&H0000FFFF&}ensure{\c&H00FFFFFF&} your
+Dialogue: 0,0:00:43.75,0:00:43.97,Normal,Stewie,0,0,0,,containers ensure {\c&H0000FFFF&}your{\c&H00FFFFFF&}
+Dialogue: 0,0:00:43.97,0:00:44.59,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}application{\c&H00FFFFFF&} runs\Nconsistently
+Dialogue: 0,0:00:44.59,0:00:44.97,Normal,Stewie,0,0,0,,application {\c&H0000FFFF&}runs{\c&H00FFFFFF&}\Nconsistently
+Dialogue: 0,0:00:44.97,0:00:45.80,Normal,Stewie,0,0,0,,application runs\N{\c&H0000FFFF&}consistently{\c&H00FFFFFF&}
+Dialogue: 0,0:00:45.80,0:00:46.36,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}everywhere,{\c&H00FFFFFF&} from a
+Dialogue: 0,0:00:46.36,0:00:46.54,Normal,Stewie,0,0,0,,everywhere, {\c&H0000FFFF&}from{\c&H00FFFFFF&} a
+Dialogue: 0,0:00:46.54,0:00:46.62,Normal,Stewie,0,0,0,,everywhere, from {\c&H0000FFFF&}a{\c&H00FFFFFF&}
+Dialogue: 0,0:00:46.62,0:00:47.10,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}developer's{\c&H00FFFFFF&} laptop to
+Dialogue: 0,0:00:47.10,0:00:47.66,Normal,Stewie,0,0,0,,developer's {\c&H0000FFFF&}laptop{\c&H00FFFFFF&} to
+Dialogue: 0,0:00:47.66,0:00:47.80,Normal,Stewie,0,0,0,,developer's laptop {\c&H0000FFFF&}to{\c&H00FFFFFF&}
+Dialogue: 0,0:00:47.80,0:00:47.88,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}a{\c&H00FFFFFF&} massive cloud
+Dialogue: 0,0:00:47.88,0:00:48.25,Normal,Stewie,0,0,0,,a {\c&H0000FFFF&}massive{\c&H00FFFFFF&} cloud
+Dialogue: 0,0:00:48.25,0:00:48.57,Normal,Stewie,0,0,0,,a massive {\c&H0000FFFF&}cloud{\c&H00FFFFFF&}
+Dialogue: 0,0:00:48.57,0:00:49.43,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}server.{\c&H00FFFFFF&} It is
+Dialogue: 0,0:00:49.43,0:00:49.55,Normal,Stewie,0,0,0,,server. {\c&H0000FFFF&}It{\c&H00FFFFFF&} is
+Dialogue: 0,0:00:49.55,0:00:49.71,Normal,Stewie,0,0,0,,server. It {\c&H0000FFFF&}is{\c&H00FFFFFF&}
+Dialogue: 0,0:00:49.71,0:00:50.59,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}efficient,{\c&H00FFFFFF&} unlike you.
+Dialogue: 0,0:00:50.59,0:00:50.97,Normal,Stewie,0,0,0,,efficient, {\c&H0000FFFF&}unlike{\c&H00FFFFFF&} you.
+Dialogue: 0,0:00:50.97,0:00:51.53,Normal,Stewie,0,0,0,,efficient, unlike {\c&H0000FFFF&}you.{\c&H00FFFFFF&}
+Dialogue: 0,0:00:51.51,0:00:52.14,Normal,Peter,0,0,0,,{\c&H0000FFFF&}So{\c&H00FFFFFF&} it is
+Dialogue: 0,0:00:52.14,0:00:52.26,Normal,Peter,0,0,0,,So {\c&H0000FFFF&}it{\c&H00FFFFFF&} is
+Dialogue: 0,0:00:52.26,0:00:52.38,Normal,Peter,0,0,0,,So it {\c&H0000FFFF&}is{\c&H00FFFFFF&}
+Dialogue: 0,0:00:52.38,0:00:52.62,Normal,Peter,0,0,0,,{\c&H0000FFFF&}like{\c&H00FFFFFF&} a magic
+Dialogue: 0,0:00:52.62,0:00:52.86,Normal,Peter,0,0,0,,like {\c&H0000FFFF&}a{\c&H00FFFFFF&} magic
+Dialogue: 0,0:00:52.86,0:00:53.32,Normal,Peter,0,0,0,,like a {\c&H0000FFFF&}magic{\c&H00FFFFFF&}
+Dialogue: 0,0:00:53.32,0:00:53.98,Normal,Peter,0,0,0,,{\c&H0000FFFF&}lunchbox{\c&H00FFFFFF&} for computer
+Dialogue: 0,0:00:53.98,0:00:54.18,Normal,Peter,0,0,0,,lunchbox {\c&H0000FFFF&}for{\c&H00FFFFFF&} computer
+Dialogue: 0,0:00:54.18,0:00:54.61,Normal,Peter,0,0,0,,lunchbox for {\c&H0000FFFF&}computer{\c&H00FFFFFF&}
+Dialogue: 0,0:00:54.61,0:00:55.69,Normal,Peter,0,0,0,,{\c&H0000FFFF&}programs.{\c&H00FFFFFF&} Every program
+Dialogue: 0,0:00:55.69,0:00:55.91,Normal,Peter,0,0,0,,programs. {\c&H0000FFFF&}Every{\c&H00FFFFFF&} program
+Dialogue: 0,0:00:55.91,0:00:56.39,Normal,Peter,0,0,0,,programs. Every {\c&H0000FFFF&}program{\c&H00FFFFFF&}
+Dialogue: 0,0:00:56.39,0:00:56.65,Normal,Peter,0,0,0,,{\c&H0000FFFF&}gets{\c&H00FFFFFF&} its own
+Dialogue: 0,0:00:56.65,0:00:56.83,Normal,Peter,0,0,0,,gets {\c&H0000FFFF&}its{\c&H00FFFFFF&} own
+Dialogue: 0,0:00:56.83,0:00:57.00,Normal,Peter,0,0,0,,gets its {\c&H0000FFFF&}own{\c&H00FFFFFF&}
+Dialogue: 0,0:00:57.00,0:00:57.86,Normal,Peter,0,0,0,,{\c&H0000FFFF&}lunchbox,{\c&H00FFFFFF&} and it
+Dialogue: 0,0:00:57.86,0:00:58.04,Normal,Peter,0,0,0,,lunchbox, {\c&H0000FFFF&}and{\c&H00FFFFFF&} it
+Dialogue: 0,0:00:58.04,0:00:58.20,Normal,Peter,0,0,0,,lunchbox, and {\c&H0000FFFF&}it{\c&H00FFFFFF&}
+Dialogue: 0,0:00:58.20,0:00:58.50,Normal,Peter,0,0,0,,{\c&H0000FFFF&}always{\c&H00FFFFFF&} tastes the
+Dialogue: 0,0:00:58.50,0:00:58.76,Normal,Peter,0,0,0,,always {\c&H0000FFFF&}tastes{\c&H00FFFFFF&} the
+Dialogue: 0,0:00:58.76,0:00:58.90,Normal,Peter,0,0,0,,always tastes {\c&H0000FFFF&}the{\c&H00FFFFFF&}
+Dialogue: 0,0:00:58.90,0:00:59.18,Normal,Peter,0,0,0,,{\c&H0000FFFF&}same,{\c&H00FFFFFF&} no matter
+Dialogue: 0,0:00:59.18,0:00:59.30,Normal,Peter,0,0,0,,same, {\c&H0000FFFF&}no{\c&H00FFFFFF&} matter
+Dialogue: 0,0:00:59.30,0:00:59.56,Normal,Peter,0,0,0,,same, no {\c&H0000FFFF&}matter{\c&H00FFFFFF&}
+Dialogue: 0,0:00:59.56,0:00:59.76,Normal,Peter,0,0,0,,{\c&H0000FFFF&}where{\c&H00FFFFFF&} you eat
+Dialogue: 0,0:00:59.76,0:00:59.99,Normal,Peter,0,0,0,,where {\c&H0000FFFF&}you{\c&H00FFFFFF&} eat
+Dialogue: 0,0:00:59.99,0:01:00.25,Normal,Peter,0,0,0,,where you {\c&H0000FFFF&}eat{\c&H00FFFFFF&}
+Dialogue: 0,0:01:00.25,0:01:00.89,Normal,Peter,0,0,0,,{\c&H0000FFFF&}it.{\c&H00FFFFFF&} I like
+Dialogue: 0,0:01:00.89,0:01:00.99,Normal,Peter,0,0,0,,it. {\c&H0000FFFF&}I{\c&H00FFFFFF&} like
+Dialogue: 0,0:01:00.99,0:01:01.27,Normal,Peter,0,0,0,,it. I {\c&H0000FFFF&}like{\c&H00FFFFFF&}
+Dialogue: 0,0:01:01.27,0:01:01.73,Normal,Peter,0,0,0,,{\c&H0000FFFF&}consistent{\c&H00FFFFFF&} lunches.
+Dialogue: 0,0:01:01.73,0:01:02.45,Normal,Peter,0,0,0,,consistent {\c&H0000FFFF&}lunches.{\c&H00FFFFFF&}
+Dialogue: 0,0:01:02.43,0:01:02.90,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}Your{\c&H00FFFFFF&} culinary metaphors
+Dialogue: 0,0:01:02.90,0:01:03.42,Normal,Stewie,0,0,0,,Your {\c&H0000FFFF&}culinary{\c&H00FFFFFF&} metaphors
+Dialogue: 0,0:01:03.42,0:01:03.92,Normal,Stewie,0,0,0,,Your culinary {\c&H0000FFFF&}metaphors{\c&H00FFFFFF&}
+Dialogue: 0,0:01:03.92,0:01:04.12,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}are{\c&H00FFFFFF&} tiresome. The
+Dialogue: 0,0:01:04.12,0:01:04.92,Normal,Stewie,0,0,0,,are {\c&H0000FFFF&}tiresome.{\c&H00FFFFFF&} The
+Dialogue: 0,0:01:04.92,0:01:05.06,Normal,Stewie,0,0,0,,are tiresome. {\c&H0000FFFF&}The{\c&H00FFFFFF&}
+Dialogue: 0,0:01:05.06,0:01:05.37,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}real{\c&H00FFFFFF&} genius is
+Dialogue: 0,0:01:05.37,0:01:05.83,Normal,Stewie,0,0,0,,real {\c&H0000FFFF&}genius{\c&H00FFFFFF&} is
+Dialogue: 0,0:01:05.83,0:01:05.97,Normal,Stewie,0,0,0,,real genius {\c&H0000FFFF&}is{\c&H00FFFFFF&}
+Dialogue: 0,0:01:05.97,0:01:06.23,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}that{\c&H00FFFFFF&} containers are
+Dialogue: 0,0:01:06.23,0:01:06.77,Normal,Stewie,0,0,0,,that {\c&H0000FFFF&}containers{\c&H00FFFFFF&} are
+Dialogue: 0,0:01:06.77,0:01:06.87,Normal,Stewie,0,0,0,,that containers {\c&H0000FFFF&}are{\c&H00FFFFFF&}
+Dialogue: 0,0:01:06.87,0:01:07.11,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}far{\c&H00FFFFFF&} more lightweight
+Dialogue: 0,0:01:07.11,0:01:07.33,Normal,Stewie,0,0,0,,far {\c&H0000FFFF&}more{\c&H00FFFFFF&} lightweight
+Dialogue: 0,0:01:07.33,0:01:07.84,Normal,Stewie,0,0,0,,far more {\c&H0000FFFF&}lightweight{\c&H00FFFFFF&}
+Dialogue: 0,0:01:07.84,0:01:08.02,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}than{\c&H00FFFFFF&} virtual machines.
+Dialogue: 0,0:01:08.02,0:01:08.40,Normal,Stewie,0,0,0,,than {\c&H0000FFFF&}virtual{\c&H00FFFFFF&} machines.
+Dialogue: 0,0:01:08.40,0:01:09.36,Normal,Stewie,0,0,0,,than virtual {\c&H0000FFFF&}machines.{\c&H00FFFFFF&}
+Dialogue: 0,0:01:09.36,0:01:09.50,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}They{\c&H00FFFFFF&} share the
+Dialogue: 0,0:01:09.50,0:01:09.72,Normal,Stewie,0,0,0,,They {\c&H0000FFFF&}share{\c&H00FFFFFF&} the
+Dialogue: 0,0:01:09.72,0:01:09.82,Normal,Stewie,0,0,0,,They share {\c&H0000FFFF&}the{\c&H00FFFFFF&}
+Dialogue: 0,0:01:09.82,0:01:10.10,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}host{\c&H00FFFFFF&} operating system,
+Dialogue: 0,0:01:10.10,0:01:10.53,Normal,Stewie,0,0,0,,host {\c&H0000FFFF&}operating{\c&H00FFFFFF&} system,
+Dialogue: 0,0:01:10.53,0:01:11.13,Normal,Stewie,0,0,0,,host operating {\c&H0000FFFF&}system,{\c&H00FFFFFF&}
+Dialogue: 0,0:01:11.13,0:01:11.45,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}making{\c&H00FFFFFF&} them incredibly
+Dialogue: 0,0:01:11.45,0:01:11.67,Normal,Stewie,0,0,0,,making {\c&H0000FFFF&}them{\c&H00FFFFFF&} incredibly
+Dialogue: 0,0:01:11.67,0:01:12.17,Normal,Stewie,0,0,0,,making them {\c&H0000FFFF&}incredibly{\c&H00FFFFFF&}
+Dialogue: 0,0:01:12.17,0:01:12.55,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}fast{\c&H00FFFFFF&} and efficient.
+Dialogue: 0,0:01:12.55,0:01:12.67,Normal,Stewie,0,0,0,,fast {\c&H0000FFFF&}and{\c&H00FFFFFF&} efficient.
+Dialogue: 0,0:01:12.67,0:01:13.21,Normal,Stewie,0,0,0,,fast and {\c&H0000FFFF&}efficient.{\c&H00FFFFFF&}
+Dialogue: 0,0:01:13.20,0:01:14.36,Normal,Peter,0,0,0,,{\c&H0000FFFF&}Lightweight?{\c&H00FFFFFF&} Like a
+Dialogue: 0,0:01:14.36,0:01:14.52,Normal,Peter,0,0,0,,Lightweight? {\c&H0000FFFF&}Like{\c&H00FFFFFF&} a
+Dialogue: 0,0:01:14.52,0:01:14.60,Normal,Peter,0,0,0,,Lightweight? Like {\c&H0000FFFF&}a{\c&H00FFFFFF&}
+Dialogue: 0,0:01:14.60,0:01:14.88,Normal,Peter,0,0,0,,{\c&H0000FFFF&}diet{\c&H00FFFFFF&} soda? So
+Dialogue: 0,0:01:14.88,0:01:15.70,Normal,Peter,0,0,0,,diet {\c&H0000FFFF&}soda?{\c&H00FFFFFF&} So
+Dialogue: 0,0:01:15.70,0:01:16.05,Normal,Peter,0,0,0,,diet soda? {\c&H0000FFFF&}So{\c&H00FFFFFF&}
+Dialogue: 0,0:01:16.05,0:01:16.15,Normal,Peter,0,0,0,,{\c&H0000FFFF&}it{\c&H00FFFFFF&} is a
+Dialogue: 0,0:01:16.15,0:01:16.25,Normal,Peter,0,0,0,,it {\c&H0000FFFF&}is{\c&H00FFFFFF&} a
+Dialogue: 0,0:01:16.25,0:01:16.35,Normal,Peter,0,0,0,,it is {\c&H0000FFFF&}a{\c&H00FFFFFF&}
+Dialogue: 0,0:01:16.35,0:01:16.65,Normal,Peter,0,0,0,,{\c&H0000FFFF&}diet{\c&H00FFFFFF&} lunchbox for
+Dialogue: 0,0:01:16.65,0:01:17.17,Normal,Peter,0,0,0,,diet {\c&H0000FFFF&}lunchbox{\c&H00FFFFFF&} for
+Dialogue: 0,0:01:17.17,0:01:17.33,Normal,Peter,0,0,0,,diet lunchbox {\c&H0000FFFF&}for{\c&H00FFFFFF&}
+Dialogue: 0,0:01:17.33,0:01:18.23,Normal,Peter,0,0,0,,{\c&H0000FFFF&}programs.{\c&H00FFFFFF&} And it
+Dialogue: 0,0:01:18.23,0:01:18.37,Normal,Peter,0,0,0,,programs. {\c&H0000FFFF&}And{\c&H00FFFFFF&} it
+Dialogue: 0,0:01:18.37,0:01:18.50,Normal,Peter,0,0,0,,programs. And {\c&H0000FFFF&}it{\c&H00FFFFFF&}
+Dialogue: 0,0:01:18.50,0:01:18.80,Normal,Peter,0,0,0,,{\c&H0000FFFF&}shares{\c&H00FFFFFF&} the computer's
+Dialogue: 0,0:01:18.80,0:01:18.94,Normal,Peter,0,0,0,,shares {\c&H0000FFFF&}the{\c&H00FFFFFF&} computer's
+Dialogue: 0,0:01:18.94,0:01:19.38,Normal,Peter,0,0,0,,shares the {\c&H0000FFFF&}computer's{\c&H00FFFFFF&}
+Dialogue: 0,0:01:19.38,0:01:20.28,Normal,Peter,0,0,0,,{\c&H0000FFFF&}brain?{\c&H00FFFFFF&} That is
+Dialogue: 0,0:01:20.28,0:01:20.48,Normal,Peter,0,0,0,,brain? {\c&H0000FFFF&}That{\c&H00FFFFFF&} is
+Dialogue: 0,0:01:20.48,0:01:20.64,Normal,Peter,0,0,0,,brain? That {\c&H0000FFFF&}is{\c&H00FFFFFF&}
+Dialogue: 0,0:01:20.64,0:01:20.88,Normal,Peter,0,0,0,,{\c&H0000FFFF&}like{\c&H00FFFFFF&} me sharing
+Dialogue: 0,0:01:20.88,0:01:21.04,Normal,Peter,0,0,0,,like {\c&H0000FFFF&}me{\c&H00FFFFFF&} sharing
+Dialogue: 0,0:01:21.04,0:01:21.37,Normal,Peter,0,0,0,,like me {\c&H0000FFFF&}sharing{\c&H00FFFFFF&}
+Dialogue: 0,0:01:21.37,0:01:21.57,Normal,Peter,0,0,0,,{\c&H0000FFFF&}my{\c&H00FFFFFF&} brain, but
+Dialogue: 0,0:01:21.57,0:01:21.93,Normal,Peter,0,0,0,,my {\c&H0000FFFF&}brain,{\c&H00FFFFFF&} but
+Dialogue: 0,0:01:21.93,0:01:22.09,Normal,Peter,0,0,0,,my brain, {\c&H0000FFFF&}but{\c&H00FFFFFF&}
+Dialogue: 0,0:01:22.09,0:01:22.15,Normal,Peter,0,0,0,,{\c&H0000FFFF&}I{\c&H00FFFFFF&} do not
+Dialogue: 0,0:01:22.15,0:01:22.29,Normal,Peter,0,0,0,,I {\c&H0000FFFF&}do{\c&H00FFFFFF&} not
+Dialogue: 0,0:01:22.29,0:01:22.43,Normal,Peter,0,0,0,,I do {\c&H0000FFFF&}not{\c&H00FFFFFF&}
+Dialogue: 0,0:01:22.43,0:01:22.61,Normal,Peter,0,0,0,,{\c&H0000FFFF&}think{\c&H00FFFFFF&} I have
+Dialogue: 0,0:01:22.61,0:01:22.69,Normal,Peter,0,0,0,,think {\c&H0000FFFF&}I{\c&H00FFFFFF&} have
+Dialogue: 0,0:01:22.69,0:01:22.85,Normal,Peter,0,0,0,,think I {\c&H0000FFFF&}have{\c&H00FFFFFF&}
+Dialogue: 0,0:01:22.85,0:01:23.07,Normal,Peter,0,0,0,,{\c&H0000FFFF&}much{\c&H00FFFFFF&} to share.
+Dialogue: 0,0:01:23.07,0:01:23.23,Normal,Peter,0,0,0,,much {\c&H0000FFFF&}to{\c&H00FFFFFF&} share.
+Dialogue: 0,0:01:23.23,0:01:23.93,Normal,Peter,0,0,0,,much to {\c&H0000FFFF&}share.{\c&H00FFFFFF&}
+Dialogue: 0,0:01:23.92,0:01:25.24,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}Indeed.{\c&H00FFFFFF&} And when
+Dialogue: 0,0:01:25.24,0:01:25.36,Normal,Stewie,0,0,0,,Indeed. {\c&H0000FFFF&}And{\c&H00FFFFFF&} when
+Dialogue: 0,0:01:25.36,0:01:25.50,Normal,Stewie,0,0,0,,Indeed. And {\c&H0000FFFF&}when{\c&H00FFFFFF&}
+Dialogue: 0,0:01:25.50,0:01:25.62,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}you{\c&H00FFFFFF&} have many
+Dialogue: 0,0:01:25.62,0:01:25.84,Normal,Stewie,0,0,0,,you {\c&H0000FFFF&}have{\c&H00FFFFFF&} many
+Dialogue: 0,0:01:25.84,0:01:26.10,Normal,Stewie,0,0,0,,you have {\c&H0000FFFF&}many{\c&H00FFFFFF&}
+Dialogue: 0,0:01:26.10,0:01:26.20,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}of{\c&H00FFFFFF&} these containers,
+Dialogue: 0,0:01:26.20,0:01:26.40,Normal,Stewie,0,0,0,,of {\c&H0000FFFF&}these{\c&H00FFFFFF&} containers,
+Dialogue: 0,0:01:26.40,0:01:27.15,Normal,Stewie,0,0,0,,of these {\c&H0000FFFF&}containers,{\c&H00FFFFFF&}
+Dialogue: 0,0:01:27.15,0:01:27.67,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}managing{\c&H00FFFFFF&} them\Nindividually
+Dialogue: 0,0:01:27.67,0:01:27.83,Normal,Stewie,0,0,0,,managing {\c&H0000FFFF&}them{\c&H00FFFFFF&}\Nindividually
+Dialogue: 0,0:01:27.83,0:01:28.73,Normal,Stewie,0,0,0,,managing them\N{\c&H0000FFFF&}individually{\c&H00FFFFFF&}
+Dialogue: 0,0:01:28.73,0:01:29.22,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}becomes{\c&H00FFFFFF&} chaotic. That
+Dialogue: 0,0:01:29.22,0:01:30.08,Normal,Stewie,0,0,0,,becomes {\c&H0000FFFF&}chaotic.{\c&H00FFFFFF&} That
+Dialogue: 0,0:01:30.08,0:01:30.26,Normal,Stewie,0,0,0,,becomes chaotic. {\c&H0000FFFF&}That{\c&H00FFFFFF&}
+Dialogue: 0,0:01:30.26,0:01:30.34,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}is{\c&H00FFFFFF&} where kubernetis
+Dialogue: 0,0:01:30.34,0:01:30.60,Normal,Stewie,0,0,0,,is {\c&H0000FFFF&}where{\c&H00FFFFFF&} kubernetis
+Dialogue: 0,0:01:30.60,0:01:31.18,Normal,Stewie,0,0,0,,is where {\c&H0000FFFF&}kubernetis{\c&H00FFFFFF&}
+Dialogue: 0,0:01:31.18,0:01:31.57,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}steps{\c&H00FFFFFF&} in. It
+Dialogue: 0,0:01:31.57,0:01:31.71,Normal,Stewie,0,0,0,,steps {\c&H0000FFFF&}in.{\c&H00FFFFFF&} It
+Dialogue: 0,0:01:31.71,0:01:32.29,Normal,Stewie,0,0,0,,steps in. {\c&H0000FFFF&}It{\c&H00FFFFFF&}
+Dialogue: 0,0:01:32.29,0:01:32.57,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}is{\c&H00FFFFFF&} an orchestration
+Dialogue: 0,0:01:32.57,0:01:32.77,Normal,Stewie,0,0,0,,is {\c&H0000FFFF&}an{\c&H00FFFFFF&} orchestration
+Dialogue: 0,0:01:32.77,0:01:33.39,Normal,Stewie,0,0,0,,is an {\c&H0000FFFF&}orchestration{\c&H00FFFFFF&}
+Dialogue: 0,0:01:33.39,0:01:33.90,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}system.{\c&H00FFFFFF&}
+Dialogue: 0,0:01:33.87,0:01:34.94,Normal,Peter,0,0,0,,{\c&H0000FFFF&}Kubernetis?{\c&H00FFFFFF&} That sounds
+Dialogue: 0,0:01:34.94,0:01:35.14,Normal,Peter,0,0,0,,Kubernetis? {\c&H0000FFFF&}That{\c&H00FFFFFF&} sounds
+Dialogue: 0,0:01:35.14,0:01:35.38,Normal,Peter,0,0,0,,Kubernetis? That {\c&H0000FFFF&}sounds{\c&H00FFFFFF&}
+Dialogue: 0,0:01:35.38,0:01:35.54,Normal,Peter,0,0,0,,{\c&H0000FFFF&}like{\c&H00FFFFFF&} a big
+Dialogue: 0,0:01:35.54,0:01:35.62,Normal,Peter,0,0,0,,like {\c&H0000FFFF&}a{\c&H00FFFFFF&} big
+Dialogue: 0,0:01:35.62,0:01:35.86,Normal,Peter,0,0,0,,like a {\c&H0000FFFF&}big{\c&H00FFFFFF&}
+Dialogue: 0,0:01:35.86,0:01:36.43,Normal,Peter,0,0,0,,{\c&H0000FFFF&}fancy{\c&H00FFFFFF&} robot chef
+Dialogue: 0,0:01:36.43,0:01:36.97,Normal,Peter,0,0,0,,fancy {\c&H0000FFFF&}robot{\c&H00FFFFFF&} chef
+Dialogue: 0,0:01:36.97,0:01:37.25,Normal,Peter,0,0,0,,fancy robot {\c&H0000FFFF&}chef{\c&H00FFFFFF&}
+Dialogue: 0,0:01:37.25,0:01:37.41,Normal,Peter,0,0,0,,{\c&H0000FFFF&}for{\c&H00FFFFFF&} all the
+Dialogue: 0,0:01:37.41,0:01:37.55,Normal,Peter,0,0,0,,for {\c&H0000FFFF&}all{\c&H00FFFFFF&} the
+Dialogue: 0,0:01:37.55,0:01:37.65,Normal,Peter,0,0,0,,for all {\c&H0000FFFF&}the{\c&H00FFFFFF&}
+Dialogue: 0,0:01:37.65,0:01:38.80,Normal,Peter,0,0,0,,{\c&H0000FFFF&}lunchboxes.{\c&H00FFFFFF&} It makes
+Dialogue: 0,0:01:38.80,0:01:38.90,Normal,Peter,0,0,0,,lunchboxes. {\c&H0000FFFF&}It{\c&H00FFFFFF&} makes
+Dialogue: 0,0:01:38.90,0:01:39.08,Normal,Peter,0,0,0,,lunchboxes. It {\c&H0000FFFF&}makes{\c&H00FFFFFF&}
+Dialogue: 0,0:01:39.08,0:01:39.30,Normal,Peter,0,0,0,,{\c&H0000FFFF&}sure{\c&H00FFFFFF&} every lunchbox
+Dialogue: 0,0:01:39.30,0:01:39.50,Normal,Peter,0,0,0,,sure {\c&H0000FFFF&}every{\c&H00FFFFFF&} lunchbox
+Dialogue: 0,0:01:39.50,0:01:40.08,Normal,Peter,0,0,0,,sure every {\c&H0000FFFF&}lunchbox{\c&H00FFFFFF&}
+Dialogue: 0,0:01:40.08,0:01:40.20,Normal,Peter,0,0,0,,{\c&H0000FFFF&}is{\c&H00FFFFFF&} where it
+Dialogue: 0,0:01:40.20,0:01:40.37,Normal,Peter,0,0,0,,is {\c&H0000FFFF&}where{\c&H00FFFFFF&} it
+Dialogue: 0,0:01:40.37,0:01:40.47,Normal,Peter,0,0,0,,is where {\c&H0000FFFF&}it{\c&H00FFFFFF&}
+Dialogue: 0,0:01:40.47,0:01:40.65,Normal,Peter,0,0,0,,{\c&H0000FFFF&}needs{\c&H00FFFFFF&} to be
+Dialogue: 0,0:01:40.65,0:01:40.79,Normal,Peter,0,0,0,,needs {\c&H0000FFFF&}to{\c&H00FFFFFF&} be
+Dialogue: 0,0:01:40.79,0:01:41.01,Normal,Peter,0,0,0,,needs to {\c&H0000FFFF&}be{\c&H00FFFFFF&}
+Dialogue: 0,0:01:41.01,0:01:41.13,Normal,Peter,0,0,0,,{\c&H0000FFFF&}and{\c&H00FFFFFF&} has what
+Dialogue: 0,0:01:41.13,0:01:41.37,Normal,Peter,0,0,0,,and {\c&H0000FFFF&}has{\c&H00FFFFFF&} what
+Dialogue: 0,0:01:41.37,0:01:41.55,Normal,Peter,0,0,0,,and has {\c&H0000FFFF&}what{\c&H00FFFFFF&}
+Dialogue: 0,0:01:41.55,0:01:41.65,Normal,Peter,0,0,0,,{\c&H0000FFFF&}it{\c&H00FFFFFF&} needs.
+Dialogue: 0,0:01:41.65,0:01:42.29,Normal,Peter,0,0,0,,it {\c&H0000FFFF&}needs.{\c&H00FFFFFF&}
+Dialogue: 0,0:01:42.28,0:01:43.02,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}You{\c&H00FFFFFF&} are truly
+Dialogue: 0,0:01:43.02,0:01:43.18,Normal,Stewie,0,0,0,,You {\c&H0000FFFF&}are{\c&H00FFFFFF&} truly
+Dialogue: 0,0:01:43.18,0:01:43.66,Normal,Stewie,0,0,0,,You are {\c&H0000FFFF&}truly{\c&H00FFFFFF&}
+Dialogue: 0,0:01:43.66,0:01:43.76,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}a{\c&H00FFFFFF&} simpleton. Kubernetis
+Dialogue: 0,0:01:43.76,0:01:44.84,Normal,Stewie,0,0,0,,a {\c&H0000FFFF&}simpleton.{\c&H00FFFFFF&} Kubernetis
+Dialogue: 0,0:01:44.84,0:01:45.59,Normal,Stewie,0,0,0,,a simpleton. {\c&H0000FFFF&}Kubernetis{\c&H00FFFFFF&}
+Dialogue: 0,0:01:45.59,0:01:46.01,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}automates{\c&H00FFFFFF&} deployment,\Nscaling,
+Dialogue: 0,0:01:46.01,0:01:46.71,Normal,Stewie,0,0,0,,automates {\c&H0000FFFF&}deployment,{\c&H00FFFFFF&}\Nscaling,
+Dialogue: 0,0:01:46.71,0:01:47.25,Normal,Stewie,0,0,0,,automates deployment,\N{\c&H0000FFFF&}scaling,{\c&H00FFFFFF&}
+Dialogue: 0,0:01:47.25,0:01:47.39,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}and{\c&H00FFFFFF&} management of
+Dialogue: 0,0:01:47.39,0:01:47.93,Normal,Stewie,0,0,0,,and {\c&H0000FFFF&}management{\c&H00FFFFFF&} of
+Dialogue: 0,0:01:47.93,0:01:48.03,Normal,Stewie,0,0,0,,and management {\c&H0000FFFF&}of{\c&H00FFFFFF&}
+Dialogue: 0,0:01:48.03,0:01:48.19,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}these{\c&H00FFFFFF&} containerized\Napplications.
+Dialogue: 0,0:01:48.19,0:01:48.85,Normal,Stewie,0,0,0,,these {\c&H0000FFFF&}containerized{\c&H00FFFFFF&}\Napplications.
+Dialogue: 0,0:01:48.85,0:01:50.10,Normal,Stewie,0,0,0,,these containerized\N{\c&H0000FFFF&}applications.{\c&H00FFFFFF&}
+Dialogue: 0,0:01:50.10,0:01:50.22,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}It{\c&H00FFFFFF&} ensures your
+Dialogue: 0,0:01:50.22,0:01:50.66,Normal,Stewie,0,0,0,,It {\c&H0000FFFF&}ensures{\c&H00FFFFFF&} your
+Dialogue: 0,0:01:50.66,0:01:50.80,Normal,Stewie,0,0,0,,It ensures {\c&H0000FFFF&}your{\c&H00FFFFFF&}
+Dialogue: 0,0:01:50.80,0:01:51.32,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}software{\c&H00FFFFFF&} is always
+Dialogue: 0,0:01:51.32,0:01:51.46,Normal,Stewie,0,0,0,,software {\c&H0000FFFF&}is{\c&H00FFFFFF&} always
+Dialogue: 0,0:01:51.46,0:01:51.70,Normal,Stewie,0,0,0,,software is {\c&H0000FFFF&}always{\c&H00FFFFFF&}
+Dialogue: 0,0:01:51.70,0:01:52.23,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}available{\c&H00FFFFFF&} and running
+Dialogue: 0,0:01:52.23,0:01:52.33,Normal,Stewie,0,0,0,,available {\c&H0000FFFF&}and{\c&H00FFFFFF&} running
+Dialogue: 0,0:01:52.33,0:01:52.63,Normal,Stewie,0,0,0,,available and {\c&H0000FFFF&}running{\c&H00FFFFFF&}
+Dialogue: 0,0:01:52.63,0:01:53.11,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}smoothly.{\c&H00FFFFFF&} It is
+Dialogue: 0,0:01:53.11,0:01:53.73,Normal,Stewie,0,0,0,,smoothly. {\c&H0000FFFF&}It{\c&H00FFFFFF&} is
+Dialogue: 0,0:01:53.73,0:01:53.83,Normal,Stewie,0,0,0,,smoothly. It {\c&H0000FFFF&}is{\c&H00FFFFFF&}
+Dialogue: 0,0:01:53.83,0:01:53.91,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}a{\c&H00FFFFFF&} marvel of
+Dialogue: 0,0:01:53.91,0:01:54.27,Normal,Stewie,0,0,0,,a {\c&H0000FFFF&}marvel{\c&H00FFFFFF&} of
+Dialogue: 0,0:01:54.27,0:01:54.35,Normal,Stewie,0,0,0,,a marvel {\c&H0000FFFF&}of{\c&H00FFFFFF&}
+Dialogue: 0,0:01:54.35,0:01:54.73,Normal,Stewie,0,0,0,,{\c&H0000FFFF&}system{\c&H00FFFFFF&} design.
+Dialogue: 0,0:01:54.73,0:01:55.42,Normal,Stewie,0,0,0,,system {\c&H0000FFFF&}design.{\c&H00FFFFFF&}
+Dialogue: 0,0:01:55.40,0:01:55.74,Normal,Peter,0,0,0,,{\c&H0000FFFF&}So{\c&H00FFFFFF&} it is
+Dialogue: 0,0:01:55.74,0:01:55.84,Normal,Peter,0,0,0,,So {\c&H0000FFFF&}it{\c&H00FFFFFF&} is
+Dialogue: 0,0:01:55.84,0:01:55.98,Normal,Peter,0,0,0,,So it {\c&H0000FFFF&}is{\c&H00FFFFFF&}
+Dialogue: 0,0:01:55.98,0:01:56.18,Normal,Peter,0,0,0,,{\c&H0000FFFF&}the{\c&H00FFFFFF&} boss of
+Dialogue: 0,0:01:56.18,0:01:56.62,Normal,Peter,0,0,0,,the {\c&H0000FFFF&}boss{\c&H00FFFFFF&} of
+Dialogue: 0,0:01:56.62,0:01:56.72,Normal,Peter,0,0,0,,the boss {\c&H0000FFFF&}of{\c&H00FFFFFF&}
+Dialogue: 0,0:01:56.72,0:01:56.86,Normal,Peter,0,0,0,,{\c&H0000FFFF&}all{\c&H00FFFFFF&} the lunchboxes.
+Dialogue: 0,0:01:56.86,0:01:57.02,Normal,Peter,0,0,0,,all {\c&H0000FFFF&}the{\c&H00FFFFFF&} lunchboxes.
+Dialogue: 0,0:01:57.02,0:01:58.03,Normal,Peter,0,0,0,,all the {\c&H0000FFFF&}lunchboxes.{\c&H00FFFFFF&}
+Dialogue: 0,0:01:58.03,0:01:58.13,Normal,Peter,0,0,0,,{\c&H0000FFFF&}It{\c&H00FFFFFF&} makes sure
+Dialogue: 0,0:01:58.13,0:01:58.37,Normal,Peter,0,0,0,,It {\c&H0000FFFF&}makes{\c&H00FFFFFF&} sure
+Dialogue: 0,0:01:58.37,0:01:58.59,Normal,Peter,0,0,0,,It makes {\c&H0000FFFF&}sure{\c&H00FFFFFF&}
+Dialogue: 0,0:01:58.59,0:01:58.89,Normal,Peter,0,0,0,,{\c&H0000FFFF&}no{\c&H00FFFFFF&} lunchbox runs
+Dialogue: 0,0:01:58.89,0:01:59.51,Normal,Peter,0,0,0,,no {\c&H0000FFFF&}lunchbox{\c&H00FFFFFF&} runs
+Dialogue: 0,0:01:59.51,0:01:59.78,Normal,Peter,0,0,0,,no lunchbox {\c&H0000FFFF&}runs{\c&H00FFFFFF&}
+Dialogue: 0,0:01:59.78,0:01:59.90,Normal,Peter,0,0,0,,{\c&H0000FFFF&}out{\c&H00FFFFFF&} of juice.
+Dialogue: 0,0:01:59.90,0:02:00.02,Normal,Peter,0,0,0,,out {\c&H0000FFFF&}of{\c&H00FFFFFF&} juice.
+Dialogue: 0,0:02:00.02,0:02:00.60,Normal,Peter,0,0,0,,out of {\c&H0000FFFF&}juice.{\c&H00FFFFFF&}
+Dialogue: 0,0:02:00.60,0:02:00.76,Normal,Peter,0,0,0,,{\c&H0000FFFF&}Can{\c&H00FFFFFF&} it get
+Dialogue: 0,0:02:00.76,0:02:00.84,Normal,Peter,0,0,0,,Can {\c&H0000FFFF&}it{\c&H00FFFFFF&} get
+Dialogue: 0,0:02:00.84,0:02:00.98,Normal,Peter,0,0,0,,Can it {\c&H0000FFFF&}get{\c&H00FFFFFF&}
+Dialogue: 0,0:02:00.98,0:02:01.10,Normal,Peter,0,0,0,,{\c&H0000FFFF&}me{\c&H00FFFFFF&} another beer?
+Dialogue: 0,0:02:01.10,0:02:01.44,Normal,Peter,0,0,0,,me {\c&H0000FFFF&}another{\c&H00FFFFFF&} beer?
+Dialogue: 0,0:02:01.44,0:02:01.78,Normal,Peter,0,0,0,,me another {\c&H0000FFFF&}beer?{\c&H00FFFFFF&}
+Dialogue: 0,0:02:01.78,0:02:02.35,Normal,Peter,0,0,0,,{\c&H0000FFFF&}Because{\c&H00FFFFFF&} that would
+Dialogue: 0,0:02:02.35,0:02:02.49,Normal,Peter,0,0,0,,Because {\c&H0000FFFF&}that{\c&H00FFFFFF&} would
+Dialogue: 0,0:02:02.49,0:02:02.67,Normal,Peter,0,0,0,,Because that {\c&H0000FFFF&}would{\c&H00FFFFFF&}
+Dialogue: 0,0:02:02.67,0:02:02.77,Normal,Peter,0,0,0,,{\c&H0000FFFF&}be{\c&H00FFFFFF&} super helpful
+Dialogue: 0,0:02:02.77,0:02:03.13,Normal,Peter,0,0,0,,be {\c&H0000FFFF&}super{\c&H00FFFFFF&} helpful
+Dialogue: 0,0:02:03.13,0:02:03.47,Normal,Peter,0,0,0,,be super {\c&H0000FFFF&}helpful{\c&H00FFFFFF&}
+Dialogue: 0,0:02:03.47,0:02:03.71,Normal,Peter,0,0,0,,{\c&H0000FFFF&}right{\c&H00FFFFFF&} now.
+Dialogue: 0,0:02:03.71,0:02:04.26,Normal,Peter,0,0,0,,right {\c&H0000FFFF&}now.{\c&H00FFFFFF&}

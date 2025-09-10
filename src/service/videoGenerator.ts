@@ -1,11 +1,11 @@
-import fs from 'fs';
-import path from 'path';
-import ffmpeg from 'fluent-ffmpeg';
-import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
+import * as fs from 'fs';
+import * as path from 'path';
+const ffmpeg = require('fluent-ffmpeg');
+const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
 import { spawn } from 'child_process';
 import { promisify } from 'util';
 import axios from 'axios';
-import FormData from 'form-data';
+const FormData = require('form-data');
 import { PrismaClient } from '../generated/prisma';
 
 // Initialize Prisma client
@@ -37,7 +37,7 @@ const TEMP_DIR = path.join(process.cwd(), 'temp_alignment');
 
 const CHARACTER_IMAGES = {
   Stewie: 'F:\\Aniruddha\\code\\webdev\\PROJECTS\\aislop\\src\\character_images\\Stewie_Griffin.png',
-  Peter: 'F:\\Aniruddha\\code\\webdev\\PROJECTS\\aislop\\src\\character_images\\Peter_Griffin.png'
+  Peter: 'F:\\Aniruddha\\code\\webdev\\PROJECTS\\aislop\\src\\character_images\\peter.png'
 };
 
 // Subtitle styling configuration
@@ -54,7 +54,7 @@ const SUBTITLE_STYLES = {
   outline: 3,
   shadow: 2,
   alignment: 2, // Bottom center
-  marginV: 600 // Increased for mobile optimization (1920px height)
+  marginV: 700 // Increased for mobile optimization (1920px height)
 };
 
 // Character-specific color scheme
@@ -243,15 +243,15 @@ PlayResY: 1920
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Normal,Arial-Black,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,2,2,30,30,1200,1
-Style: Highlight,Arial-Black,48,&H0000FFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,2,2,30,30,1200,1
+Style: Normal,Arial-Black,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,2,2,30,30,800,1
+Style: Highlight,Arial-Black,48,&H0000FFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,2,2,30,30,800,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
 
   dialogueTimestamps.forEach((dialogue, dialogueIndex) => {
-    const { words } = dialogue;
+    const { words, character } = dialogue;
 
     // Process words in groups of 3 for better karaoke flow
     for (let i = 0; i < words.length; i += 3) {
@@ -305,7 +305,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
           const startTime = formatTime(wordStart);
           const endTime = formatTime(wordEnd);
 
-          assContent += `Dialogue: 0,${startTime},${endTime},Normal,,0,0,0,,${subtitleText}\n`;
+          assContent += `Dialogue: 0,${startTime},${endTime},Normal,${character || 'Speaker'},0,0,0,,${subtitleText}\n`;
         });
 
         // Then handle the third word highlighting
@@ -328,7 +328,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         const startTime = formatTime(thirdWordStart);
         const endTime = formatTime(thirdWordEnd);
 
-        assContent += `Dialogue: 0,${startTime},${endTime},Normal,,0,0,0,,${subtitleText}\n`;
+        assContent += `Dialogue: 0,${startTime},${endTime},Normal,${character || 'Speaker'},0,0,0,,${subtitleText}\n`;
 
         // Skip to next group since we handled this one specially
         continue;
@@ -374,7 +374,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         const endTime = formatTime(wordEnd);
 
         // Add subtitle event for this specific highlight state
-        assContent += `Dialogue: 0,${startTime},${endTime},Normal,,0,0,0,,${subtitleText}\n`;
+        assContent += `Dialogue: 0,${startTime},${endTime},Normal,${character || 'Speaker'},0,0,0,,${subtitleText}\n`;
       });
     }
   });
@@ -508,14 +508,25 @@ export async function generateVideoWithSubtitles(
     const srtSubtitlePath = path.join(VIDEO_OUTPUT_DIR, `${sessionId}_styled_subtitles.srt`);
     const assSubtitlePath = path.join(VIDEO_OUTPUT_DIR, `${sessionId}_styled_subtitles.ass`);
     
+    // Check if ASS file already exists (copied from analysis)
+    if (fs.existsSync(assSubtitlePath)) {
+      console.log('🎯 [SUBTITLES] Found existing ASS file, skipping generation');
+      console.log('🎯 [SUBTITLES] Existing ASS path:', assSubtitlePath);
+    } else {
+      console.log('📝 [SUBTITLES] Generating new ASS subtitle file');
+      generateASSSubtitles(dialogueTimestamps, assSubtitlePath);
+    }
+    
     generateSRTSubtitles(dialogueTimestamps, srtSubtitlePath);
-    generateASSSubtitles(dialogueTimestamps, assSubtitlePath);
 
     // Verify subtitle files exist
     if (!fs.existsSync(srtSubtitlePath)) {
       throw new Error(`SRT subtitle file not found at: ${srtSubtitlePath}`);
     }
-    console.log('✅ [SUBTITLES] Styled subtitle files generated successfully');
+    if (!fs.existsSync(assSubtitlePath)) {
+      throw new Error(`ASS subtitle file not found at: ${assSubtitlePath}`);
+    }
+    console.log('✅ [SUBTITLES] Styled subtitle files verified successfully');
 
     // Get background video duration to determine if we need to loop or trim
     const backgroundDuration = await new Promise<number>((resolve, reject) => {
@@ -585,27 +596,62 @@ export async function generateVideoWithSubtitles(
       // Escape the subtitle path for Windows
       const escapedAssPath = assSubtitlePath.replace(/\\/g, '/').replace(/:/g, '\\:');
 
-      const ffmpegCommand = ffmpeg()
+      // Build FFmpeg command
+      let ffmpegCommand = ffmpeg()
         .input(finalVideoInput) // Background video
-        .input(tempAudioPath)   // Audio
+        .input(tempAudioPath);  // Audio
+
+      // Add character image inputs
+      Object.values(CHARACTER_IMAGES).forEach(imgPath => {
+        ffmpegCommand = ffmpegCommand.input(imgPath);
+      });
+
+      // Build filter chain with proper chaining
+      let filterChain = '[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[bg]';
+      
+      // Build character overlay enable expressions
+      const stewieRanges: string[] = [];
+      const peterRanges: string[] = [];
+      
+      dialogueTimestamps.forEach(dialogue => {
+        const start = dialogue.totalStart.toFixed(2);
+        const end = dialogue.totalEnd.toFixed(2);
+        if (dialogue.character === 'Stewie') {
+          stewieRanges.push(`between(t,${start},${end})`);
+        } else if (dialogue.character === 'Peter') {
+          peterRanges.push(`between(t,${start},${end})`);
+        }
+      });
+      
+      const stewieEnable = stewieRanges.join('+');
+      const peterEnable = peterRanges.join('+');
+      
+      // Add single overlay for each character with combined time ranges
+      filterChain += `;[2:v]scale=500:600[scaled_stewie];[bg][scaled_stewie]overlay=300:1350:enable='${stewieEnable}'[with_stewie]`;
+      filterChain += `;[3:v]scale=550:800[scaled_peter];[with_stewie][scaled_peter]overlay=300:1250:enable='${peterEnable}'[with_characters]`;
+      
+      // Add subtitles to the final result
+      filterChain += `;[with_characters]subtitles='${escapedAssPath}':force_style='${forceStyleOptions}'[final]`;
+
+      console.log('🖼️ [CHARACTERS] Complex filter chain:', filterChain);
+
+      ffmpegCommand
         .outputOptions([
-          '-y',
           '-t', cumulativeTime.toString(),
-          '-map', '0:v:0', // Video from first input
+          '-map', '[final]', // Video from final output
           '-map', '1:a:0', // Audio from second input
           '-c:v', 'libx264',
           '-b:v', '2000k',
           '-r', '30',
           '-c:a', 'aac',
           '-b:a', '128k',
-          // Video filters: scale, crop, and burn subtitles
-          '-vf', `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,subtitles='${escapedAssPath}':force_style='${forceStyleOptions}'`
+          '-filter_complex', filterChain
         ]);
 
       ffmpegCommand
         .output(outputVideoPath)
         .on('start', (commandLine: any) => {
-          console.log('🎬 [GENERATOR] FFmpeg burned subtitles command:', commandLine);
+          console.log('🖼️ [CHARACTERS] FFmpeg command with character overlays:', commandLine);
         })
         .on('stderr', (stderrLine: string) => {
           // Only log important stderr messages to reduce noise
@@ -629,16 +675,25 @@ export async function generateVideoWithSubtitles(
         .run();
     });
 
-    // Cleanup temporary files
+    // Cleanup temporary files (but preserve cached ASS files)
     try {
-      const filesToCleanup = [tempAudioPath, audioListPath, srtSubtitlePath, assSubtitlePath];
+      const filesToCleanup = [tempAudioPath, audioListPath, srtSubtitlePath];
       if (tempLoopedVideo && fs.existsSync(tempLoopedVideo)) {
         filesToCleanup.push(tempLoopedVideo);
       }
+
+      // Only cleanup ASS file if it's not in the cache directory
+      const assCacheDir = path.join(process.cwd(), 'temp', 'ass_cache');
+      if (assSubtitlePath && !assSubtitlePath.startsWith(assCacheDir)) {
+        filesToCleanup.push(assSubtitlePath);
+      } else if (assSubtitlePath) {
+        console.log('💾 [GENERATOR] Preserving cached ASS file:', path.basename(assSubtitlePath));
+      }
+
       filesToCleanup.forEach(file => {
         if (fs.existsSync(file)) fs.unlinkSync(file);
       });
-      console.log('🧹 [GENERATOR] Temporary files cleaned up');
+      console.log('🧹 [GENERATOR] Temporary files cleaned up (cached ASS files preserved)');
     } catch (err) {
       console.warn('⚠️ [GENERATOR] Warning: Could not clean up some temporary files:', err);
     }

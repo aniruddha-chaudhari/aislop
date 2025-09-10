@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { assistant } from '../service/assistant';
+import { generateConversation } from '../service/assistants';
 import { CharacterName } from '../config/tts-config';
 import fs from 'fs';
 import path from 'path';
@@ -305,8 +305,8 @@ export const generateConversationWithAudio = async (req: Request, res: Response)
 
     // Generate conversation using AI assistant
     console.log('🤖 Generating conversation script...');
-    const result = await assistant(text);
-    const conversation = result.object;
+    const result = await generateConversation(text);
+    const conversation = result;
 
     if (!conversation || !conversation.conversation || conversation.conversation.length === 0) {
       return res.status(500).json({
@@ -1019,6 +1019,8 @@ export const deleteAudioFile = async (req: Request, res: Response) => {
     const { filename } = req.params;
     const { sessionId } = req.query;
 
+    console.log('Delete request:', { filename, sessionId, sessionIdType: typeof sessionId });
+
     if (!filename) {
       return res.status(400).json({
         error: 'Filename is required'
@@ -1032,6 +1034,8 @@ export const deleteAudioFile = async (req: Request, res: Response) => {
         filename: filename
       }
     });
+
+    console.log('Database query result:', { found: !!audioFile, audioFile });
 
     if (!audioFile) {
       return res.status(404).json({

@@ -13,7 +13,8 @@
     "resolveJsonModule": true,
     "declaration": true,
     "declarationMap": true,
-    "sourceMap": true
+    "sourceMap": true,
+    "maxNodeModuleJsDepth": 10
   },
   "include": [
     "src/**/*"

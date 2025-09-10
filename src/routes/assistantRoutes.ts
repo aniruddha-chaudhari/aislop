@@ -1,5 +1,5 @@
 import { Router, type IRouter } from 'express';
-import { generateConversation, generateScript, generateAudioFromScript, getAudioFiles, downloadAudio, testTTS, getModels, setGPTWeights, setSoVITSWeights } from '../controllers/assistantController';
+import { generateConversation, generateScript, generateAudioFromScript, getAudioFiles, downloadAudio, testTTS, getModels, setGPTWeights, setSoVITSWeights, testAssistants, testResearch } from '../controllers/assistantController';
 
 const router: IRouter = Router();
 
@@ -29,5 +29,11 @@ router.get('/set-gpt-weights', setGPTWeights);
 
 // GET /api/assistant/set-sovits-weights - Set SoVITS model weights
 router.get('/set-sovits-weights', setSoVITSWeights);
+
+// POST /api/assistant/test-assistants - Test assistants.ts conversation generation
+router.post('/test-assistants', testAssistants);
+
+// POST /api/assistant/test-research - Test assistants.ts research function
+router.post('/test-research', testResearch);
 
 export default router;

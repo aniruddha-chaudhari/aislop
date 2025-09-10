@@ -1,9 +1,11 @@
 import dotenv from 'dotenv';
 import express, { Express } from 'express';
 import cors from 'cors';
+import path from 'path';
 import assistantRoutes from './routes/assistantRoutes';
 import audioRoutes from './routes/audioRoutes';
 import videoRoutes from './routes/videoRoutes';
+import imageRoutes from './routes/imageRoutes';
 
 // Load environment variables
 dotenv.config({ path: '.env.local' });
@@ -22,7 +24,7 @@ app.use(express.json());
 
 // Enhanced CORS configuration
 const corsOptions = {
-  origin: ['http://localhost:3000', 'http://127.0.0.1:3000'], // Add specific origins
+  origin: ['http://localhost:5376', 'http://127.0.0.1:5376', 'http://localhost:3000', 'http://127.0.0.1:3000'], // Add specific origins including new port
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
@@ -30,6 +32,9 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
+
+// Static files
+app.use('/generated_images', express.static(path.join(process.cwd(), 'generated_images')));
 
 // Additional CORS middleware for preflight requests and Brave browser compatibility
 app.use((req, res, next) => {
@@ -55,6 +60,7 @@ app.use((req, res, next) => {
 app.use('/api/assistant', assistantRoutes);
 app.use('/api/audio', audioRoutes);
 app.use('/api/video', videoRoutes);
+app.use('/api/image', imageRoutes);
 
 // Test endpoint for debugging connectivity
 app.get('/api/test', (req, res) => {
@@ -79,7 +85,49 @@ app.get('/', (req, res) => {
 app.listen(port, () => {
   console.log(`Server is running on http://localhost:${port}`);
   console.log(`Backend API available at http://localhost:${port}/api/assistant`);
-  console.log(`CORS enabled for origins: http://localhost:3000, http://127.0.0.1:3000`);
+  console.log(`CORS enabled for origins: http://localhost:5376, http://127.0.0.1:5376, http://localhost:3000, http://127.0.0.1:3000`);
+
+  // Schedule ASS cache cleanup every 6 hours
+  const cleanupInterval = 6 * 60 * 60 * 1000; // 6 hours in milliseconds
+  setInterval(async () => {
+    try {
+      console.log('🧹 [SCHEDULED] Running ASS cache cleanup...');
+
+      // Import the cleanup function dynamically
+      const fs = require('fs');
+      const path = require('path');
+
+      const ASS_CACHE_DIR = path.join(process.cwd(), 'temp', 'ass_cache');
+      const ASS_CACHE_DURATION_HOURS = 24;
+
+      if (!fs.existsSync(ASS_CACHE_DIR)) return;
+
+      let deletedCount = 0;
+      const files = fs.readdirSync(ASS_CACHE_DIR);
+
+      for (const file of files) {
+        if (!file.endsWith('.ass')) continue;
+
+        const filePath = path.join(ASS_CACHE_DIR, file);
+        const stats = fs.statSync(filePath);
+        const ageInHours = (Date.now() - stats.birthtime.getTime()) / (1000 * 60 * 60);
+
+        if (ageInHours > ASS_CACHE_DURATION_HOURS) {
+          fs.unlinkSync(filePath);
+          deletedCount++;
+          console.log(`🗑️ [SCHEDULED] Cleaned up expired ASS file: ${file} (${ageInHours.toFixed(2)}h old)`);
+        }
+      }
+
+      if (deletedCount > 0) {
+        console.log(`🗑️ [SCHEDULED] Cleaned up ${deletedCount} expired ASS files`);
+      }
+    } catch (error) {
+      console.error('❌ [SCHEDULED] Error during ASS cache cleanup:', error);
+    }
+  }, cleanupInterval);
+
+  console.log(`🧹 ASS cache cleanup scheduled every ${cleanupInterval / (60 * 60 * 1000)} hours`);
 });
 
 // Error handling
