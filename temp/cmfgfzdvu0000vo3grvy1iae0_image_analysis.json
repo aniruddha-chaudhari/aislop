@@ -1,0 +1,45 @@
+{
+  "sessionId": "cmfgfzdvu0000vo3grvy1iae0",
+  "topic": "Deep learning",
+  "analysisDate": "2025-09-18T08:49:01.119Z",
+  "userImages": [
+    {
+      "id": "user_1758185314978_x4km0gepd",
+      "imagePath": "F:\\Aniruddha\\code\\webdev\\PROJECTS\\aislop\\generated_images\\cmfgfzdvu0000vo3grvy1iae0\\user_provided\\user_vlffvvzp_1758185314978_x4km0gepd.jpg",
+      "label": "backpropogation",
+      "description": "User uploaded image: VlffVVZP.jpg",
+      "priority": "high"
+    }
+  ],
+  "suggestions": [
+    {
+      "userImageId": "user_1758185314978_x4km0gepd",
+      "userImageLabel": "backpropogation",
+      "suggestedTimestamp": 54.11,
+      "dialogueIndex": 5,
+      "dialogueText": "something called\\Nbackpropagation.",
+      "character": "Peter",
+      "reasoning": "The user-provided image is explicitly labeled 'backpropogation'. Dialogue segment 5 directly introduces and mentions 'something called backpropagation.' This is a perfect and direct conceptual match, making it the ideal educational placement to visually illustrate the term as it is spoken.",
+      "relevanceScore": 10,
+      "suggestedDuration": 6,
+      "alternativePlacements": [
+        {
+          "timestamp": 88.15,
+          "dialogueIndex": 7,
+          "reasoning": "Alternative placement based on content similarity",
+          "score": 8
+        },
+        {
+          "timestamp": 40.39,
+          "dialogueIndex": 4,
+          "reasoning": "Alternative placement based on content similarity",
+          "score": 8
+        }
+      ]
+    }
+  ],
+  "totalSuggestions": 1,
+  "highRelevance": 1,
+  "mediumRelevance": 0,
+  "lowRelevance": 0
+}

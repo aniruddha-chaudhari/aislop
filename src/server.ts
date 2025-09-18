@@ -24,7 +24,35 @@ app.use(express.json());
 
 // Enhanced CORS configuration
 const corsOptions = {
-  origin: ['http://localhost:5376', 'http://127.0.0.1:5376', 'http://localhost:3000', 'http://127.0.0.1:3000'], // Add specific origins including new port
+  origin: function (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    // Allow localhost and 127.0.0.1 origins for development
+    if (origin.match(/^http:\/\/localhost:\d+$/) || origin.match(/^http:\/\/127\.0\.0\.1:\d+$/)) {
+      return callback(null, true);
+    }
+    
+    // Allow 192.168.x.x origins for local network development
+    if (origin.match(/^http:\/\/192\.168\.\d+\.\d+:\d+$/)) {
+      return callback(null, true);
+    }
+    
+    // Allow specific origins
+    const allowedOrigins = [
+      'http://localhost:5376', 
+      'http://127.0.0.1:5376', 
+      'http://localhost:3000', 
+      'http://127.0.0.1:3000',
+      'http://192.168.56.1:5376',
+      'http://192.168.56.1:3000'
+    ];
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    
+    return callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
@@ -36,9 +64,9 @@ app.use(cors(corsOptions));
 // Static files
 app.use('/generated_images', express.static(path.join(process.cwd(), 'generated_images')));
 
-// Additional CORS middleware for preflight requests and Brave browser compatibility
+// Additional CORS middleware for preflight requests and browser compatibility
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  // Let the cors middleware handle the origin
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
   res.header('Access-Control-Allow-Credentials', 'true');
@@ -49,7 +77,7 @@ app.use((req, res, next) => {
   res.header('X-XSS-Protection', '1; mode=block');
   
   if (req.method === 'OPTIONS') {
-    console.log('Handling OPTIONS request for:', req.path);
+    console.log('Handling OPTIONS request for:', req.path, 'from origin:', req.headers.origin);
     res.sendStatus(200);
   } else {
     next();
@@ -85,7 +113,7 @@ app.get('/', (req, res) => {
 app.listen(port, () => {
   console.log(`Server is running on http://localhost:${port}`);
   console.log(`Backend API available at http://localhost:${port}/api/assistant`);
-  console.log(`CORS enabled for origins: http://localhost:5376, http://127.0.0.1:5376, http://localhost:3000, http://127.0.0.1:3000`);
+  console.log(`CORS enabled for origins: http://localhost:5376, http://127.0.0.1:5376, http://localhost:3000, http://127.0.0.1:3000, http://192.168.56.1:5376, http://192.168.56.1:3000, and all localhost/127.0.0.1/192.168.x.x origins`);
 
   // Schedule ASS cache cleanup every 6 hours
   const cleanupInterval = 6 * 60 * 60 * 1000; // 6 hours in milliseconds

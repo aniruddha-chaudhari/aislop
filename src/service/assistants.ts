@@ -20,7 +20,7 @@ const conversationperterstewieschema = z.object({
 
 const researchontopicwithlinks = async (topic: string) => {
   try {
-    const enhancedPrompt = `${stewiepetertechprompt}Generate detailed information about the given topic "${topic}".`;
+    const enhancedPrompt = `${stewiepetertechprompt('Stewie', 'Peter')}Generate detailed information about the given topic "${topic}".`;
     const result = await generateText({
       model: google('gemini-2.5-flash'),
       prompt: enhancedPrompt,
@@ -49,20 +49,21 @@ const imagegeneration = async (prompt: string) => {
 export const generateConversation = async (topic: string) => {
   try {
     const researchInfo = await researchontopicwithlinks(topic);
+
     // Randomly decide who is the knowledgeable one
     const random = Math.random(); // Generates a number between 0 and 1
     const knowledgeableCharacter = random < 0.5 ? 'Peter' : 'Stewie';
     const lessknowledgeableCharacter = knowledgeableCharacter === 'Peter' ? 'Stewie' : 'Peter';
 
-    const prompt = `${stewiepetertechprompt}
+    console.log(`Knowledgeable character: ${knowledgeableCharacter}, Less knowledgeable: ${lessknowledgeableCharacter}`);
+
+    const prompt = `${stewiepetertechprompt(knowledgeableCharacter, lessknowledgeableCharacter)}
 
 Use the following research information to inform the dialogue: ${researchInfo}
 
 IMPORTANT: Ignore all links from the research info. Focus only on the textual content.
 
-Generate a conversation between Stewie and Peter about the topic "${topic}". The conversation should be approximately 10-15 dialogue (4-6 exchanges) and explain concepts suitable for an Instagram reel audience.
-
-In this conversation, ${knowledgeableCharacter} should be the knowledgeable character who explains the topic, while ${lessknowledgeableCharacter} should be the less knowledgeable one who asks questions and tries to understand by simplifying complex ideas.
+Generate a conversation between Stewie and Peter about the topic "${topic}". The conversation should be approximately 10-15 dialogue exchanges (5-7 per character) suitable for an Instagram reel audience.
 
 Each dialogue line must be 280 characters or less.
 
@@ -71,10 +72,10 @@ The response must be a valid JSON object with this structure:
 - topic: string
 
 Each dialogue object must have:
-- character: either "Stewie" or "Peter" 
+- character: either "Stewie" or "Peter"
 - dialogue: the text they speak (max 280 characters)
 
-**Dialogue Length Requirement:** Generate approximately more than 10 dialogues (roughly 4-6 exchanges between characters, suitable for video content).
+**Dialogue Length Requirement:** Generate exactly 10-15 dialogue exchanges (5-7 per character).
 
 **Important Rules:**
 - Do not split a single character's dialogue across multiple entries. Each character's turn must be complete in one dialogue object.
