@@ -1061,20 +1061,32 @@ export class ImageEmbeddingService {
       console.log('🎨 [SERVICE] Session ID:', sessionId);
       console.log('🎨 [SERVICE] Background video:', backgroundVideoPath);
       console.log('🎨 [SERVICE] Device:', device);
-      console.log('🎨 [SERVICE] Enhanced technical diagram plan has', imagePlan.imageRequirements?.length || 0, 'requirements');
-      console.log('🎨 [SERVICE] Features: Technical diagrams, 3s display duration, Google search research');
 
-      // Check which images are actually uploaded
+      // Debug: Log all image requirements
+      console.log('🔍 [SERVICE] Image requirements:');
+      imagePlan.imageRequirements?.forEach((req, index) => {
+        console.log(`   ${index + 1}. ${req.title} (${req.imageType}) - uploaded: ${req.uploaded} - path: ${req.imagePath || 'NO PATH'}`);
+      });
       const uploadedImages = imagePlan.imageRequirements.filter(req => req.uploaded && req.imagePath);
       const missingImages = imagePlan.imageRequirements.filter(req => !req.uploaded || !req.imagePath);
 
-      // Also check for user-provided images
+      // Check for user-provided images that are NOT already in the image requirements
+      // (to avoid double-loading approved user images)
       let userProvidedImages: UserProvidedImage[] = [];
       try {
         const userImagesFile = path.join(process.cwd(), 'temp', `${sessionId}_user_images.json`);
         if (fs.existsSync(userImagesFile)) {
-          userProvidedImages = UserImageManager.loadUserImages(userImagesFile);
-          console.log(`👤 [SERVICE] Found ${userProvidedImages.length} user-provided images`);
+          const allUserImages = UserImageManager.loadUserImages(userImagesFile);
+          
+          // Only include user images that are NOT already in the image requirements
+          // (approved user images are already in imageRequirements with proper timestamps)
+          const approvedImagePaths = new Set(
+            imagePlan.imageRequirements
+              .filter(req => req.imagePath)
+              .map(req => req.imagePath)
+          );
+          userProvidedImages = allUserImages.filter(img => !approvedImagePaths.has(img.imagePath));
+          console.log(`👤 [SERVICE] Found ${allUserImages.length} total user images, ${userProvidedImages.length} unapproved (already approved: ${approvedImagePaths.size})`);
         }
       } catch (error) {
         console.warn('⚠️ [SERVICE] Could not load user-provided images:', error);
@@ -1082,7 +1094,19 @@ export class ImageEmbeddingService {
 
       const totalAvailableImages = uploadedImages.length + userProvidedImages.length;
 
-      console.log(`📊 [SERVICE] Image status: ${uploadedImages.length} AI requirements uploaded, ${userProvidedImages.length} user-provided, ${missingImages.length} missing`);
+      console.log(`📊 [SERVICE] Image status: ${uploadedImages.length} uploaded, ${userProvidedImages.length} user-provided, ${missingImages.length} missing`);
+      console.log('🔍 [SERVICE] Uploaded images:');
+      uploadedImages.forEach((img, index) => {
+        console.log(`   ${index + 1}. ${img.title} (${img.imageType}) - ${img.timestamp}s - ${img.imagePath}`);
+      });
+      console.log('🔍 [SERVICE] User-provided images:');
+      userProvidedImages.forEach((img, index) => {
+        console.log(`   ${index + 1}. ${img.label} - ${img.imagePath} - timestamp: ${img.preferredTimestamp || 'none'}`);
+      });
+      console.log('🔍 [SERVICE] Missing images:');
+      missingImages.forEach((img, index) => {
+        console.log(`   ${index + 1}. ${img.title} (${img.imageType}) - uploaded: ${img.uploaded} - path: ${img.imagePath || 'NO PATH'}`);
+      });
       console.log(`📊 [SERVICE] Total available images: ${totalAvailableImages}`);
       console.log(`📊 [SERVICE] Expected images per minute: ${((imagePlan.summary.totalImages / imagePlan.totalDuration) * 60).toFixed(1)}`);
 
@@ -1204,24 +1228,46 @@ export class ImageEmbeddingService {
 
       // Filter out AI-generated images without valid paths
       const validAiImages = uploadedImages.filter(img => img.imagePath);
+      console.log('🔍 [EMBED] Valid AI images:');
+      validAiImages.forEach((img, index) => {
+        console.log(`   ${index + 1}. ${img.title} - ${img.timestamp}s - ${img.imagePath}`);
+      });
 
       // User-provided images: Get the ones with AI-decided timestamps from userProvidedImages
       // These have the correct timestamps from the AI analysis
-      const validUserImages = userProvidedImages.filter(img =>
+      let validUserImages = userProvidedImages.filter(img =>
         img.imagePath &&
         fs.existsSync(img.imagePath) &&
-        !validAiImages.some(aiImg => aiImg.imagePath === img.imagePath)
+        !validAiImages.some(aiImg => aiImg.imagePath === img.imagePath) &&
+        img.preferredTimestamp !== undefined && img.preferredTimestamp !== null // Only include images with proper timestamps
       );
 
-      const totalValidImages = validAiImages.length + validUserImages.length;
+      // DEDUPLICATE: Only keep one image per label/timestamp combination
+      // This prevents multiple identical images from appearing at the same time
+      const seenCombinations = new Set<string>();
+      validUserImages = validUserImages.filter(img => {
+        const combinationKey = `${img.label.toLowerCase()}_${Math.round(img.preferredTimestamp || 0)}`;
+        if (seenCombinations.has(combinationKey)) {
+          console.log(`⚠️ [EMBED] Skipping duplicate: ${img.label} at ${img.preferredTimestamp}s (already have one)`);
+          return false;
+        }
+        seenCombinations.add(combinationKey);
+        return true;
+      });
+
+      console.log('🔍 [EMBED] Valid user images (with timestamps, deduplicated):');
+      validUserImages.forEach((img, index) => {
+        console.log(`   ${index + 1}. ${img.label} - ${img.preferredTimestamp}s - ${img.imagePath}`);
+      });
+      console.log('🔍 [EMBED] Filtered out user images:');
+      userProvidedImages.filter(img => !validUserImages.some(valid => valid.id === img.id)).forEach((img, index) => {
+        console.log(`   ${index + 1}. ${img.label} - timestamp: ${img.preferredTimestamp || 'none'} - path: ${img.imagePath} - exists: ${fs.existsSync(img.imagePath)}`);
+      });
 
       console.log(`🎨 [EMBED] Valid AI-generated images: ${validAiImages.length}`);
       console.log(`🎨 [EMBED] Valid user-provided images: ${validUserImages.length}`);
-      
-      // Debug: Log user image timestamps
-      validUserImages.forEach(img => {
-        console.log(`🎯 [USER-IMAGE] "${img.label}" - Timestamp: ${img.preferredTimestamp || 'auto'}s - Path: ${img.imagePath}`);
-      });
+
+      const totalValidImages = validAiImages.length + validUserImages.length;
       console.log(`🎨 [EMBED] Total valid images: ${totalValidImages}`);
 
       // If no valid images, return the base video
@@ -1307,7 +1353,7 @@ export class ImageEmbeddingService {
 
       console.log('🎨 [EMBED] Image schedule:');
       allImages.forEach((img, index) => {
-        console.log(`   ${index + 1}. ${img.title} (${img.type}) - ${img.timestamp.toFixed(1)}s`);
+        console.log(`   ${index + 1}. ${img.title} (${img.type}) - ${img.timestamp.toFixed(1)}s - duration: ${(img.contextualDuration || 8).toFixed(1)}s`);
       });
 
       // Add image inputs
@@ -1365,6 +1411,9 @@ export class ImageEmbeddingService {
         }
       });
 
+      console.log('🎨 [EMBED] Generated filter chain for image overlay');
+      console.log(`🎨 [EMBED] Filter complexity: ${allImages.length} images, ${filterChain.length} characters`);
+
       // If no valid images, just copy the video
       if (allImages.length === 0) {
         filterChain = '[0:v]copy[final_with_images]';
@@ -1373,7 +1422,6 @@ export class ImageEmbeddingService {
         console.log(`🎨 [EMBED] Generated filter chain for ${allImages.length} image(s)`);
       }
 
-      console.log('🎨 [EMBED] Filter chain:', filterChain);
       console.log('🎨 [EMBED] Number of images to embed:', allImages.length);
       console.log('🎨 [EMBED] Image positioning: Centered horizontally in top half at y=40, 960x720 taller size, maintains aspect ratio');
 
@@ -1401,6 +1449,9 @@ export class ImageEmbeddingService {
       }
 
       // Execute FFmpeg command
+      console.log('🎨 [EMBED] Starting FFmpeg processing...');
+      console.log(`🎨 [EMBED] Processing ${allImages.length} images with complex overlay filters`);
+      
       return new Promise((resolve) => {
         ffmpegCommand
           .outputOptions([
@@ -1415,8 +1466,7 @@ export class ImageEmbeddingService {
           ])
           .output(outputVideoPath)
           .on('start', (commandLine: string) => {
-            console.log('🎨 [EMBED] FFmpeg command:', commandLine);
-            console.log('🎨 [EMBED] Filter chain being used:', filterChain);
+            console.log('🎨 [EMBED] Starting FFmpeg processing...');
           })
           .on('progress', (progress: any) => {
             // Progress logging removed - only log when done
@@ -1424,6 +1474,10 @@ export class ImageEmbeddingService {
           .on('end', () => {
             console.log('✅ [EMBED] Image embedding completed successfully');
             console.log(`🎨 [EMBED] Output video: ${outputVideoPath}`);
+            console.log(`📊 [EMBED] Successfully embedded ${allImages.length} images:`);
+            allImages.forEach((img, index) => {
+              console.log(`   ${index + 1}. ${img.title} (${img.type}) at ${img.timestamp.toFixed(1)}s`);
+            });
 
             // Check if output file exists and has content
             if (fs.existsSync(outputVideoPath)) {
@@ -1781,6 +1835,13 @@ Return your analysis focusing on how well THIS SPECIFIC user-labeled image match
 
       console.log(`✅ [SUGGESTIONS] Generated ${uniqueSuggestions.length} placement suggestions (removed ${suggestions.length - uniqueSuggestions.length} duplicates)`);
       console.log(`📊 [SUGGESTIONS] Timestamp distribution:`, uniqueSuggestions.map(s => `${s.userImageLabel}@${s.suggestedTimestamp.toFixed(1)}s`).join(', '));
+      
+      // RETURN ONLY THE BEST SUGGESTION to avoid overwhelming the user
+      const bestSuggestion = uniqueSuggestions[0];
+      if (bestSuggestion) {
+        console.log(`🏆 [SUGGESTIONS] Returning only the best suggestion: "${bestSuggestion.userImageLabel}" (score: ${bestSuggestion.relevanceScore})`);
+        return [bestSuggestion];
+      }
       
       return uniqueSuggestions;
 

@@ -343,18 +343,23 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
             totalDuration: 0, // Will be calculated
             imageRequirements: [
               // Include approved user image placements
-              ...approvedUserImagePlacements.map((placement: any) => ({
-                id: placement.userImageId,
-                timestamp: placement.suggestedTimestamp,
-                dialogueText: placement.dialogueText,
-                character: placement.character,
-                imageType: 'custom' as const,
-                title: placement.userImageLabel,
-                description: `User-provided image: ${placement.userImageLabel}`,
-                priority: 'high' as const,
-                uploaded: true,
-                imagePath: userImages.find((img: any) => img.id === placement.userImageId)?.imagePath
-              })),
+              ...approvedUserImagePlacements.map((placement: any) => {
+                const userImage = userImages.find((img: any) => img.id === placement.userImageId);
+                console.log(`🎯 [CONTROLLER] Processing approved placement: ${placement.userImageId} -> ${placement.userImageLabel}`);
+                console.log(`🎯 [CONTROLLER] Found user image: ${userImage ? userImage.imagePath : 'NOT FOUND'}`);
+                return {
+                  id: placement.userImageId,
+                  timestamp: placement.suggestedTimestamp,
+                  dialogueText: placement.dialogueText,
+                  character: placement.character,
+                  imageType: 'custom' as const,
+                  title: placement.userImageLabel,
+                  description: `User-provided image: ${placement.userImageLabel}`,
+                  priority: 'high' as const,
+                  uploaded: !!userImage?.imagePath,
+                  imagePath: userImage?.imagePath
+                };
+              }),
               // Include existing AI-generated images
               ...existingAiImages
             ],
@@ -860,7 +865,6 @@ export const analyzeAssForImages = async (req: Request, res: Response) => {
         const dialogue = session.dialogues[i];
 
         if (dialogue.audioFile) {
-          console.log(`� [CONTROLLER] Processing dialogue ${i + 1}/${session.dialogues.length} for ASS generation`);
 
           // Get audio duration first
           const audioDuration = await new Promise<number>((resolve, reject) => {
@@ -1629,12 +1633,12 @@ export const analyzeUserImages = async (req: Request, res: Response) => {
 
     const allUserImages = JSON.parse(fs.readFileSync(userImagesPath, 'utf8'));
     
-    // FILTER: Only analyze the most recent image upload to avoid analyzing old images
-    const userImages = allUserImages.slice(-1); // Only take the last uploaded image
+    // ANALYZE ALL user images and return only the best suggestion
+    const userImages = allUserImages; // Analyze all user images to find the best one
     
     console.log('📊 [CONTROLLER] Total user images in file:', allUserImages.length);
-    console.log('📊 [CONTROLLER] Analyzing only the most recent image:', userImages.length);
-    console.log('📋 [CONTROLLER] Recent image details:', userImages.map((img: any) => ({ id: img.id, label: img.label, imagePath: img.imagePath })));
+    console.log('📊 [CONTROLLER] Analyzing all user images to find the best one:', userImages.length);
+    console.log('📋 [CONTROLLER] Image details:', userImages.map((img: any) => ({ id: img.id, label: img.label, imagePath: img.imagePath })));
 
     if (!userImages || userImages.length === 0) {
       console.log('❌ [CONTROLLER] No user images to analyze');
@@ -1762,6 +1766,47 @@ export const analyzeUserImages = async (req: Request, res: Response) => {
     }, null, 2));
 
     console.log('✅ [CONTROLLER] Image analysis completed:', suggestions.length, 'suggestions generated');
+    console.log('📊 [CONTROLLER] Analysis summary:');
+    console.log(`   - High relevance (>0.8): ${suggestions.filter(s => s.relevanceScore > 0.8).length}`);
+    console.log(`   - Medium relevance (0.6-0.8): ${suggestions.filter(s => s.relevanceScore >= 0.6 && s.relevanceScore <= 0.8).length}`);
+    console.log(`   - Low relevance (<0.6): ${suggestions.filter(s => s.relevanceScore < 0.6).length}`);
+    console.log(`   - Total images analyzed: ${allUserImages.length}`);
+
+    // CRITICAL FIX: Apply suggestions back to user images
+    // This ensures timestamps are saved for video generation
+    if (suggestions.length > 0) {
+      console.log('🔄 [CONTROLLER] Applying suggestion timestamps back to user images...');
+      
+      let updatedCount = 0;
+      suggestions.forEach(suggestion => {
+        // Update the specific image that was analyzed
+        const userImageIndex = allUserImages.findIndex((img: any) => img.id === suggestion.userImageId);
+        if (userImageIndex >= 0) {
+          allUserImages[userImageIndex].preferredTimestamp = suggestion.suggestedTimestamp;
+          allUserImages[userImageIndex].suggestionReasoning = suggestion.reasoning;
+          allUserImages[userImageIndex].relevanceScore = suggestion.relevanceScore;
+          updatedCount++;
+          console.log(`📍 [CONTROLLER] Updated "${suggestion.userImageLabel}" -> ${suggestion.suggestedTimestamp}s (score: ${suggestion.relevanceScore})`);
+        }
+        
+        // ALSO update any other images with the same label (duplicates)
+        allUserImages.forEach((img: any, index: number) => {
+          if (index !== userImageIndex && 
+              img.label.toLowerCase() === suggestion.userImageLabel.toLowerCase() && 
+              !img.preferredTimestamp) {
+            img.preferredTimestamp = suggestion.suggestedTimestamp;
+            img.suggestionReasoning = `Same as ${suggestion.userImageLabel} (duplicate)`;
+            img.relevanceScore = suggestion.relevanceScore;
+            updatedCount++;
+            console.log(`📍 [CONTROLLER] Updated duplicate "${img.label}" -> ${suggestion.suggestedTimestamp}s (same label)`);
+          }
+        });
+      });
+      
+      // Save updated user images back to file
+      fs.writeFileSync(userImagesPath, JSON.stringify(allUserImages, null, 2));
+      console.log(`✅ [CONTROLLER] Updated ${updatedCount} user images with timestamps`);
+    }
 
     return res.status(200).json({
       success: true,

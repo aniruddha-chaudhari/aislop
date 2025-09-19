@@ -379,6 +379,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     }
   });
 
+  // Ensure the directory exists before writing the file
+  const outputDir = path.dirname(outputPath);
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+    console.log(`📁 [ASS] Created directory: ${outputDir}`);
+  }
+
   fs.writeFileSync(outputPath, assContent, 'utf8');
   console.log('✅ [ASS] Mobile-optimized ASS subtitle file generated successfully');
 }
@@ -448,7 +455,6 @@ export async function generateVideoWithSubtitles(
       const dialogue = successfulDialogues[i];
 
       if (dialogue.audioFile) {
-        console.log(`🎯 [GENERATOR] Processing dialogue ${i + 1}/${successfulDialogues.length}: "${dialogue.text.substring(0, 50)}..."`);
 
         // Get audio duration first
         const audioDuration = await new Promise<number>((resolve, reject) => {
@@ -478,7 +484,6 @@ export async function generateVideoWithSubtitles(
         });
 
         cumulativeTime += audioDuration;
-        console.log(`✅ [GENERATOR] Processed dialogue ${i + 1}, cumulative time: ${cumulativeTime.toFixed(2)}s`);
       }
     }
 
@@ -651,7 +656,7 @@ export async function generateVideoWithSubtitles(
       ffmpegCommand
         .output(outputVideoPath)
         .on('start', (commandLine: any) => {
-          console.log('🖼️ [CHARACTERS] FFmpeg command with character overlays:', commandLine);
+          console.log('🖼️ [CHARACTERS] Starting FFmpeg video generation with character overlays');
         })
         .on('stderr', (stderrLine: string) => {
           // Only log important stderr messages to reduce noise
@@ -661,7 +666,11 @@ export async function generateVideoWithSubtitles(
         })
         .on('progress', (progress: any) => {
           if (progress.percent) {
-            console.log(`🔥 [GENERATOR] Burning subtitles progress: ${Math.round(progress.percent)}%`);
+            const percent = Math.round(progress.percent);
+            // Only log progress at 25% intervals to reduce noise
+            if (percent % 25 === 0 && percent > 0) {
+              console.log(`🔥 [GENERATOR] Burning subtitles progress: ${percent}%`);
+            }
           }
         })
         .on('end', () => {
