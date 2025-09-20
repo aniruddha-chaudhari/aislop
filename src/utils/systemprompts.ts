@@ -32,23 +32,77 @@ Create a dialogue between Stewie and Peter Griffin that:
 
 ### CHARACTER PERSONALITY SPECIFICATIONS
 
-**STEWIE GRIFFIN BEHAVIORAL MATRIX:**
+**STEWIE GRIFFIN BEHAVIORAL MATRIX (ENHANCED):**
 
-*When Knowledgeable (Teaching Role):*
-- Demonstrates intellectual superiority through precise technical language
-- Shows slight impatience with oversimplifications but explains thoroughly
-- Uses sophisticated vocabulary while remaining comprehensible
-- Makes connections to scientific principles and theoretical frameworks
-- Exhibits pride in demonstrating comprehensive understanding
-- Maintains condescending undertone while being genuinely helpful
+**When Knowledgeable (Teaching Role) - DIVERSIFIED RESPONSE PATTERNS:**
 
-*When Less Knowledgeable (Learning Role):*
-- Asks probing, intelligent questions that reveal deeper implications
-- Challenges explanations with sophisticated follow-up inquiries
-- Makes connections to broader scientific or cultural concepts
-- Expresses frustration when concepts conflict with his worldview
-- Uses advanced vocabulary even when confused
-- Demonstrates analytical thinking in processing new information
+### Response Type 1: Technical Explanation (25% of responses)
+- Provide precise technical details with sophisticated vocabulary
+- Use scientific or theoretical frameworks to explain concepts
+- Reference underlying principles or mechanisms
+- Connect to broader technological or scientific contexts
+
+### Response Type 2: Condescending Correction (20% of responses)
+- Correct Peter's misconceptions with intellectual superiority
+- Use phrases like "Actually, Peter..." or "That is not quite accurate..."
+- Show mild frustration at oversimplifications
+- Demonstrate superior knowledge while still being educational
+
+### Response Type 3: Intellectual Challenge (20% of responses)
+- Present counterintuitive facts that challenge common assumptions
+- Ask rhetorical questions that lead to deeper understanding
+- Challenge Peter to think beyond surface-level understanding
+- Present complex scenarios or edge cases
+
+### Response Type 4: Historical/Contextual Perspective (15% of responses)
+- Reference the evolution or history of the technology
+- Compare to previous technologies or methods
+- Discuss industry trends or future implications
+- Provide broader technological landscape context
+
+### Response Type 5: Practical Demonstration (10% of responses)
+- Offer specific, measurable examples with statistics
+- Provide step-by-step logical reasoning
+- Show cause-and-effect relationships
+- Give concrete performance metrics or comparisons
+
+### Response Type 6: Philosophical/Abstract Thinking (10% of responses)
+- Connect technology to larger concepts or implications
+- Discuss theoretical possibilities or limitations
+- Reference broader impacts on society or human behavior
+- Make connections to other fields of knowledge
+
+**When Less Knowledgeable (Learning Role) - DIVERSIFIED RESPONSE PATTERNS:**
+
+### Response Type 1: Analytical Questioning (30% of responses)
+- Ask sophisticated follow-up questions about mechanisms
+- Challenge explanations with complex scenarios
+- Request deeper technical details or specifications
+- Question underlying assumptions or limitations
+
+### Response Type 2: Intellectual Skepticism (25% of responses)
+- Express doubt using advanced vocabulary and reasoning
+- Challenge claims with logical counterarguments
+- Request evidence or proof of capabilities
+- Point out potential flaws or contradictions
+
+### Response Type 3: Comparative Analysis (20% of responses)
+- Compare new information to existing knowledge frameworks
+- Make connections to scientific principles or theories
+- Relate to historical precedents or similar technologies
+- Analyze advantages and disadvantages systematically
+
+### Response Type 4: Frustrated Confusion (15% of responses)
+- Express intellectual frustration when concepts conflict with expectations
+- Demand clarification using sophisticated language
+- Show annoyance at inadequate explanations
+- Require more precise or complete information
+
+### Response Type 5: Theoretical Exploration (10% of responses)
+- Explore hypothetical scenarios or applications
+- Consider broader implications or consequences
+- Speculate about future developments or possibilities
+- Connect to larger theoretical frameworks
 
 *Voice Characteristics:*
 - Articulate, sophisticated speech patterns
@@ -56,23 +110,77 @@ Create a dialogue between Stewie and Peter Griffin that:
 - Intellectual confidence regardless of knowledge level
 - Tendency toward verbose explanations or detailed questions
 
-**PETER GRIFFIN BEHAVIORAL MATRIX:**
+**PETER GRIFFIN BEHAVIORAL MATRIX (ENHANCED):**
 
-*When Knowledgeable (Teaching Role):*
-- Uses straightforward, practical explanations without unnecessary jargon
-- Relates complex concepts to everyday experiences and objects
-- Focuses on how things work rather than why they work theoretically
-- Shows enthusiasm for sharing practical knowledge
-- Makes learning feel approachable and non-intimidating
-- Uses concrete examples from daily life experiences
+**When Knowledgeable (Teaching Role) - DIVERSIFIED RESPONSE PATTERNS:**
 
-*When Less Knowledgeable (Learning Role):*
-- Asks basic, fundamental questions that reveal core concepts
-- Uses familiar analogies to understand new information
-- Shows genuine excitement when grasping simple concepts
-- Relates new knowledge to personal interests like food, TV, or sports
-- Expresses confusion in straightforward, honest terms
-- Builds understanding through accumulated simple explanations
+### Response Type 1: Practical Explanation (30% of responses)
+- Focus on how things work in everyday situations
+- Use straightforward language without unnecessary complexity
+- Emphasize practical benefits and real-world applications
+- Show enthusiasm for sharing useful knowledge
+
+### Response Type 2: Experience-Based Teaching (25% of responses)
+- Draw from personal experiences or observations
+- Reference things he has actually encountered or used
+- Explain through trial-and-error learning approaches
+- Share practical tips or insights from real use
+
+### Response Type 3: Problem-Solution Focus (20% of responses)
+- Identify common problems the technology solves
+- Explain solutions in terms of immediate benefits
+- Focus on tangible outcomes and results
+- Emphasize practical value over technical elegance
+
+### Response Type 4: Encouraging Simplification (15% of responses)
+- Break down complex concepts into basic components
+- Reassure that understanding is achievable
+- Focus on most important aspects rather than details
+- Make learning feel approachable and non-intimidating
+
+### Response Type 5: Enthusiastic Sharing (10% of responses)
+- Show genuine excitement about useful discoveries
+- Express amazement at practical capabilities
+- Share enthusiasm for how technology improves life
+- Demonstrate pride in understanding something useful
+
+**When Less Knowledgeable (Learning Role) - DIVERSIFIED RESPONSE PATTERNS:**
+
+### Response Type 1: Probing Questions (25% of responses)
+- Ask follow-up questions that dig deeper into implications
+- Challenge explanations with "But what about..." scenarios
+- Express genuine curiosity about edge cases or limitations
+- Question practical impact and real-world applications
+
+### Response Type 2: Skeptical Challenge (20% of responses)
+- Express doubt or confusion about complex claims
+- Ask for proof or concrete examples
+- Challenge assumptions with common-sense reasoning
+- Request clarification on confusing technical terms
+
+### Response Type 3: Personal Connection (20% of responses)
+- Relate to personal experiences without repetitive analogies
+- Reference pop culture, sports, entertainment, or work situations
+- Connect to memories or familiar situations
+- Use varied reference points from different life areas
+
+### Response Type 4: Practical Concerns (15% of responses)
+- Focus on real-world limitations, costs, or difficulties
+- Ask about who uses this technology and why
+- Wonder about learning curve or complexity
+- Express concerns about practical implementation
+
+### Response Type 5: Excited Realization (10% of responses)
+- Show genuine excitement when grasping concepts
+- Make connections between different ideas presented
+- Express amazement at unexpected capabilities
+- React with enthusiasm to surprising facts
+
+### Response Type 6: Confused Redirection (10% of responses)
+- Admit confusion and ask for step-back explanations
+- Request different examples or approaches
+- Acknowledge when lost and need simpler explanation
+- Ask for clarification on specific terms or concepts
 
 *Voice Characteristics:*
 - Casual, working-class American speech patterns
@@ -83,20 +191,57 @@ Create a dialogue between Stewie and Peter Griffin that:
 ### ANALOGY CONSTRUCTION GUIDELINES
 
 **PETER-ORIGINATED ANALOGIES (when he needs to understand or explain):**
-- Food preparation processes (cooking, ingredients, kitchen tools)
-- Television and entertainment systems (channels, remotes, shows)
-- Sports activities and rules (games, players, equipment)
-- Household appliances and their functions
-- Simple mechanical objects (cars, tools, furniture)
-- Everyday routines and activities
+- **Sports analogies:** Team coordination, game strategies, player positions, coaching
+- **Entertainment references:** Movies, TV shows, music industry, celebrity culture
+- **Work situations:** Blue-collar jobs, customer service, workplace dynamics
+- **Social interactions:** Parties, family gatherings, neighborhood situations, friendships
+- **Transportation:** Cars, traffic, public transit, travel experiences
+- **Food industry:** Restaurants, fast food chains, cooking shows (not home cooking)
+- **Pop culture:** Current trends, viral content, social media, gaming
 
 **STEWIE-ORIGINATED ANALOGIES (when he needs to understand or explain):**
-- Scientific processes and laboratory equipment
-- Architectural and engineering systems
-- Historical or literary references
-- Mechanical and technological systems
-- Theoretical frameworks and models
-- Military or strategic planning concepts
+- **Scientific processes:** Laboratory experiments, chemical reactions, biological systems
+- **Engineering systems:** Mechanical processes, architectural principles, manufacturing
+- **Military/Strategic:** Battle tactics, logistical operations, intelligence gathering
+- **Historical references:** Technological evolution, historical figures, past innovations
+- **Literary/Cultural:** Classical literature, philosophical concepts, artistic movements
+- **Theoretical frameworks:** Mathematical models, scientific theories, logical structures
+
+## DIALOGUE FLOW IMPROVEMENTS FOR BOTH CHARACTERS
+
+**AVOID REPETITIVE PATTERNS:**
+- Not every response should follow the same structure
+- Mix understanding with confusion, agreement with challenge
+- Include responses that build on previous information
+- Add responses that redirect or change focus
+- Vary sentence length and complexity
+- Use different emotional tones throughout
+
+**CONVERSATION PROGRESSION TYPES:**
+1. **Linear Learning:** Character understands each concept sequentially
+2. **Questioning Deep Dive:** Multiple questions about one concept
+3. **Comparative Understanding:** Comparing new info to previous concepts
+4. **Challenge and Correction:** Misunderstanding followed by correction
+5. **Practical Application Focus:** Concentrating on real-world usage
+6. **Theoretical Exploration:** Discussing implications and possibilities
+7. **Skeptical Investigation:** Challenging claims and seeking proof
+
+**RESPONSE VARIETY EXAMPLES:**
+
+**STEWIE VARIATIONS:**
+- Technical: "The asynchronous event loop architecture enables non-blocking operations through callback queues and microtask scheduling"
+- Corrective: "Actually Peter, that analogy oversimplifies the underlying concurrency model significantly"
+- Challenging: "But consider this scenario: what happens when millions of users simultaneously request database operations?"
+- Historical: "JavaScript evolved from a ten-day prototype in nineteen ninety-five to the foundation of modern web architecture"
+- Philosophical: "This represents a fundamental shift in how humans interact with computational systems"
+
+**PETER VARIATIONS:**
+- Questioning: "Wait, so how does it know which thing to do first when everything happens at once?"
+- Skeptical: "That sounds way too complicated to actually work reliably in real life"
+- Personal: "My buddy works at a tech company and he never mentioned any of this stuff"
+- Practical: "Okay but what happens when it breaks? Does the whole internet just stop working?"
+- Excited: "Holy crap, so this is why my phone apps load so fast now!"
+- Confused: "I am completely lost here, can you explain that part again but slower?"
 
 ### INSTAGRAM REEL CONTENT OPTIMIZATION
 

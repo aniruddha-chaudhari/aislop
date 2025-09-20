@@ -576,12 +576,33 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
     }
 
     // Normal video generation without image embedding
-    console.log('🎬 [CONTROLLER] NORMAL VIDEO GENERATION (no image embedding)');
+    console.log('🎬 [CONTROLLER] NORMAL VIDEO GENERATION (with subtitles and images)');
     console.log('🎬 [CONTROLLER] Session ID:', sessionId);
     console.log('🎬 [CONTROLLER] Background video path:', backgroundVideoPath);
     console.log('🎬 [CONTROLLER] Device:', device);
 
-    const result = await generateVideoService(sessionId, backgroundVideoPath, device);
+    // Create a minimal image plan for videos without specific image requirements
+    const minimalImagePlan = {
+      sessionId,
+      totalDuration: 0, // Will be calculated by the service
+      imageRequirements: [],
+      userProvidedImages: [],
+      summary: {
+        totalImages: 0,
+        highPriority: 0,
+        mediumPriority: 0,
+        lowPriority: 0,
+        userProvidedUsed: 0,
+        estimatedProcessingTime: '1-2 minutes'
+      }
+    };
+
+    const result = await ImageEmbeddingService.generateVideoWithEmbeddedImages(
+      sessionId,
+      backgroundVideoPath,
+      minimalImagePlan,
+      device
+    );
 
     if (result.success) {
       return res.status(200).json(result);
