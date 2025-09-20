@@ -708,6 +708,26 @@ Provide specific diagram concepts that would work well in educational video cont
         console.log(`📁 [AI] No existing images directory found for session: ${sessionImageDir}`);
       }
 
+      // 🎬 ADD DEFAULT INTRODUCTION IMAGE SUGGESTION (Thumbnail)
+      console.log('🎬 [AI] Adding default Introduction image suggestion at 0:00 (thumbnail)');
+      const introductionImageReq: ImageRequirement = {
+        id: `img_${sessionId}_introduction`,
+        timestamp: 0.0,
+        dialogueText: `Introduction to ${topic}`,
+        character: 'System',
+        imageType: 'diagram',
+        title: 'Introduction',
+        description: `An engaging introduction image that serves as a thumbnail for the video about ${topic}. This image should represent the main topic and create visual interest for viewers.`,
+        priority: 'medium',
+        uploaded: false,
+        contextualDuration: 5.0, // Show for 5 seconds at the beginning
+        relevanceReasoning: 'Introduction image acts as video thumbnail and sets the visual tone for the content'
+      };
+
+      // Add introduction image at the beginning of the array
+      imageRequirements.unshift(introductionImageReq);
+      console.log(`✅ [AI] Added Introduction image suggestion: "${introductionImageReq.title}" at ${introductionImageReq.timestamp}s`);
+
       // 📊 CALCULATE SUMMARY STATISTICS
       const highPriority = imageRequirements.filter(req => req.priority === 'high').length;
       const mediumPriority = imageRequirements.filter(req => req.priority === 'medium').length;
@@ -983,22 +1003,37 @@ export class ImageEmbeddingService {
         'lifecycle': '�'
       }[req.imageType] || '🖼️';
 
-      output += `${index + 1}. **${req.title}** ${status}\n`;
-      output += `   ${priorityEmoji} Priority: ${req.priority.toUpperCase()}\n`;
-      output += `   ${typeEmoji} Type: ${req.imageType}\n`;
-      output += `   🕒 Timestamp: ${req.timestamp.toFixed(1)}s (3s display)\n`;
-      output += `   👤 Character: ${req.character}\n`;
-      output += `   � Context: "${req.dialogueText.substring(0, 60)}${req.dialogueText.length > 60 ? '...' : ''}"\n`;
-      output += `   🎨 AI Description: ${req.description}\n\n`;
+      // Special formatting for Introduction image
+      if (req.title === 'Introduction') {
+        output += `${index + 1}. **${req.title}** ${status} 🎬 **(THUMBNAIL - OPTIONAL)**\n`;
+        output += `   🎯 Special: Acts as video thumbnail/opening image\n`;
+        output += `   ${priorityEmoji} Priority: ${req.priority.toUpperCase()}\n`;
+        output += `   ${typeEmoji} Type: ${req.imageType}\n`;
+        output += `   🕒 Timestamp: ${req.timestamp.toFixed(1)}s (${req.contextualDuration}s display)\n`;
+        output += `   👤 Character: ${req.character}\n`;
+        output += `   � Context: "${req.dialogueText.substring(0, 60)}${req.dialogueText.length > 60 ? '...' : ''}"\n`;
+        output += `   🎨 AI Description: ${req.description}\n`;
+        output += `   ℹ️ **Note: If not uploaded, no default image will be added**\n\n`;
+      } else {
+        output += `${index + 1}. **${req.title}** ${status}\n`;
+        output += `   ${priorityEmoji} Priority: ${req.priority.toUpperCase()}\n`;
+        output += `   ${typeEmoji} Type: ${req.imageType}\n`;
+        output += `   🕒 Timestamp: ${req.timestamp.toFixed(1)}s (${req.contextualDuration || 3}s display)\n`;
+        output += `   👤 Character: ${req.character}\n`;
+        output += `   � Context: "${req.dialogueText.substring(0, 60)}${req.dialogueText.length > 60 ? '...' : ''}"\n`;
+        output += `   🎨 AI Description: ${req.description}\n\n`;
+      }
     });
 
     output += `📤 **NEXT STEPS:**\n`;
     output += `1. Upload the required images using the ultra-concise titles above\n`;
-    output += `2. Each image will display for 3+ seconds at its timestamp\n`;
-    output += `3. The system will create maximum visual impact with frequent, creative imagery\n\n`;
+    output += `2. 🎬 The "Introduction" image is optional - acts as a thumbnail/opening image\n`;
+    output += `3. Each image will display for their specified duration at its timestamp\n`;
+    output += `4. The system will create maximum visual impact with frequent, creative imagery\n\n`;
 
     output += `💡 **ENHANCED TIPS:**\n`;
     output += `• Images focus on technical diagrams and architectures\n`;
+    output += `• Introduction image creates engaging video thumbnail effect\n`;
     output += `• Each image stays longer for better technical understanding\n`;
     output += `• Google search ensures accurate technical visualizations\n`;
     output += `• Quality technical diagrams enhance learning retention\n`;
@@ -1227,7 +1262,15 @@ export class ImageEmbeddingService {
       console.log(`🎨 [EMBED] User-provided images to embed: ${userProvidedImages.length}`);
 
       // Filter out AI-generated images without valid paths
-      const validAiImages = uploadedImages.filter(img => img.imagePath);
+      // Special handling: Skip Introduction image if not uploaded (no fallback required)
+      const validAiImages = uploadedImages.filter(img => {
+        // If this is the Introduction image and it's not uploaded, skip it entirely
+        if (img.title === 'Introduction' && (!img.uploaded || !img.imagePath)) {
+          console.log('🎬 [EMBED] Skipping Introduction image - not uploaded (acts as thumbnail suggestion only)');
+          return false;
+        }
+        return img.imagePath;
+      });
       console.log('🔍 [EMBED] Valid AI images:');
       validAiImages.forEach((img, index) => {
         console.log(`   ${index + 1}. ${img.title} - ${img.timestamp}s - ${img.imagePath}`);
@@ -1836,11 +1879,14 @@ Return your analysis focusing on how well THIS SPECIFIC user-labeled image match
       console.log(`✅ [SUGGESTIONS] Generated ${uniqueSuggestions.length} placement suggestions (removed ${suggestions.length - uniqueSuggestions.length} duplicates)`);
       console.log(`📊 [SUGGESTIONS] Timestamp distribution:`, uniqueSuggestions.map(s => `${s.userImageLabel}@${s.suggestedTimestamp.toFixed(1)}s`).join(', '));
       
-      // RETURN ONLY THE BEST SUGGESTION to avoid overwhelming the user
-      const bestSuggestion = uniqueSuggestions[0];
-      if (bestSuggestion) {
-        console.log(`🏆 [SUGGESTIONS] Returning only the best suggestion: "${bestSuggestion.userImageLabel}" (score: ${bestSuggestion.relevanceScore})`);
-        return [bestSuggestion];
+      // Return top 3 suggestions to give user options without overwhelming
+      const topSuggestions = uniqueSuggestions.slice(0, 3);
+      if (topSuggestions.length > 0) {
+        console.log(`🏆 [SUGGESTIONS] Returning top ${topSuggestions.length} suggestions:`);
+        topSuggestions.forEach((s, i) => {
+          console.log(`  ${i + 1}. "${s.userImageLabel}" (score: ${s.relevanceScore})`);
+        });
+        return topSuggestions;
       }
       
       return uniqueSuggestions;

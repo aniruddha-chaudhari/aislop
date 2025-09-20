@@ -6,6 +6,9 @@ import { generateVideoWithSubtitles as generateVideoService } from '../service/v
 import multer from 'multer';
 import { ImageEmbeddingService, ImageEmbeddingAnalyzer, AssFileProcessor, UserProvidedImage } from '../service/imageEmbedder';
 
+// Import cleanup function from audioController
+import { cleanupOldUserImageFiles } from './audioController';
+
 // Initialize Prisma client
 const prisma = new PrismaClient();
 
@@ -127,6 +130,13 @@ const checkAssCache = (sessionId: string, dialogueHash: string): string | null =
 const saveAssToCache = (sessionId: string, dialogueHash: string, assContent: string): string => {
   const cacheKey = getAssCacheKey(sessionId, dialogueHash);
   const cachePath = getAssCachePath(cacheKey);
+
+  // Ensure the cache directory exists
+  const cacheDir = path.dirname(cachePath);
+  if (!fs.existsSync(cacheDir)) {
+    fs.mkdirSync(cacheDir, { recursive: true });
+    console.log(`📁 [ASS CACHE] Created cache directory: ${cacheDir}`);
+  }
 
   fs.writeFileSync(cachePath, assContent, 'utf8');
   console.log(`💾 [ASS CACHE] Saved ASS file to cache: ${cacheKey}`);
@@ -737,7 +747,7 @@ export const getTemplateVideos = async (req: Request, res: Response) => {
     }
 
     const videoFiles = fs.readdirSync(TEMPLATE_DIR)
-      .filter(file => file.endsWith('.mp4') || file.endsWith('.mov') || file.endsWith('.avi') || file.endsWith('.mkv'))
+      .filter(file => file.endsWith('.mp4') || file.endsWith('.mov') || file.endsWith('.avi') || file.endsWith('.mkv') || file.endsWith('.webm'))
       .map(filename => {
         const filePath = path.join(TEMPLATE_DIR, filename);
         const stats = fs.statSync(filePath);
@@ -832,6 +842,10 @@ export const analyzeAssForImages = async (req: Request, res: Response) => {
 
     console.log('🎨 [CONTROLLER] Starting ASS analysis for session:', sessionId);
     console.log('🎨 [CONTROLLER] Force fresh ASS generation:', forceFreshAss);
+
+    // Clean up old session files before starting new image plan generation
+    console.log('🧹 [CONTROLLER] Cleaning up old session files before image plan generation...');
+    cleanupOldUserImageFiles();
 
     let finalAssFilePath = assFilePath;
 
@@ -1633,8 +1647,8 @@ export const analyzeUserImages = async (req: Request, res: Response) => {
 
     const allUserImages = JSON.parse(fs.readFileSync(userImagesPath, 'utf8'));
     
-    // ANALYZE ALL user images and return only the best suggestion
-    const userImages = allUserImages; // Analyze all user images to find the best one
+    // ANALYZE ALL user images and return top 3 suggestions
+    const userImages = allUserImages; // Analyze all user images to find the best ones
     
     console.log('📊 [CONTROLLER] Total user images in file:', allUserImages.length);
     console.log('📊 [CONTROLLER] Analyzing all user images to find the best one:', userImages.length);

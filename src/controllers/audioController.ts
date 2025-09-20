@@ -38,10 +38,110 @@ const REFERENCE_AUDIO_PATHS = {
 // Chatterbox TTS API configuration
 const CHATTERBOX_TTS_API = 'http://localhost:8000';
 const AUDIO_OUTPUT_DIR = path.join(process.cwd(), 'generated_audio');
+const TEMP_DIR = path.join(process.cwd(), 'temp');
 
 // Ensure audio output directory exists
 if (!fs.existsSync(AUDIO_OUTPUT_DIR)) {
   fs.mkdirSync(AUDIO_OUTPUT_DIR, { recursive: true });
+}
+
+// Clean up old user image files from previous sessions
+export function cleanupOldUserImageFiles(): void {
+  try {
+    if (!fs.existsSync(TEMP_DIR)) {
+      console.log(`🧹 [CLEANUP] Temp directory doesn't exist, skipping cleanup`);
+      return;
+    }
+
+    const files = fs.readdirSync(TEMP_DIR);
+    
+    let cleanedCount = 0;
+    for (const file of files) {
+      const filePath = path.join(TEMP_DIR, file);
+      
+      // Clean up user images files
+      if (file.endsWith('_user_images.json')) {
+        fs.unlinkSync(filePath);
+        cleanedCount++;
+        console.log(`🧹 [CLEANUP] Removed old user images file: ${file}`);
+      }
+      
+      // Clean up image plan files
+      if (file.endsWith('_image_plan.json')) {
+        fs.unlinkSync(filePath);
+        cleanedCount++;
+        console.log(`🧹 [CLEANUP] Removed old image plan file: ${file}`);
+      }
+      
+      // Clean up image analysis files
+      if (file.endsWith('_image_analysis.json')) {
+        fs.unlinkSync(filePath);
+        cleanedCount++;
+        console.log(`🧹 [CLEANUP] Removed old image analysis file: ${file}`);
+      }
+      
+      // Clean up subtitle files (older than 1 hour)
+      if (file.endsWith('_subtitles.ass')) {
+        try {
+          const stats = fs.statSync(filePath);
+          const fileAge = Date.now() - stats.mtime.getTime();
+          const oneHour = 60 * 60 * 1000; // 1 hour in milliseconds
+          
+          if (fileAge > oneHour) {
+            fs.unlinkSync(filePath);
+            cleanedCount++;
+            console.log(`🧹 [CLEANUP] Removed old subtitles file: ${file}`);
+          }
+        } catch (error) {
+          console.warn(`⚠️ [CLEANUP] Error checking age of ${file}:`, error);
+        }
+      }
+    }
+    
+    // Clean up ass_cache directory contents
+    const assCacheDir = path.join(TEMP_DIR, 'ass_cache');
+    if (fs.existsSync(assCacheDir)) {
+      try {
+        const cacheFiles = fs.readdirSync(assCacheDir);
+        for (const cacheFile of cacheFiles) {
+          const cacheFilePath = path.join(assCacheDir, cacheFile);
+          fs.unlinkSync(cacheFilePath);
+          cleanedCount++;
+          console.log(`🧹 [CLEANUP] Removed old ASS cache file: ${cacheFile}`);
+        }
+      } catch (error) {
+        console.warn(`⚠️ [CLEANUP] Error cleaning ASS cache directory:`, error);
+      }
+    }
+    
+    // Clean up generated_images directory contents
+    const generatedImagesDir = path.join(process.cwd(), 'generated_images');
+    if (fs.existsSync(generatedImagesDir)) {
+      try {
+        const sessionDirs = fs.readdirSync(generatedImagesDir);
+        for (const sessionDir of sessionDirs) {
+          const sessionDirPath = path.join(generatedImagesDir, sessionDir);
+          
+          // Only delete directories (session folders), not files
+          if (fs.statSync(sessionDirPath).isDirectory()) {
+            fs.rmSync(sessionDirPath, { recursive: true, force: true });
+            cleanedCount++;
+            console.log(`🧹 [CLEANUP] Removed old generated images session: ${sessionDir}`);
+          }
+        }
+      } catch (error) {
+        console.warn(`⚠️ [CLEANUP] Error cleaning generated images directory:`, error);
+      }
+    }
+    
+    if (cleanedCount > 0) {
+      console.log(`🧹 [CLEANUP] Cleaned up ${cleanedCount} old temp files and directories`);
+    } else {
+      console.log(`🧹 [CLEANUP] No old temp files to clean`);
+    }
+  } catch (error) {
+    console.warn(`⚠️ [CLEANUP] Error cleaning up old temp files:`, error);
+  }
 }
 
 // Helper function to test Chatterbox TTS API connection
@@ -453,6 +553,9 @@ export const generateAudioFromScript = async (req: Request, res: Response) => {
 
     const sessionId = session.id;
     console.log(`📝 Created database session: ${sessionId}`);
+
+    // Clean up old user image files from previous sessions
+    cleanupOldUserImageFiles();
 
     // Initialize session directory
     let audioFiles: string[] = [];

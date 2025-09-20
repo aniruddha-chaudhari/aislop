@@ -20,7 +20,7 @@ const conversationperterstewieschema = z.object({
 
 const researchontopicwithlinks = async (topic: string) => {
   try {
-    const enhancedPrompt = `${stewiepetertechprompt('Stewie', 'Peter')}Generate detailed information about the given topic "${topic}".`;
+    const enhancedPrompt = `${stewiepetertechprompt}Generate detailed information about the given topic "${topic}".`;
     const result = await generateText({
       model: google('gemini-2.5-flash'),
       prompt: enhancedPrompt,
@@ -50,14 +50,7 @@ export const generateConversation = async (topic: string) => {
   try {
     const researchInfo = await researchontopicwithlinks(topic);
 
-    // Randomly decide who is the knowledgeable one
-    const random = Math.random(); // Generates a number between 0 and 1
-    const knowledgeableCharacter = random < 0.5 ? 'Peter' : 'Stewie';
-    const lessknowledgeableCharacter = knowledgeableCharacter === 'Peter' ? 'Stewie' : 'Peter';
-
-    console.log(`Knowledgeable character: ${knowledgeableCharacter}, Less knowledgeable: ${lessknowledgeableCharacter}`);
-
-    const prompt = `${stewiepetertechprompt(knowledgeableCharacter, lessknowledgeableCharacter)}
+    const prompt = `${stewiepetertechprompt}
 
 Use the following research information to inform the dialogue: ${researchInfo}
 
