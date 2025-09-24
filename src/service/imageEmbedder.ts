@@ -100,6 +100,8 @@ export interface ImageRequirement {
   id: string;
   timestamp: number;
   dialogueText: string;
+  dialogueAtTimestamp?: string; // Exact dialogue text being spoken at this timestamp
+  fullDialogue?: string;
   character: string;
   imageType: 'architecture' | 'process' | 'comparison' | 'diagram' | 'workflow' | 'infrastructure' | 'lifecycle';
   title: string;
@@ -155,6 +157,8 @@ export interface ImageRequirement {
   id: string;
   timestamp: number;
   dialogueText: string;
+  dialogueAtTimestamp?: string; // Exact dialogue text being spoken at this timestamp
+  fullDialogue?: string;
   character: string;
   imageType: 'architecture' | 'process' | 'comparison' | 'diagram' | 'workflow' | 'infrastructure' | 'lifecycle';
   title: string;
@@ -423,46 +427,212 @@ export class AssFileProcessor {
 // CONTAMINATION-FREE IMAGE ANALYSIS PROMPT
 export class ImageEmbeddingAnalyzer {
   private static readonly IMAGE_ANALYSIS_PROMPT = `
-You are an expert technical content strategist specializing in creating educational visual overlays for technology learning videos.
+# Visual Image Recommendation System for Instagram Reels - Technical Education Focus
 
-Analyze the following technical dialogue sequence and create STRATEGIC visual overlays that enhance technical understanding and learning retention.
+You are an expert visual content strategist specializing in recommending EDUCATIONAL IMAGES for Instagram Reels and YouTube Shorts about technology topics.
 
-DIALOGUE SEQUENCE:
-{{DIALOGUE_SEQUENCE}}
+## PRIMARY OBJECTIVE
+Analyze technical dialogue and recommend SMART, ENGAGING IMAGES that enhance viewer retention and technical understanding for SHORT-FORM vertical video content.
 
-CONTENT CONTEXT: This dialogue covers {{TOPIC}}. Focus on creating images that explain the key technical concepts being discussed in THIS SPECIFIC TOPIC.
+## CRITICAL DIALOGUE CONTEXT REQUIREMENT
+For each image recommendation, you MUST extract COMPLETE DIALOGUE CONTEXT, not fragments. Users will see this dialogue in the frontend as the context for when images appear. Provide the full conversation exchange that makes sense as a standalone piece of dialogue - like what someone would actually say in a complete sentence or thought.
 
-INSTRUCTIONS - TECHNICAL FOCUS:
-1. Prioritize images that explain KEY TECHNICAL CONCEPTS mentioned in the dialogue, not character interactions
-2. Focus on architectural diagrams, process flows, and technical workflows relevant to {{TOPIC}}
-3. Include images for system architectures, data flows, and technical processes discussed in the dialogue
-4. Create concise, technically accurate descriptions suitable for AI image generation
-5. Emphasize visual clarity and technical accuracy over entertainment
+## DIALOGUE ANALYSIS
+**DIALOGUE SEQUENCE:** {{DIALOGUE_SEQUENCE}}
+**CONTENT CONTEXT:** This dialogue covers {{TOPIC}}
 
-TECHNICAL IMAGE TYPES TO PRIORITIZE BASED ON DIALOGUE CONTENT:
-- System Architecture Diagrams (when dialogue discusses component interactions)
-- Process Flow Visualizations (when dialogue explains step-by-step workflows)
-- Technical Lifecycle Illustrations (when dialogue covers creation, deployment, or scaling processes)
-- Infrastructure Comparisons (when dialogue compares different approaches or technologies)
-- Network and Data Flow Diagrams (when dialogue discusses data movement or connectivity)
-- Configuration and Setup Visualizations (when dialogue covers setup or configuration steps)
-- Performance and Efficiency Comparisons (when dialogue discusses performance metrics or trade-offs)
+**IMPORTANT:** For each image recommendation, you must extract and CLEAN the dialogue text being spoken at the specified timestamp. The dialogue sequence may contain ASS subtitle formatting artifacts (like \N for line breaks). You must:
 
-AVOID:
-- Character-specific jokes or personality depictions unrelated to technical concepts
-- Forced analogies that do not help technical understanding
-- Images that do not directly relate to the technical concepts being discussed in the dialogue
-- Generic technical images that do not match the specific topic being covered
+1. **Find the complete dialogue segment** - Look for the full conversation context around the timestamp, not just isolated words
+2. **Include surrounding context** - Provide enough dialogue to understand what the characters are discussing
+3. **Clean up formatting artifacts** - Remove \N, weird line breaks, etc. and make it readable
+4. **Provide meaningful context** - Include the full thought or conversation segment, not just fragments
 
-ANALYSIS REQUIREMENTS:
-For each image you recommend, provide:
-- EXACT timestamp where it should appear based on when the concept is discussed
-- Type of image that matches the dialogue content (architecture, process, comparison, diagram, workflow)
-- TECHNICAL title focused on the specific concept being discussed (max 6 words)
-- DETAILED technical description for AI image generation based on dialogue context
-- Priority level (high/medium/low) - prioritize technical clarity and learning value
+**EXAMPLE:**
+- Raw ASS: "[18.6s] Peter: superpowers. TypeScript\Nadds"
+- **BAD (fragment only):** "superpowers. TypeScript adds"
+- **GOOD (full context):** "Actually, it is JavaScript but with superpowers. TypeScript adds type checking to your code, so instead of finding bugs when users click buttons, you catch them while writing code"
 
-GOAL: Create a technically accurate visual experience that helps viewers understand the specific technical concepts discussed in the dialogue about {{TOPIC}}.
+This cleaned dialogue will be displayed to users in the frontend, so it must be properly formatted and readable.
+
+**CRITICAL:** Always provide the COMPLETE dialogue context, not isolated fragments. Look for the full thought or conversation segment that gives users meaningful context about what the characters are discussing at that moment in the video.
+
+## THE SMART TECHNICAL VISUAL PHILOSOPHY:
+Create images that are **educationally effective** - they should be:
+- **Instantly comprehensible** (2-3 seconds to grasp the concept)
+- **Technically meaningful** (actually explain how something works)
+- **Visually clean** (not cluttered or overwhelming)
+- **Mobile-optimized** (readable on small screens)
+- **Conceptually rich** (convey real technical knowledge)
+
+## TECHNICAL DEPTH GUIDELINES:
+
+### ✅ INCLUDE (Smart Technical Visuals):
+- **Simple system diagrams** showing 3-5 key components with clear labels
+- **Clean process flows** with 3-4 logical steps and arrows
+- **Before/after comparisons** showing clear technical improvements
+- **Essential code patterns** (max 2-3 lines, large fonts, key concepts only)
+- **Architecture overviews** with main building blocks clearly labeled
+- **Data flow diagrams** showing simple input → process → output
+- **Comparison charts** highlighting key differences between technologies
+- **Visual metaphors** that accurately represent technical concepts
+
+### ❌ AVOID (Too Simple or Too Complex):
+**Too Simple:**
+- Generic logos or icons without educational value
+- Empty marketing graphics with no technical content
+- Abstract shapes that don't explain concepts
+- Decorative images that add no learning value
+
+**Too Complex:**
+- Dense code blocks with more than 3-4 lines
+- Detailed configuration files or settings screens
+- Complex network diagrams with 10+ components
+- Small text that can't be read on mobile
+- Multi-step processes with more than 5 steps
+
+## SMART IMAGE TYPES FOR TECHNICAL EDUCATION:
+
+#### 1. CONCEPT DIAGRAMS (35% priority)
+- Clean system architecture with 3-5 main components
+- Simple process flows showing key stages
+- Input/Output diagrams with clear data paths
+- Component interaction diagrams
+
+#### 2. SMART CODE VISUALS (25% priority)
+- **Key syntax patterns** (2-3 lines max, large font)
+- **Before/after code comparisons** showing improvements
+- **Function signatures** with parameter types clearly shown
+- **Error examples** vs correct implementations
+- Focus on CONCEPTS not complete implementations
+
+#### 3. COMPARISON GRAPHICS (20% priority)
+- Side-by-side technology comparisons
+- Performance metrics with clear visual representation
+- Feature matrices showing advantages/disadvantages
+- Timeline showing evolution or adoption
+
+#### 4. PROCESS VISUALIZATIONS (20% priority)
+- Build/deployment pipelines (3-4 key steps)
+- Development workflows (design → code → test → deploy)
+- Data processing chains
+- User interaction flows
+
+## SMART CODE VISUAL EXAMPLES:
+
+**GOOD Code Visuals:**
+- "function add(a: number, b: number): number" - Shows TypeScript typing concept
+- "// JavaScript: runtime error ❌" vs "// TypeScript: compile-time error ✅"
+- Key import statement showing framework usage
+- Single line showing syntax difference between languages
+
+**BAD Code Visuals:**
+- Complete function implementations with 10+ lines
+- Configuration files with multiple nested objects
+- Raw API responses or detailed JSON structures
+- Complex algorithms or business logic
+
+## IMAGE RECOMMENDATION FORMAT
+
+For each recommended image:
+
+**TIMESTAMP:** Exact second when image should appear
+**DIALOGUE AT TIMESTAMP:** CRITICALLY IMPORTANT - Extract the COMPLETE DIALOGUE SEGMENT from the sequence above. The dialogue sequence now provides all dialogue within a 30-second window around each timestamp. You must provide the FULL CONVERSATION CONTEXT, not just fragments. Look for the complete thought or conversation exchange that makes sense as a standalone piece of dialogue that users can understand.
+**IMAGE TYPE:** Category (concept_diagram, smart_code, comparison, process, architecture)
+**TITLE:** Clear, educational title (max 4 words)
+**IMAGE DESCRIPTION:** Focus on educational value:
+- What technical concept does this explain?
+- How does it enhance understanding?
+- Specific visual elements that teach the concept
+- Clean design suitable for mobile viewing
+**PRIORITY:** High/Medium/Low based on learning impact
+**CONTEXTUAL DURATION:** 4-12 seconds based on concept complexity
+**RETENTION VALUE:** Why this image helps viewers learn and stay engaged
+
+## EXAMPLE DESCRIPTIONS:
+
+**EXCELLENT Examples:**
+- "Simple diagram: 'TypeScript Code' → 'Compiler' → 'JavaScript Code' with type checking highlighted at compiler stage"
+- "Split screen: Left shows 'let x = 5; x.toUpperCase()' with runtime error icon, Right shows 'let x: string = \"hello\"; x.toUpperCase()' with success checkmark"
+- "Clean architecture: Frontend (React icon) ↔ API Gateway ↔ Backend Services (3 boxes), with data flow arrows"
+- "Before/After: Messy JavaScript function vs same function with TypeScript types, highlighting improved readability"
+
+## DIALOGUE CLEANING EXAMPLES:
+
+**Raw ASS Format (from dialogue sequence):**
+"[18.6s] Peter: superpowers. TypeScript\Nadds"
+
+**BAD (fragment only):**
+"superpowers. TypeScript adds"
+
+**GOOD (full context):**
+"Actually, it is JavaScript but with superpowers. TypeScript adds type checking to your code, so instead of finding bugs when users click buttons, you catch them while writing code"
+
+**Raw ASS Format with line breaks:**
+"[37.4s] Stewie: what precisely\Ndistinguishes | Peter: TypeScript spots mistakes"
+
+**DIALOGUE CONTEXT EXTRACTION EXAMPLES:**
+
+**Raw Dialogue Sequence:**
+[0.0s] System: Introduction to TypeScript Introduction and Benefits for JavaScrip - 22/9/2025
+[9.7s] Stewie: what precisely distinguishes | [18.6s] Peter: superpowers. TypeScript adds | [28.4s] Stewie: additional syntactic requirements | [37.4s] Peter: TypeScript spots mistakes
+
+**BAD (fragment only):**
+"superpowers. TypeScript adds"
+
+**GOOD (complete context):**
+"Ever wonder why your JavaScript code breaks in production but works perfectly on your machine? Let me tell you about TypeScript and why it saves me hours of debugging every week."
+
+**Another Example:**
+**BAD:** "what precisely distinguishes"
+**GOOD:** "TypeScript? I have heard this term bandied about, but what precisely distinguishes it from ordinary JavaScript? Are we discussing some arcane Microsoft invention?"
+
+**AVOID Examples:**
+- "Glowing TypeScript logo with sparkles"
+- "Complete class definition with constructor, methods, and inheritance"
+- "Detailed tsconfig.json file with all configuration options"
+- "Complex microservices diagram with 15 interconnected services"
+
+## LEARNING-FOCUSED PRIORITIES:
+
+**High Priority Images (Concept Mastery):**
+- Core concepts that are essential to understanding the topic
+- Common misconceptions or errors that need visual clarification
+- Key differences between related technologies
+- Fundamental workflows or processes
+
+**Medium Priority Images (Depth & Context):**
+- Supporting examples that reinforce main concepts
+- Practical applications of theoretical concepts
+- Performance or efficiency comparisons
+- Real-world usage patterns
+
+**Low Priority Images (Enhancement):**
+- Additional context or background information
+- Nice-to-know features or advanced concepts
+- Historical context or evolution
+
+## GOAL
+Recommend educationally valuable, technically accurate images that help viewers understand key concepts while maintaining engagement for Instagram Reels format. Balance technical depth with visual clarity.
+
+## OUTPUT FORMAT:
+Return a JSON object with this structure:
+{
+  "imageRequirements": [
+    {
+      "timestamp": 0.0,
+      "dialogueAtTimestamp": "COMPLETE dialogue segment that provides full context (extract the entire conversation exchange, not just fragments - look for complete thoughts and conversations that make sense standalone, remove ASS formatting artifacts like \\N)",
+      "dialogueText": "exact dialogue text at this timestamp", 
+      "character": "Character name",
+      "imageType": "concept_diagram|smart_code|comparison|process|architecture",
+      "title": "Educational title (max 4 words)",
+      "description": "Clear educational description focusing on what technical concept this teaches and how it enhances understanding",
+      "priority": "high|medium|low",
+      "contextualDuration": 6,
+      "relevanceReasoning": "Why this image enhances technical learning at this moment"
+    }
+  ]
+}
 `;
 
   // 🎯 8. AI ANALYSIS FOR IMAGE REQUIREMENTS WITH GOOGLE SEARCH AND USER IMAGES
@@ -503,8 +673,47 @@ Provide specific diagram concepts that would work well in educational video cont
       console.log('✅ [SEARCH] Technical research completed');
 
       // 🎯 10. PREPARE ENHANCED DIALOGUE SEQUENCE FOR AI
-      const dialogueSequence = entries
-        .map(entry => `[${entry.startTime.toFixed(1)}s] ${entry.character || 'Narrator'}: ${entry.text}`)
+      // Clean up ASS formatting artifacts from dialogue text
+      const cleanDialogueEntries = entries.map(entry => {
+        const cleanedText = entry.text
+          .replace(/\\N/g, ' ') // Replace \N with space
+          .replace(/\\n/g, ' ') // Replace \n with space
+          .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+          .trim(); // Remove leading/trailing whitespace
+
+        return {
+          ...entry,
+          text: cleanedText
+        };
+      });
+
+      // Create comprehensive dialogue sequence with full context
+      const dialogueSequence = cleanDialogueEntries
+        .map((entry, index) => {
+          // Get broader context - include more surrounding dialogue entries
+          const contextEntries = [];
+          const contextWindow = 30; // Look at 30 seconds before and after
+
+          // Find all entries within the context window
+          for (let i = 0; i < cleanDialogueEntries.length; i++) {
+            const otherEntry = cleanDialogueEntries[i];
+            const timeDiff = Math.abs(entry.startTime - otherEntry.startTime);
+
+            if (timeDiff <= contextWindow) {
+              contextEntries.push(otherEntry);
+            }
+          }
+
+          // Sort context entries by time
+          contextEntries.sort((a, b) => a.startTime - b.startTime);
+
+          // Create a more comprehensive context line
+          const contextLines = contextEntries.map(e =>
+            `[${e.startTime.toFixed(1)}s] ${e.character}: ${e.text}`
+          );
+
+          return contextLines.join(' | ');
+        })
         .join('\n');
 
       const enhancedPrompt = this.IMAGE_ANALYSIS_PROMPT
@@ -521,7 +730,9 @@ Provide specific diagram concepts that would work well in educational video cont
           timestamp: z.number(),
           dialogueText: z.string(),
           character: z.string(),
-          imageType: z.enum(['architecture', 'process', 'comparison', 'diagram', 'workflow', 'infrastructure', 'lifecycle']),
+          // Accept both legacy and improved image type categories
+          imageType: z.enum(['architecture', 'process', 'comparison', 'diagram', 'workflow', 'infrastructure', 'lifecycle', 'concept_diagram', 'smart_code', 'process', 'architecture']),
+          dialogueAtTimestamp: z.string().optional(),
           title: z.string(),
           description: z.string(),
           priority: z.enum(['high', 'medium', 'low']),
@@ -544,19 +755,67 @@ Provide specific diagram concepts that would work well in educational video cont
       });
 
       // 🎯 12. CREATE IMAGE REQUIREMENTS WITH UNIQUE IDS AND AI-DETERMINED DURATIONS
-      const imageRequirements: ImageRequirement[] = (result.object as any).imageRequirements?.map((req: any, index: number) => ({
-        id: `img_${sessionId}_${index}`,
-        timestamp: req.timestamp || 0,
-        dialogueText: req.dialogueText || '',
-        character: req.character || '',
-        imageType: req.imageType || 'diagram',
-        title: req.title || '',
-        description: req.description || '',
-        priority: req.priority || 'medium',
-        uploaded: false,
-        contextualDuration: req.contextualDuration || 6, // AI-determined duration
-        relevanceReasoning: req.relevanceReasoning || 'Standard educational timing'
-      })) || [];
+      const imageRequirements: ImageRequirement[] = (result.object as any).imageRequirements?.map((req: any, index: number) => {
+        // Find the specific dialogue entry for this timestamp (closest within 1s)
+        const targetEntry = entries.find(entry => Math.abs(entry.startTime - req.timestamp) < 1.0);
+
+        // Always derive dialogue from ASS, never trust AI-provided text
+        let cleanedTargetText = '';
+        let derivedCharacter = '';
+
+        if (targetEntry) {
+          cleanedTargetText = (targetEntry.text || '')
+            .replace(/\\N/g, ' ')
+            .replace(/\\n/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+          derivedCharacter = targetEntry.character || '';
+        }
+
+        // Build full context from previous and current entries (ASS-derived only)
+        let fullDialogue = cleanedTargetText;
+        let dialogueAtTimestamp = cleanedTargetText;
+        if (targetEntry) {
+          const targetIndex = entries.indexOf(targetEntry);
+          const contextStart = Math.max(0, targetIndex - 1); // Include previous dialogue for context
+          const contextEntries = entries.slice(contextStart, targetIndex + 1);
+
+          const cleanedContextEntries = contextEntries.map(entry => {
+            const cleanedText = (entry.text || '')
+              .replace(/\\N/g, ' ')
+              .replace(/\\n/g, ' ')
+              .replace(/\s+/g, ' ')
+              .trim();
+            return { ...entry, text: cleanedText };
+          });
+
+          // Compose readable context without duplication
+          const contextParts = cleanedContextEntries.map(entry => `${entry.character}: ${entry.text}`);
+          // Remove exact adjacent duplicates
+          const dedupedParts: string[] = [];
+          for (const part of contextParts) {
+            if (dedupedParts[dedupedParts.length - 1] !== part) dedupedParts.push(part);
+          }
+          fullDialogue = dedupedParts.join(' | ');
+          dialogueAtTimestamp = `${derivedCharacter}: ${cleanedTargetText}`.trim();
+        }
+
+        return {
+          id: `img_${sessionId}_${index}`,
+          timestamp: req.timestamp || 0,
+          dialogueText: cleanedTargetText, // strictly from ASS
+          dialogueAtTimestamp,            // strictly from ASS
+          fullDialogue,
+          character: derivedCharacter,
+          imageType: req.imageType || 'diagram',
+          title: req.title || '',
+          description: req.description || '',
+          priority: req.priority || 'medium',
+          uploaded: false,
+          contextualDuration: req.contextualDuration || 6, // AI-determined duration
+          relevanceReasoning: req.relevanceReasoning || 'Standard educational timing'
+        };
+      }) || [];
 
       // 🎯 13. PROCESS USER IMAGE DECISIONS WITH DETAILED FEEDBACK
       let userProvidedUsed = 0;
@@ -663,7 +922,26 @@ Provide specific diagram concepts that would work well in educational video cont
           console.log(`✅ [AI] Applied fallback placement for ${userProvidedUsed} user images`);
         }
         
-        // 🎯 14. MATCH EXISTING IMAGES TO REQUIREMENTS
+      // DEDUPLICATE REQUIREMENTS BY TIMESTAMP + CONTEXT to avoid repeated items
+      const normalizeText = (t: string | undefined) => (t || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9:\s|]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      const seenReqKeys = new Set<string>();
+      const dedupedImageRequirements = imageRequirements.filter(req => {
+        const roundedTs = Math.round((req.timestamp || 0) * 10) / 10; // 0.1s resolution
+        const key = `${roundedTs}|${normalizeText(req.dialogueAtTimestamp || req.dialogueText)}|${(req.character || '').toLowerCase()}`;
+        if (seenReqKeys.has(key)) return false;
+        seenReqKeys.add(key);
+        return true;
+      });
+
+      // Replace with deduped list before matching existing images
+      let workingImageRequirements: ImageRequirement[] = dedupedImageRequirements;
+
+      // 🎯 14. MATCH EXISTING IMAGES TO REQUIREMENTS
 
         // Save updated user images with AI-determined timestamps back to file
         if (userProvidedImages?.length) {
@@ -690,7 +968,7 @@ Provide specific diagram concepts that would work well in educational video cont
         console.log(`📁 [AI] Found ${existingImages.length} existing images in session directory`);
 
         // Match existing images to requirements
-        imageRequirements.forEach(req => {
+        workingImageRequirements.forEach(req => {
           const matchingImage = existingImages.find(img => 
             img.title.toLowerCase().includes(req.title.toLowerCase().substring(0, 10)) ||
             req.title.toLowerCase().includes(img.title.toLowerCase().substring(0, 10))
@@ -725,7 +1003,17 @@ Provide specific diagram concepts that would work well in educational video cont
       };
 
       // Add introduction image at the beginning of the array
-      imageRequirements.unshift(introductionImageReq);
+      workingImageRequirements.unshift(introductionImageReq);
+
+      // Final dedup including possible conflicts at t=0 after adding intro
+      const finalSeenKeys = new Set<string>();
+      const finalImageRequirements = workingImageRequirements.filter(req => {
+        const roundedTs = Math.round((req.timestamp || 0) * 10) / 10;
+        const key = `${roundedTs}|${normalizeText(req.dialogueAtTimestamp || req.dialogueText)}|${(req.character || '').toLowerCase()}|${(req.title || '').toLowerCase()}`;
+        if (finalSeenKeys.has(key)) return false;
+        finalSeenKeys.add(key);
+        return true;
+      });
       console.log(`✅ [AI] Added Introduction image suggestion: "${introductionImageReq.title}" at ${introductionImageReq.timestamp}s`);
 
       // 📊 CALCULATE SUMMARY STATISTICS
@@ -736,7 +1024,7 @@ Provide specific diagram concepts that would work well in educational video cont
       const plan: ImageEmbeddingPlan = {
         sessionId,
         totalDuration: assData.metadata.duration,
-        imageRequirements,
+        imageRequirements: finalImageRequirements,
         userProvidedImages,
         userImageDecisions,
         summary: {
@@ -1089,13 +1377,15 @@ export class ImageEmbeddingService {
     sessionId: string,
     backgroundVideoPath: string,
     imagePlan: ImageEmbeddingPlan,
-    device: string = 'cuda'
+    device: string = 'cuda',
+    backgroundVideoSpeed: number = 1.10
   ): Promise<{ success: boolean; videoPath?: string; error?: string }> {
     try {
       console.log('🎨 [SERVICE] ENHANCED VIDEO GENERATION with technical diagram embeddings');
       console.log('🎨 [SERVICE] Session ID:', sessionId);
       console.log('🎨 [SERVICE] Background video:', backgroundVideoPath);
       console.log('🎨 [SERVICE] Device:', device);
+      console.log('🚀 [SERVICE] Background video speed:', backgroundVideoSpeed);
 
       // Debug: Log all image requirements
       console.log('🔍 [SERVICE] Image requirements:');
@@ -1181,7 +1471,7 @@ export class ImageEmbeddingService {
       const { generateVideoWithSubtitles } = await import('./videoGenerator');
 
       // Generate the base video with subtitles
-      const baseVideoResult = await generateVideoWithSubtitles(sessionId, backgroundVideoPath, device);
+      const baseVideoResult = await generateVideoWithSubtitles(sessionId, backgroundVideoPath, device, backgroundVideoSpeed);
 
       if (!baseVideoResult.success) {
         return {
@@ -1500,7 +1790,7 @@ export class ImageEmbeddingService {
           .outputOptions([
             '-map', '0:a', // Copy audio from base video
             '-map', '[final_with_images]', // Video with overlays
-            '-c:v', 'libx264',
+            '-c:v', 'libx264', // H.264 doesn't support alpha, but overlay handles transparency during processing
             '-c:a', 'aac',
             '-b:v', '2000k',
             '-b:a', '128k',

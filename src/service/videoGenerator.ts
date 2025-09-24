@@ -394,7 +394,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 export async function generateVideoWithSubtitles(
   sessionId: string,
   backgroundVideoPath: string,
-  device: string = 'cuda'
+  device: string = 'cuda',
+  backgroundVideoSpeed: number = 1.10 // Default 10% speed increase
 ): Promise<{
   success: boolean;
   message: string;
@@ -413,7 +414,13 @@ export async function generateVideoWithSubtitles(
       throw new Error('Device must be either "cpu" or "cuda"');
     }
 
+    // Validate speed parameter
+    if (backgroundVideoSpeed <= 0 || backgroundVideoSpeed > 2) {
+      throw new Error('Background video speed must be between 0.1 and 2.0');
+    }
+
     console.log('🎬 [GENERATOR] Starting enhanced video generation with burned-in subtitles using device:', device);
+    console.log('🚀 [GENERATOR] Background video speed:', backgroundVideoSpeed);
 
     // Validation
     if (!sessionId) {
@@ -611,8 +618,8 @@ export async function generateVideoWithSubtitles(
         ffmpegCommand = ffmpegCommand.input(imgPath);
       });
 
-      // Build filter chain with proper chaining
-      let filterChain = '[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[bg]';
+      // Build filter chain with proper chaining - Apply speed to background video
+      let filterChain = `[0:v]setpts=PTS/${backgroundVideoSpeed},scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[bg]`;
       
       // Build character overlay enable expressions
       const stewieRanges: string[] = [];
@@ -713,7 +720,7 @@ export async function generateVideoWithSubtitles(
 
     const response = {
       success: true,
-      message: 'Video with burned-in styled subtitles generated successfully',
+      message: `Video with burned-in styled subtitles generated successfully (background video speed: ${backgroundVideoSpeed}x)`,
       videoPath: outputVideoPath,
       videoFile: {
         filename: path.basename(outputVideoPath),
@@ -727,7 +734,8 @@ export async function generateVideoWithSubtitles(
         videoDuration: `${cumulativeTime.toFixed(2)}s`,
         aspectRatio: '9:16',
         processingTime: `${totalDuration.toFixed(2)}s`,
-        subtitleStyle: 'Burned-in with custom fonts and colors'
+        subtitleStyle: 'Burned-in with custom fonts and colors',
+        backgroundVideoSpeed: backgroundVideoSpeed
       }
     };
 

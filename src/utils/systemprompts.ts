@@ -234,6 +234,8 @@ Create a dialogue between Stewie and Peter Griffin that:
 - Challenging: "But consider this scenario: what happens when millions of users simultaneously request database operations?"
 - Historical: "JavaScript evolved from a ten-day prototype in nineteen ninety-five to the foundation of modern web architecture"
 - Philosophical: "This represents a fundamental shift in how humans interact with computational systems"
+- Brief Response: "Precisely."
+- Quick Clarification: "No, that's incorrect."
 
 **PETER VARIATIONS:**
 - Questioning: "Wait, so how does it know which thing to do first when everything happens at once?"
@@ -242,6 +244,8 @@ Create a dialogue between Stewie and Peter Griffin that:
 - Practical: "Okay but what happens when it breaks? Does the whole internet just stop working?"
 - Excited: "Holy crap, so this is why my phone apps load so fast now!"
 - Confused: "I am completely lost here, can you explain that part again but slower?"
+- Brief Agreement: "Got it!"
+- Quick Question: "Why though?"
 
 ### INSTAGRAM REEL CONTENT OPTIMIZATION
 
@@ -308,9 +312,11 @@ Create a dialogue between Stewie and Peter Griffin that:
 
 ### DIALOGUE STRUCTURE SPECIFICATIONS
 
-**CONVERSATION LENGTH:** Generate exactly 10-15 dialogue exchanges (5-7 per character)
+**CONVERSATION LENGTH:** Generate exactly 10-15 dialogue exchanges (5-7 per character) to create engaging videos that NEVER exceed 2:30 minutes (150 seconds) of total audio duration under any circumstances. This is an ABSOLUTE HARD LIMIT that cannot be exceeded.
 
 **CHARACTER ALTERNATION:** Strictly alternate between characters - no consecutive dialogues from the same character
+
+**DIALOGUE LENGTH FLEXIBILITY:** Characters do not need to have the same amount of words in consecutive dialogues. Short sentences, quick responses, and natural dialogue flow are encouraged. One character can have a brief 1-2 word response while the other provides a longer explanation, creating dynamic and engaging conversation patterns.
 
 **CHARACTER COUNT LIMIT:** Each individual dialogue must not exceed 280 characters
 
@@ -330,6 +336,7 @@ Create a dialogue between Stewie and Peter Griffin that:
 - Does each character maintain their distinct voice throughout?
 - Are personality traits consistent with their assigned knowledge role?
 - Do dialogue patterns match their established speech characteristics?
+- Do the characters use natural response lengths, including short sentences and brief responses?
 
 **ENGAGEMENT OPTIMIZATION VERIFICATION:**
 - Does the opening create immediate interest or curiosity?
@@ -349,7 +356,7 @@ When generating content:
 1. Analyze the provided topic for key concepts and educational opportunities
 2. Determine the most effective knowledge progression from basic to advanced
 3. Identify optimal analogies based on the character roles and personalities
-4. Structure the conversation to maximize Instagram Reel engagement potential
+4. Structure the conversation to maximize Instagram Reel engagement potential while ensuring videos NEVER exceed 2:30 minutes (150 seconds) of total audio duration
 5. Apply all formatting restrictions consistently throughout
 6. Verify educational accuracy and character authenticity before finalizing
 

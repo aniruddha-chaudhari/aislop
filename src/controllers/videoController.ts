@@ -196,13 +196,15 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
       generateAssOnly = false,
       imagePlan,
       userImages,
-      approvedUserImagePlacements
+      approvedUserImagePlacements,
+      backgroundVideoSpeed = 1.10 // Default slight speed increase (10% faster)
     } = req.body;
 
     console.log('🎬 [CONTROLLER] Received video generation request for session:', sessionId);
     console.log('🎬 [CONTROLLER] Generate ASS only:', generateAssOnly);
     console.log('🎬 [CONTROLLER] User images provided:', userImages?.length || 0);
     console.log('🎬 [CONTROLLER] Approved user image placements:', approvedUserImagePlacements?.length || 0);
+    console.log('🚀 [CONTROLLER] Background video speed:', backgroundVideoSpeed);
 
     // If we have an image plan, this is the final video generation with images
     if (imagePlan && !generateAssOnly) {
@@ -216,7 +218,8 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
         sessionId,
         backgroundVideoPath,
         imagePlan,
-        device
+        device,
+        backgroundVideoSpeed
       );
 
       if (result.success) {
@@ -389,7 +392,8 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
             sessionId,
             backgroundVideoPath,
             customImagePlan,
-            device
+            device,
+            backgroundVideoSpeed
           );
 
           if (result.success) {
@@ -418,7 +422,8 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
           sessionId,
           backgroundVideoPath,
           imagePlan,
-          device
+          device,
+          backgroundVideoSpeed
         );
 
         if (result.success) {
@@ -601,7 +606,8 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
       sessionId,
       backgroundVideoPath,
       minimalImagePlan,
-      device
+      device,
+      backgroundVideoSpeed
     );
 
     if (result.success) {

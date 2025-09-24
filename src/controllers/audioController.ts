@@ -31,8 +31,8 @@ function generateSessionName(conversation: any): string {
 
 // Hard-coded reference audio paths for Chatterbox TTS
 const REFERENCE_AUDIO_PATHS = {
-  Stewie: 'F:\\Aniruddha\\code\\webdev\\PROJECTS\\aislop\\stew.mp3',
-  Peter: 'F:\\Aniruddha\\code\\webdev\\PROJECTS\\aislop\\peta.mp3'
+  Stewie: 'src/character_audio/family_guy/stew.mp3',
+  Peter: 'src/character_audio/family_guy/peta.mp3'
 };
 
 // Chatterbox TTS API configuration
@@ -43,6 +43,50 @@ const TEMP_DIR = path.join(process.cwd(), 'temp');
 // Ensure audio output directory exists
 if (!fs.existsSync(AUDIO_OUTPUT_DIR)) {
   fs.mkdirSync(AUDIO_OUTPUT_DIR, { recursive: true });
+}
+
+// Helper to compute WAV duration from header; falls back to 0 if parsing fails
+function getWavDurationSeconds(filePath: string): number {
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const header = Buffer.alloc(128);
+    fs.readSync(fd, header, 0, 128, 0);
+    fs.closeSync(fd);
+
+    // Validate RIFF/WAVE
+    if (header.toString('ascii', 0, 4) !== 'RIFF' || header.toString('ascii', 8, 12) !== 'WAVE') {
+      return 0;
+    }
+
+    // Find 'fmt ' chunk to get byte rate; simple linear scan for chunk IDs
+    let offset = 12; // after RIFF/WAVE
+    let byteRate = 0;
+    let dataSize = 0;
+    while (offset + 8 <= header.length) {
+      const chunkId = header.toString('ascii', offset, offset + 4);
+      const chunkSize = header.readUInt32LE(offset + 4);
+      if (chunkId === 'fmt ') {
+        // Byte rate at fmt chunk + 8 + 8 (after chunk header and fmt fields up to byte rate)
+        // Standard PCM fmt chunk size is 16; byteRate is at offset 28 from start of RIFF (or fmt start + 8 + 8)
+        // But we are inside header buffer, we can safely read at offset + 8 + 8
+        const pos = offset + 8 + 8;
+        if (pos + 4 <= header.length) {
+          byteRate = header.readUInt32LE(pos);
+        }
+      } else if (chunkId === 'data') {
+        dataSize = chunkSize;
+      }
+      offset += 8 + chunkSize;
+      if (offset > header.length) break;
+    }
+
+    if (byteRate > 0 && dataSize > 0) {
+      return dataSize / byteRate;
+    }
+    return 0;
+  } catch {
+    return 0;
+  }
 }
 
 // Clean up old user image files from previous sessions
@@ -198,6 +242,8 @@ async function generateAudioWithChatterbox(
     }
 
     console.log(`Generating audio for ${character} with text: "${truncatedText.substring(0, 50)}..."`);
+    console.log(`Reference audio path: ${referenceAudioPath}`);
+    console.log(`Output path: ${outputPath}`);
 
     // Create form data with request parameters and audio file
     const formData = new FormData();
@@ -722,9 +768,15 @@ export const generateAudioFromScript = async (req: Request, res: Response) => {
 };
 
 export const regenerateAudioFile = async (req: Request, res: Response) => {
+  let sessionId: string = '';
+  let filename: string = '';
+
   try {
-    const { sessionId, filename } = req.params;
+    const params = req.params;
+    sessionId = params.sessionId;
+    filename = params.filename;
     const {
+      text,
       exaggeration = 0.6,
       temperature = 1.5,
       seedNum = 0,
@@ -734,7 +786,7 @@ export const regenerateAudioFile = async (req: Request, res: Response) => {
       repetitionPenalty = 1.2
     } = req.body;
 
-    console.log('🔄 Starting audio regeneration for:', { sessionId, filename });
+    console.log('🔄 Starting audio regeneration for:', { sessionId, filename, text, exaggeration, temperature, seedNum, cfgWeight, minP, topP, repetitionPenalty });
 
     // Validate parameters
     if (exaggeration < 0.25 || exaggeration > 2.0) {
@@ -791,6 +843,27 @@ export const regenerateAudioFile = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Dialogue record not found in database' });
     }
 
+    // Update dialogue text if provided
+    let finalText = dialogueRecord.text;
+    console.log('📝 Dialogue record found:', {
+      id: dialogueRecord.id,
+      originalText: dialogueRecord.text,
+      character: dialogueRecord.character,
+      order: dialogueRecord.order
+    });
+
+    if (text !== undefined && text.trim() !== '') {
+      finalText = text.trim();
+      // Update the database record with new text
+      await prisma.dialogue.update({
+        where: { id: dialogueRecord.id },
+        data: { text: finalText }
+      });
+      console.log(`📝 Updated dialogue text from "${dialogueRecord.text}" to "${finalText}"`);
+    } else {
+      console.log(`📝 Using original text: "${finalText}"`);
+    }
+
     const outputPath = path.join(AUDIO_OUTPUT_DIR, actualSessionId, filename);
 
     // Test TTS API connection
@@ -801,7 +874,7 @@ export const regenerateAudioFile = async (req: Request, res: Response) => {
 
     // Regenerate audio
     await generateAudioWithChatterbox(
-      dialogueRecord.text,
+      finalText,
       dialogueRecord.character as CharacterName,
       outputPath,
       {
@@ -846,22 +919,39 @@ export const regenerateAudioFile = async (req: Request, res: Response) => {
       });
     }
 
-    console.log(`✅ Regenerated audio: ${filename}`);
+    console.log(`✅ Audio generation completed for: ${filename}`);
+    console.log(`✅ File saved to: ${outputPath}`);
+    console.log(`✅ File size: ${fileSize} bytes`);
 
     return res.status(200).json({
       success: true,
       message: 'Audio regenerated successfully',
       filename,
       sessionId: actualSessionId,
-      parameters: { exaggeration, temperature, seedNum, cfgWeight, minP, topP, repetitionPenalty }
+      parameters: { exaggeration, temperature, seedNum, cfgWeight, minP, topP, repetitionPenalty },
+      fileSize: fileSize
     });
 
   } catch (error) {
     console.error('💥 Error regenerating audio:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorType = error instanceof Error ? error.constructor.name : 'Unknown';
+    const errorStack = error instanceof Error ? error.stack : undefined;
+
+    console.error('💥 Error type:', errorType);
+    console.error('💥 Error message:', errorMessage);
+    console.error('💥 Error stack:', errorStack);
+
     return res.status(500).json({
       success: false,
       error: 'Failed to regenerate audio',
-      details: error instanceof Error ? error.message : 'Unknown error'
+      details: errorMessage,
+      debug: {
+        sessionId,
+        filename,
+        errorType,
+        errorMessage
+      }
     });
   }
 };
@@ -989,50 +1079,79 @@ export const getAudioFiles = async (req: Request, res: Response) => {
     });
 
     // Transform the data for the frontend
-    const formattedSessions = sessions.map(session => ({
-      sessionId: session.id,
-      name: session.name,
-      createdAt: session.createdAt,
-      parameters: {
-        exaggeration: session.exaggeration,
-        temperature: session.temperature,
-        seedNum: session.seedNum,
-        cfgWeight: session.cfgWeight,
-        minP: session.minP,
-        topP: session.topP,
-        repetitionPenalty: session.repetitionPenalty
-      },
-      stats: {
-        totalDialogues: session.totalDialogues,
-        audioFilesGenerated: session.audioFilesGenerated,
-        allSuccessful: session.allSuccessful
-      },
-      dialogues: session.dialogues.map(dialogue => ({
-        id: dialogue.id,
-        text: dialogue.text,
-        character: dialogue.character,
-        order: dialogue.order,
-        audioFile: dialogue.audioFile ? {
-          id: dialogue.audioFile.id,
-          filename: dialogue.audioFile.filename,
-          filePath: dialogue.audioFile.filePath,
-          fileSize: dialogue.audioFile.fileSize,
-          duration: dialogue.audioFile.duration,
-          success: dialogue.audioFile.success,
-          errorMessage: dialogue.audioFile.errorMessage,
-          generatedAt: dialogue.audioFile.generatedAt
-        } : null
-      })),
-      files: session.audioFiles
-        .filter(audioFile => audioFile.success)
-        .map(audioFile => ({
-          id: audioFile.id,
-          filename: audioFile.filename,
-          path: audioFile.filePath,
-          fileSize: audioFile.fileSize,
-          generatedAt: audioFile.generatedAt
-        }))
-    }));
+    const formattedSessions = sessions.map(session => {
+      // Build a lookup from dialogue id to duration and compute start offsets in dialogue order
+      const durationsByDialogueId: Record<string, number> = {};
+      const sortedDialogues = [...session.dialogues].sort((a, b) => a.order - b.order);
+      for (const d of sortedDialogues) {
+        if (d.audioFile) {
+          let duration = 0;
+          if (typeof d.audioFile.duration === 'number' && isFinite(d.audioFile.duration) && d.audioFile.duration > 0) {
+            duration = d.audioFile.duration;
+          } else if (d.audioFile.filePath && fs.existsSync(d.audioFile.filePath)) {
+            duration = getWavDurationSeconds(d.audioFile.filePath);
+          }
+          durationsByDialogueId[d.id] = Math.max(0, duration);
+        }
+      }
+
+      const startOffsetByDialogueId: Record<string, number> = {};
+      let cumulative = 0;
+      for (const d of sortedDialogues) {
+        startOffsetByDialogueId[d.id] = Math.floor(cumulative);
+        cumulative += durationsByDialogueId[d.id] || 0;
+      }
+
+      // Compute total duration from cumulative
+      const totalDurationSeconds = Math.floor(cumulative);
+
+      return {
+        sessionId: session.id,
+        name: session.name,
+        createdAt: session.createdAt,
+        parameters: {
+          exaggeration: session.exaggeration,
+          temperature: session.temperature,
+          seedNum: session.seedNum,
+          cfgWeight: session.cfgWeight,
+          minP: session.minP,
+          topP: session.topP,
+          repetitionPenalty: session.repetitionPenalty
+        },
+        stats: {
+          totalDialogues: session.totalDialogues,
+          audioFilesGenerated: session.audioFilesGenerated,
+          allSuccessful: session.allSuccessful
+        },
+        dialogues: session.dialogues.map(dialogue => ({
+          id: dialogue.id,
+          text: dialogue.text,
+          character: dialogue.character,
+          order: dialogue.order,
+          startOffsetSeconds: startOffsetByDialogueId[dialogue.id] || 0,
+          audioFile: dialogue.audioFile ? {
+            id: dialogue.audioFile.id,
+            filename: dialogue.audioFile.filename,
+            filePath: dialogue.audioFile.filePath,
+            fileSize: dialogue.audioFile.fileSize,
+            duration: durationsByDialogueId[dialogue.id] || 0,
+            success: dialogue.audioFile.success,
+            errorMessage: dialogue.audioFile.errorMessage,
+            generatedAt: dialogue.audioFile.generatedAt
+          } : null
+        })),
+        files: session.audioFiles
+          .filter(audioFile => audioFile.success)
+          .map(audioFile => ({
+            id: audioFile.id,
+            filename: audioFile.filename,
+            path: audioFile.filePath,
+            fileSize: audioFile.fileSize,
+            generatedAt: audioFile.generatedAt
+          })),
+        totalDurationSeconds
+      };
+    });
 
     return res.status(200).json({
       success: true,
