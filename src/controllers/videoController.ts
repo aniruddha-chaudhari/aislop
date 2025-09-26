@@ -407,11 +407,28 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
           }
         }
 
-        // Generate image plan with user-provided images (original logic)
+        // Generate image plan with user-provided images using clean timestamps for better accuracy
         const topic = session.dialogues.length > 0 ? 'Technical conversation' : 'General topic';
-        const imagePlan = await ImageEmbeddingService.generateImageEmbeddingPlan(
+        
+        // Filter dialogues that have audio files and map them to the expected format
+        const validDialogues = session.dialogues
+          .filter(dialogue => dialogue.audioFile !== null)
+          .map(dialogue => ({
+            character: dialogue.character,
+            text: dialogue.text,
+            audioFile: { filePath: dialogue.audioFile!.filePath }
+          }));
+
+        if (validDialogues.length === 0) {
+          return res.status(400).json({
+            success: false,
+            error: 'No dialogues with audio files found for image analysis'
+          });
+        }
+
+        const imagePlan = await ImageEmbeddingService.generateImageEmbeddingPlanFromCleanTimestamps(
           sessionId,
-          assFilePath,
+          validDialogues,
           topic,
           userImages, // Pass user images to the service
           'ultra'
@@ -867,117 +884,66 @@ export const analyzeAssForImages = async (req: Request, res: Response) => {
       });
     }
 
-    console.log('🎨 [CONTROLLER] Starting ASS analysis for session:', sessionId);
-    console.log('🎨 [CONTROLLER] Force fresh ASS generation:', forceFreshAss);
+    console.log('🎨 [CONTROLLER] Starting clean timestamp-based image analysis for session:', sessionId);
+    console.log('🎨 [CONTROLLER] Using WhisperX clean alignment for better accuracy');
 
     // Clean up old session files before starting new image plan generation
     console.log('🧹 [CONTROLLER] Cleaning up old session files before image plan generation...');
     cleanupOldUserImageFiles();
 
-    let finalAssFilePath = assFilePath;
-
-    // If forceFreshAss is true or no assFilePath provided, generate fresh ASS with WhisperX
-    if (forceFreshAss || !assFilePath) {
-      console.log('🎯 [CONTROLLER] Generating fresh ASS file with WhisperX API for analysis');
-
-      // Get session data
-      const session = await prisma.session.findUnique({
-        where: { id: sessionId },
-        include: {
-          dialogues: {
-            include: { audioFile: true },
-            orderBy: { order: 'asc' }
-          }
+    // Get session data - we always need this for clean timestamp analysis
+    const session = await prisma.session.findUnique({
+      where: { id: sessionId },
+      include: {
+        dialogues: {
+          include: { audioFile: true },
+          orderBy: { order: 'asc' }
         }
+      }
+    });
+
+    if (!session) {
+      return res.status(404).json({ success: false, error: 'Session not found' });
+    }
+
+    console.log(`🎯 [CONTROLLER] Found ${session.dialogues.length} dialogues for clean timestamp analysis`);
+
+    // Filter dialogues that have audio files and map them to the expected format
+    const validDialogues = session.dialogues
+      .filter(dialogue => dialogue.audioFile !== null)
+      .map(dialogue => ({
+        character: dialogue.character,
+        text: dialogue.text,
+        audioFile: { filePath: dialogue.audioFile!.filePath }
+      }));
+
+    if (validDialogues.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'No dialogues with audio files found for analysis'
       });
-
-      if (!session) {
-        return res.status(404).json({ success: false, error: 'Session not found' });
-      }
-
-      // Import the video generator service functions
-      const { getWhisperXAlignment, generateASSSubtitles } = await import('../service/videoGenerator');
-
-      // Generate word-level timestamps using WhisperX for accurate timing
-      const dialogueTimestamps: any[] = [];
-      let cumulativeTime = 0;
-
-      for (let i = 0; i < session.dialogues.length; i++) {
-        const dialogue = session.dialogues[i];
-
-        if (dialogue.audioFile) {
-
-          // Get audio duration first
-          const audioDuration = await new Promise<number>((resolve, reject) => {
-            const ffmpeg = require('fluent-ffmpeg');
-            if (!dialogue.audioFile) {
-              reject(new Error('Audio file not found for dialogue'));
-              return;
-            }
-            ffmpeg.ffprobe(dialogue.audioFile.filePath, (err: any, metadata: any) => {
-              if (err) reject(err);
-              else resolve(metadata.format.duration || 0);
-            });
-          });
-
-          // Get word-level timestamps using WhisperX API
-          const wordTimestamps = await getWhisperXAlignment(dialogue.audioFile.filePath, dialogue.text);
-
-          // Adjust timestamps to cumulative timeline
-          const adjustedWords = wordTimestamps.map(word => ({
-            ...word,
-            start: word.start + cumulativeTime,
-            end: word.end + cumulativeTime
-          }));
-
-          dialogueTimestamps.push({
-            character: dialogue.character,
-            text: dialogue.text,
-            audioPath: dialogue.audioFile.filePath,
-            words: adjustedWords,
-            totalStart: cumulativeTime,
-            totalEnd: cumulativeTime + audioDuration
-          });
-
-          cumulativeTime += audioDuration;
-        }
-      }
-
-      // Generate ASS subtitle file with accurate WhisperX timing
-      const freshAssPath = path.join(TEMP_DIR, `${sessionId}_fresh_whisperx_subtitles.ass`);
-      generateASSSubtitles(dialogueTimestamps, freshAssPath);
-
-      finalAssFilePath = freshAssPath;
-      console.log('✅ [CONTROLLER] Fresh ASS file generated with WhisperX API for analysis');
     }
 
-    // Generate image embedding plan
-    const imagePlan = await ImageEmbeddingService.generateImageEmbeddingPlan(
+    console.log(`🎯 [CONTROLLER] Processing ${validDialogues.length} dialogues with audio files`);
+
+    // Use the new clean timestamp method for better image analysis accuracy
+    const imagePlan = await ImageEmbeddingService.generateImageEmbeddingPlanFromCleanTimestamps(
       sessionId,
-      finalAssFilePath,
-      topic
+      validDialogues,
+      topic,
+      undefined, // No user images in this endpoint
+      'ultra'
     );
-
-    // Clean up temporary ASS file if we generated it
-    if (forceFreshAss || !assFilePath) {
-      try {
-        if (fs.existsSync(finalAssFilePath) && finalAssFilePath.includes('_fresh_whisperx_subtitles.ass')) {
-          fs.unlinkSync(finalAssFilePath);
-        }
-      } catch (cleanupError) {
-        console.warn('⚠️ [CONTROLLER] Could not clean up temporary ASS file:', cleanupError);
-      }
-    }
 
     // Format response for user
     const formattedPlan = ImageEmbeddingService.formatPlanForUser(imagePlan);
 
     return res.status(200).json({
       success: true,
-      message: 'Image embedding plan generated successfully with fresh WhisperX ASS',
+      message: 'Image embedding plan generated successfully using WhisperX clean timestamps for better accuracy',
       imagePlan,
       formattedPlan,
-      assGeneratedWithWhisperX: forceFreshAss || !assFilePath,
+      usingCleanTimestamps: true,
       nextSteps: [
         'Upload the required images using the image titles as filenames',
         'Use high-quality images (minimum 1024x1024px recommended)',
@@ -986,11 +952,10 @@ export const analyzeAssForImages = async (req: Request, res: Response) => {
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error analyzing ASS file:', error);
+    console.error('❌ [CONTROLLER] Error analyzing clean timestamps for image plan:', error);
     return res.status(500).json({
       success: false,
-      error: 'Failed to analyze ASS file for image embedding',
-      details: error instanceof Error ? error.message : 'Unknown error'
+      error: `Failed to analyze clean timestamps: ${error instanceof Error ? error.message : String(error)}`
     });
   }
 };
@@ -1674,7 +1639,7 @@ export const analyzeUserImages = async (req: Request, res: Response) => {
 
     const allUserImages = JSON.parse(fs.readFileSync(userImagesPath, 'utf8'));
     
-    // ANALYZE ALL user images and return top 3 suggestions
+    // ANALYZE ALL user images and return best suggestions
     const userImages = allUserImages; // Analyze all user images to find the best ones
     
     console.log('📊 [CONTROLLER] Total user images in file:', allUserImages.length);
@@ -1956,6 +1921,182 @@ export const cleanupAssCache = async (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       error: 'Failed to cleanup ASS cache',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+};
+
+// 🆕 NEW: Get ASS content for viewing/copying
+export const getAssContent = async (req: Request, res: Response) => {
+  try {
+    const { sessionId } = req.query;
+
+    if (!sessionId || typeof sessionId !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'Session ID is required'
+      });
+    }
+
+    console.log('📄 [ASS CONTENT] Getting ASS content for session:', sessionId);
+
+    // Get session data to generate ASS content
+    const session = await prisma.session.findUnique({
+      where: { id: sessionId },
+      include: {
+        dialogues: {
+          include: { audioFile: true },
+          orderBy: { order: 'asc' }
+        }
+      }
+    });
+
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: 'Session not found'
+      });
+    }
+
+    // Generate dialogue hash for caching
+    const dialogueHash = generateDialogueHash(session.dialogues);
+
+    // Check if ASS file exists in cache
+    let assContent = '';
+    const cachedAssPath = checkAssCache(sessionId, dialogueHash);
+
+    if (cachedAssPath) {
+      console.log('✅ [ASS CONTENT] Using cached ASS file');
+      assContent = fs.readFileSync(cachedAssPath, 'utf8');
+    } else {
+      console.log('🔄 [ASS CONTENT] Generating fresh ASS content');
+      
+      // Import the video generator service functions
+      const { getWhisperXAlignment, generateASSSubtitles } = await import('../service/videoGenerator');
+
+      // Generate word-level timestamps using WhisperX for accurate timing
+      const dialogueTimestamps: any[] = [];
+      let cumulativeTime = 0;
+
+      for (let i = 0; i < session.dialogues.length; i++) {
+        const dialogue = session.dialogues[i];
+
+        if (dialogue.audioFile) {
+          // Get audio duration first
+          const audioDuration = await new Promise<number>((resolve, reject) => {
+            const ffmpeg = require('fluent-ffmpeg');
+            ffmpeg.ffprobe(dialogue.audioFile!.filePath, (err: any, metadata: any) => {
+              if (err) reject(err);
+              else resolve(metadata.format.duration || 0);
+            });
+          });
+
+          // Get word-level timestamps using WhisperX API
+          const wordTimestamps = await getWhisperXAlignment(dialogue.audioFile.filePath, dialogue.text);
+
+          // Adjust timestamps to cumulative timeline
+          const adjustedWords = wordTimestamps.map(word => ({
+            ...word,
+            start: word.start + cumulativeTime,
+            end: word.end + cumulativeTime
+          }));
+
+          dialogueTimestamps.push({
+            character: dialogue.character,
+            text: dialogue.text,
+            audioPath: dialogue.audioFile.filePath,
+            words: adjustedWords,
+            totalStart: cumulativeTime,
+            totalEnd: cumulativeTime + audioDuration
+          });
+
+          cumulativeTime += audioDuration;
+        }
+      }
+
+      // Generate ASS subtitle file content
+      const tempAssPath = path.join(TEMP_DIR, `${sessionId}_temp_${Date.now()}.ass`);
+      generateASSSubtitles(dialogueTimestamps, tempAssPath);
+      assContent = fs.readFileSync(tempAssPath, 'utf8');
+
+      // Clean up temp file
+      if (fs.existsSync(tempAssPath)) {
+        fs.unlinkSync(tempAssPath);
+      }
+
+      // Cache the content
+      saveAssToCache(sessionId, dialogueHash, assContent);
+    }
+
+    return res.status(200).json({
+      success: true,
+      content: assContent,
+      sessionId
+    });
+
+  } catch (error) {
+    console.error('❌ [ASS CONTENT] Error getting ASS content:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to get ASS content',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+};
+
+// 🆕 NEW: Upload custom suggestions via JSON (copy/paste approach)
+export const uploadCustomSuggestions = async (req: Request, res: Response) => {
+  try {
+    const { sessionId, customData } = req.body;
+
+    if (!sessionId || !customData) {
+      return res.status(400).json({
+        success: false,
+        error: 'Session ID and custom data are required'
+      });
+    }
+
+    console.log('📋 [CUSTOM SUGGESTIONS] Processing custom suggestions for session:', sessionId);
+
+    // Validate the custom data structure
+    if (!customData.suggestions || !Array.isArray(customData.suggestions)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid format: customData must contain a "suggestions" array'
+      });
+    }
+
+    // Log the custom suggestions
+    console.log(`📋 [CUSTOM SUGGESTIONS] Received ${customData.suggestions.length} custom suggestions`);
+
+    // You can add additional validation here for suggestion structure
+    for (const suggestion of customData.suggestions) {
+      if (!suggestion.userImageId || typeof suggestion.suggestedTimestamp !== 'number') {
+        return res.status(400).json({
+          success: false,
+          error: 'Each suggestion must have userImageId and suggestedTimestamp'
+        });
+      }
+    }
+
+    // Store the custom suggestions (you might want to save this to a file or database)
+    const customSuggestionsPath = path.join(TEMP_DIR, `${sessionId}_custom_suggestions.json`);
+    fs.writeFileSync(customSuggestionsPath, JSON.stringify(customData, null, 2), 'utf8');
+
+    console.log('✅ [CUSTOM SUGGESTIONS] Custom suggestions applied successfully');
+
+    return res.status(200).json({
+      success: true,
+      message: 'Custom suggestions applied successfully',
+      customData,
+      suggestionsCount: customData.suggestions.length
+    });
+
+  } catch (error) {
+    console.error('❌ [CUSTOM SUGGESTIONS] Error processing custom suggestions:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to process custom suggestions',
       details: error instanceof Error ? error.message : 'Unknown error'
     });
   }

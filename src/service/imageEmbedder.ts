@@ -687,6 +687,16 @@ Provide specific diagram concepts that would work well in educational video cont
         };
       });
 
+      // Debug: Log some entries to understand the ASS file content
+      console.log(`📊 [DEBUG] ASS file has ${entries.length} entries`);
+      if (entries.length > 0) {
+        console.log(`📊 [DEBUG] First few entries:`);
+        for (let i = 0; i < Math.min(5, entries.length); i++) {
+          const entry = entries[i];
+          console.log(`📊 [DEBUG] Entry ${i}: ${entry.startTime.toFixed(1)}s - ${entry.character || 'Unknown'}: "${entry.text?.substring(0, 50)}..."`);
+        }
+      }
+
       // Create comprehensive dialogue sequence with full context
       const dialogueSequence = cleanDialogueEntries
         .map((entry, index) => {
@@ -728,11 +738,11 @@ Provide specific diagram concepts that would work well in educational video cont
       const schema = z.object({
         imageRequirements: z.array(z.object({
           timestamp: z.number(),
-          dialogueText: z.string(),
-          character: z.string(),
+          dialogueText: z.string().describe("The complete, readable dialogue text being spoken at this timestamp. Must be a full sentence or complete thought, not fragments. Clean up any ASS formatting artifacts like \\N."),
+          character: z.string().describe("The character speaking this dialogue (e.g., 'Peter', 'Stewie')"),
           // Accept both legacy and improved image type categories
           imageType: z.enum(['architecture', 'process', 'comparison', 'diagram', 'workflow', 'infrastructure', 'lifecycle', 'concept_diagram', 'smart_code', 'process', 'architecture']),
-          dialogueAtTimestamp: z.string().optional(),
+          dialogueAtTimestamp: z.string().optional().describe("Optional: The exact dialogue text at this specific timestamp"),
           title: z.string(),
           description: z.string(),
           priority: z.enum(['high', 'medium', 'low']),
@@ -754,10 +764,39 @@ Provide specific diagram concepts that would work well in educational video cont
         prompt: enhancedPrompt
       });
 
+      // Debug: Log the AI response to understand what's being generated
+      console.log(`📊 [DEBUG] AI generated ${result.object.imageRequirements?.length || 0} image requirements`);
+      if (result.object.imageRequirements?.length > 0) {
+        console.log(`📊 [DEBUG] First few AI requirements:`);
+        for (let i = 0; i < Math.min(3, result.object.imageRequirements.length); i++) {
+          const req = result.object.imageRequirements[i];
+          console.log(`📊 [DEBUG] AI Req ${i}: "${req.title}" at ${req.timestamp}s`);
+          console.log(`📊 [DEBUG] - dialogueText: "${req.dialogueText}"`);
+          console.log(`📊 [DEBUG] - character: "${req.character}"`);
+        }
+      }
+
       // 🎯 12. CREATE IMAGE REQUIREMENTS WITH UNIQUE IDS AND AI-DETERMINED DURATIONS
       const imageRequirements: ImageRequirement[] = (result.object as any).imageRequirements?.map((req: any, index: number) => {
-        // Find the specific dialogue entry for this timestamp (closest within 1s)
-        const targetEntry = entries.find(entry => Math.abs(entry.startTime - req.timestamp) < 1.0);
+        // Find the specific dialogue entry for this timestamp (closest within 5s tolerance)
+        let targetEntry: AssSubtitleEntry | undefined = entries.find(entry => Math.abs(entry.startTime - req.timestamp) < 1.0);
+        
+        // If no exact match within 1s, find the closest entry within 5s
+        if (!targetEntry) {
+          const sortedEntries = entries.sort((a, b) => Math.abs(a.startTime - req.timestamp) - Math.abs(b.startTime - req.timestamp));
+          targetEntry = sortedEntries[0] && Math.abs(sortedEntries[0].startTime - req.timestamp) < 5.0 ? sortedEntries[0] : undefined;
+        }
+        
+        // If still no match, find the entry that contains this timestamp
+        if (!targetEntry) {
+          targetEntry = entries.find(entry => entry.startTime <= req.timestamp && entry.endTime >= req.timestamp);
+        }
+        
+        // If still no match, use the closest entry by time
+        if (!targetEntry && entries.length > 0) {
+          const sortedEntries = entries.sort((a, b) => Math.abs(a.startTime - req.timestamp) - Math.abs(b.startTime - req.timestamp));
+          targetEntry = sortedEntries[0];
+        }
 
         // Always derive dialogue from ASS, never trust AI-provided text
         let cleanedTargetText = '';
@@ -770,6 +809,10 @@ Provide specific diagram concepts that would work well in educational video cont
             .replace(/\s+/g, ' ')
             .trim();
           derivedCharacter = targetEntry.character || '';
+        } else {
+          // Fallback: use AI-provided dialogue text if no ASS entry found
+          cleanedTargetText = req.dialogueText || '';
+          derivedCharacter = req.character || 'Unknown';
         }
 
         // Build full context from previous and current entries (ASS-derived only)
@@ -798,7 +841,23 @@ Provide specific diagram concepts that would work well in educational video cont
           }
           fullDialogue = dedupedParts.join(' | ');
           dialogueAtTimestamp = `${derivedCharacter}: ${cleanedTargetText}`.trim();
+        } else {
+          // If no target entry found, create a basic full context
+          fullDialogue = `${derivedCharacter}: ${cleanedTargetText}`;
+          dialogueAtTimestamp = `${derivedCharacter}: ${cleanedTargetText}`;
         }
+
+        // Ensure fullDialogue is never empty
+        if (!fullDialogue || fullDialogue.trim() === '') {
+          fullDialogue = `${derivedCharacter}: ${cleanedTargetText}`;
+        }
+
+        // Debug: Log the fullDialogue creation
+        console.log(`📊 [DEBUG] Image requirement ${index}: "${req.title}"`);
+        console.log(`📊 [DEBUG] - cleanedTargetText: "${cleanedTargetText}"`);
+        console.log(`📊 [DEBUG] - derivedCharacter: "${derivedCharacter}"`);
+        console.log(`📊 [DEBUG] - fullDialogue: "${fullDialogue}"`);
+        console.log(`📊 [DEBUG] - dialogueAtTimestamp: "${dialogueAtTimestamp}"`);
 
         return {
           id: `img_${sessionId}_${index}`,
@@ -1209,7 +1268,121 @@ export class UserImageManager {
   }
 }
 export class ImageEmbeddingService {
-  // 🚀 MAIN WORKFLOW - ANALYZE AND GENERATE IMAGE PLAN WITH USER-PROVIDED IMAGES
+  // 🚀 NEW METHOD - GENERATE IMAGE PLAN USING CLEAN TIMESTAMPS FOR BETTER ACCURACY
+  static async generateImageEmbeddingPlanFromCleanTimestamps(
+    sessionId: string,
+    dialogues: Array<{ character: string; text: string; audioFile: { filePath: string } }>,
+    topic: string,
+    userProvidedImages?: UserProvidedImage[],
+    density: 'low' | 'medium' | 'high' | 'ultra' = 'ultra'
+  ): Promise<ImageEmbeddingPlan> {
+    try {
+      console.log('🎬 [SERVICE] Starting clean timestamp-based image analysis for session:', sessionId);
+      console.log('🎬 [SERVICE] Using WhisperX clean alignment for accurate sentence-level timing');
+      if (userProvidedImages?.length) {
+        console.log(`🎬 [SERVICE] Evaluating ${userProvidedImages.length} user-provided images`);
+      }
+
+      // Import clean alignment function
+      const { getWhisperXCleanAlignment } = await import('./videoGenerator');
+
+      // Process each dialogue to get clean sentence-level timestamps
+      const cleanTimestamps: Array<{
+        character: string;
+        sentences: Array<{
+          text: string;
+          start: number;
+          end: number;
+        }>;
+      }> = [];
+
+      let totalDuration = 0;
+
+      for (const dialogue of dialogues) {
+        console.log(`🎯 [SERVICE] Processing clean alignment for: "${dialogue.text.substring(0, 50)}..."`);
+
+        const cleanResult = await getWhisperXCleanAlignment(dialogue.audioFile.filePath, dialogue.text);
+
+        if (cleanResult.success && cleanResult.sentences) {
+          // Adjust timestamps to cumulative timeline
+          const adjustedSentences = cleanResult.sentences.map(sentence => ({
+            ...sentence,
+            start: sentence.start + totalDuration,
+            end: sentence.end + totalDuration
+          }));
+
+          cleanTimestamps.push({
+            character: dialogue.character,
+            sentences: adjustedSentences
+          });
+
+          totalDuration += cleanResult.total_duration || 0;
+        } else {
+          console.warn(`⚠️ [SERVICE] Failed to get clean timestamps for dialogue: ${cleanResult.error}`);
+          
+          // Fallback to basic duration estimation
+          const ffmpeg = require('fluent-ffmpeg');
+          const audioDuration = await new Promise<number>((resolve, reject) => {
+            ffmpeg.ffprobe(dialogue.audioFile.filePath, (err: any, metadata: any) => {
+              if (err) reject(err);
+              else resolve(metadata.format.duration || 0);
+            });
+          });
+
+          // Create a single sentence covering the entire dialogue
+          cleanTimestamps.push({
+            character: dialogue.character,
+            sentences: [{
+              text: dialogue.text,
+              start: totalDuration,
+              end: totalDuration + audioDuration
+            }]
+          });
+
+          totalDuration += audioDuration;
+        }
+      }
+
+      console.log(`📊 [SERVICE] Processed clean timestamps: ${cleanTimestamps.length} dialogues, ${totalDuration.toFixed(2)}s total duration`);
+
+      // Convert clean timestamps to ASS-like format for existing analysis pipeline
+      const assLikeData: AssFileData = {
+        entries: cleanTimestamps.flatMap(dialogue =>
+          dialogue.sentences.map(sentence => ({
+            startTime: sentence.start,
+            endTime: sentence.end,
+            text: sentence.text,
+            character: dialogue.character,
+            layer: 0
+          }))
+        ),
+        styles: {},
+        metadata: {
+          duration: totalDuration
+        }
+      };
+
+      // 🤖 ENHANCED AI ANALYSIS WITH GOOGLE SEARCH AND USER IMAGES
+      const imagePlan = await ImageEmbeddingAnalyzer.analyzeDialogueForImages(sessionId, assLikeData, topic, userProvidedImages);
+
+      // 💾 SAVE PLAN TO FILE
+      const planFilePath = await ImageEmbeddingAnalyzer.saveImagePlan(imagePlan);
+
+      console.log('✅ [SERVICE] Clean timestamp-based image plan generated successfully');
+      console.log(`📊 [SERVICE] Plan includes ${imagePlan.summary.totalImages} technical diagrams for maximum educational impact`);
+      if (userProvidedImages?.length) {
+        console.log(`📊 [SERVICE] ${imagePlan.summary.userProvidedUsed} user-provided images incorporated`);
+      }
+
+      return imagePlan;
+
+    } catch (error) {
+      console.error('❌ [SERVICE] Error generating clean timestamp-based image embedding plan:', error);
+      throw new Error(`Failed to generate image embedding plan: ${error}`);
+    }
+  }
+
+  // 🚀 ORIGINAL METHOD - ANALYZE AND GENERATE IMAGE PLAN WITH USER-PROVIDED IMAGES (ASS-based)
   static async generateImageEmbeddingPlan(
     sessionId: string,
     assFilePath: string,
@@ -2169,14 +2342,13 @@ Return your analysis focusing on how well THIS SPECIFIC user-labeled image match
       console.log(`✅ [SUGGESTIONS] Generated ${uniqueSuggestions.length} placement suggestions (removed ${suggestions.length - uniqueSuggestions.length} duplicates)`);
       console.log(`📊 [SUGGESTIONS] Timestamp distribution:`, uniqueSuggestions.map(s => `${s.userImageLabel}@${s.suggestedTimestamp.toFixed(1)}s`).join(', '));
       
-      // Return top 3 suggestions to give user options without overwhelming
-      const topSuggestions = uniqueSuggestions.slice(0, 3);
-      if (topSuggestions.length > 0) {
-        console.log(`🏆 [SUGGESTIONS] Returning top ${topSuggestions.length} suggestions:`);
-        topSuggestions.forEach((s, i) => {
+      // Return all suggestions without artificial limits
+      if (uniqueSuggestions.length > 0) {
+        console.log(`🏆 [SUGGESTIONS] Returning all ${uniqueSuggestions.length} suggestions:`);
+        uniqueSuggestions.forEach((s, i) => {
           console.log(`  ${i + 1}. "${s.userImageLabel}" (score: ${s.relevanceScore})`);
         });
-        return topSuggestions;
+        return uniqueSuggestions;
       }
       
       return uniqueSuggestions;

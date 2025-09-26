@@ -23,7 +23,10 @@ import {
   updateUserProvidedImage,
   getUserImagePlacementSuggestions,
   analyzeUserImages,
-  getImageAnalysis
+  getImageAnalysis,
+  // New copy/paste functionality
+  getAssContent,
+  uploadCustomSuggestions
 } from '../controllers/videoController';
 
 const router: RouterType = Router();
@@ -114,5 +117,12 @@ router.delete('/delete-image/:sessionId/:filename', deleteUploadedImage);
 
 // Cleanup ASS cache (remove expired files)
 router.get('/cleanup-ass-cache', cleanupAssCache);
+
+// 🆕 NEW: Copy/Paste functionality routes
+// Get ASS content for viewing/copying
+router.get('/ass-content', getAssContent);
+
+// Upload custom suggestions via JSON (copy/paste approach)
+router.post('/upload-custom-suggestions', uploadCustomSuggestions);
 
 export default router;
