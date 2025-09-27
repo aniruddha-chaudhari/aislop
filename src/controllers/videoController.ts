@@ -111,6 +111,9 @@ const checkAssCache = (sessionId: string, dialogueHash: string): string | null =
   const cacheKey = getAssCacheKey(sessionId, dialogueHash);
   const cachePath = getAssCachePath(cacheKey);
 
+  console.log(`🔍 [ASS CACHE] Checking for cached file: ${cacheKey}`);
+  console.log(`🔍 [ASS CACHE] Cache path: ${cachePath}`);
+
   if (fs.existsSync(cachePath)) {
     const stats = fs.statSync(cachePath);
     const ageInHours = (Date.now() - stats.birthtime.getTime()) / (1000 * 60 * 60);
@@ -122,6 +125,8 @@ const checkAssCache = (sessionId: string, dialogueHash: string): string | null =
       console.log(`🗑️ [ASS CACHE] Cached ASS file expired: ${cacheKey} (${ageInHours.toFixed(2)}h old)`);
       fs.unlinkSync(cachePath);
     }
+  } else {
+    console.log(`❌ [ASS CACHE] No cached file found: ${cacheKey}`);
   }
 
   return null;
@@ -1960,13 +1965,14 @@ export const getAssContent = async (req: Request, res: Response) => {
 
     // Generate dialogue hash for caching
     const dialogueHash = generateDialogueHash(session.dialogues);
+    console.log('🔍 [ASS CONTENT] Generated dialogue hash:', dialogueHash);
 
     // Check if ASS file exists in cache
     let assContent = '';
     const cachedAssPath = checkAssCache(sessionId, dialogueHash);
 
     if (cachedAssPath) {
-      console.log('✅ [ASS CONTENT] Using cached ASS file');
+      console.log('✅ [ASS CONTENT] Using cached ASS file:', cachedAssPath);
       assContent = fs.readFileSync(cachedAssPath, 'utf8');
     } else {
       console.log('🔄 [ASS CONTENT] Generating fresh ASS content');
@@ -2031,7 +2037,11 @@ export const getAssContent = async (req: Request, res: Response) => {
     return res.status(200).json({
       success: true,
       content: assContent,
-      sessionId
+      sessionId,
+      cached: !!cachedAssPath,
+      dialogueHash,
+      cachePath: cachedAssPath || 'Generated fresh',
+      contentLength: assContent.length
     });
 
   } catch (error) {

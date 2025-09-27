@@ -311,7 +311,7 @@ Every dialogue follows: **Viral Hook → Progressive Education → Memorable Con
 
 ### DIALOGUE STRUCTURE SPECIFICATIONS (Viral Optimized)
 
-**CONVERSATION LENGTH:** Generate exactly 13 exchanges total (usually 6-7 per character, with one character getting the final comedy/CTA line), creating engaging 90-150 second videos.
+**CONVERSATION LENGTH:** Generate exactly 13-15 exchanges total (usually 7-8 per character, with one character getting the final comedy/CTA line), creating engaging 90-125 second videos.
 
 **EXCHANGE LENGTH OPTIMIZATION:**
 - Opening hook exchanges: 15-25 words (quick, punchy, attention-grabbing)
@@ -465,3 +465,14 @@ Every dialogue follows: **Viral Hook → Progressive Education → Memorable Con
 - ✓ Comedy enhances educational value without overshadowing it
 
 
+Format i want answer in is json {  
+  "topic": "example topic",  
+  "conversation": [    
+    { "character": "Stewie", "dialogue": "Example dialogue 1" },    
+    { "character": "Peter", "dialogue": "Example dialogue 2" },    
+    { "character": "Stewie", "dialogue": "Example dialogue 3" },    
+    { "character": "Peter", "dialogue": "Example dialogue 4" }  
+  ] 
+} 
+Check the internet 
+Make peter the one explaining things

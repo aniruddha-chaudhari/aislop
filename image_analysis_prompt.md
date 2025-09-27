@@ -116,3 +116,4 @@ const analysisSchema = z.object({
 - AI processing time varies with dialogue complexity
 - Includes timeout handling for reliability
 - Supports caching of analysis results
+based on ass and system prompt create new better more accurate plan with better timestamps  json do not change json format

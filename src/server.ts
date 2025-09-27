@@ -11,7 +11,7 @@ import imageRoutes from './routes/imageRoutes';
 dotenv.config({ path: '.env.local' });
 
 const app: Express = express();
-const port = process.env.PORT || 5000;
+const port = Number(process.env.PORT) || 5000;
 
 // Request logging middleware
 app.use((req, res, next) => {
@@ -45,7 +45,9 @@ const corsOptions = {
       'http://localhost:3000', 
       'http://127.0.0.1:3000',
       'http://192.168.56.1:5376',
-      'http://192.168.56.1:3000'
+      'http://192.168.56.1:3000',
+      'http://192.168.0.106:5376',  // Your current IP
+      'http://192.168.0.106:3000'   // Your current IP
     ];
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
@@ -110,8 +112,9 @@ app.get('/', (req, res) => {
 });
 
 // Start server
-app.listen(port, () => {
-  console.log(`Server is running on http://localhost:${port}`);
+app.listen(port, '0.0.0.0', () => {
+  console.log(`Server is running on http://0.0.0.0:${port}`);
+  console.log(`Server is also available on http://localhost:${port}`);
   console.log(`Backend API available at http://localhost:${port}/api/assistant`);
   console.log(`CORS enabled for origins: http://localhost:5376, http://127.0.0.1:5376, http://localhost:3000, http://127.0.0.1:3000, http://192.168.56.1:5376, http://192.168.56.1:3000, and all localhost/127.0.0.1/192.168.x.x origins`);
 
