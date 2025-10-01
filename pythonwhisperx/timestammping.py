@@ -236,79 +236,29 @@ class WhisperXAligner:
             
             # Split reference text into sentences
             import re
-            
-            # Clean up the reference text first
-            cleaned_text = reference_text.strip()
-            
-            # Try multiple splitting strategies
-            sentences = []
-            
-            # Strategy 1: Split on sentence-ending punctuation
-            sentences = re.split(r'[.!?]+', cleaned_text)
+            sentences = re.split(r'[.!?]+', reference_text)
             sentences = [s.strip() for s in sentences if s.strip()]
-            
-            # Strategy 2: If no sentences found, try splitting on commas and other punctuation
-            if not sentences or all(len(s) < 10 for s in sentences):
-                sentences = re.split(r'[,;]+', cleaned_text)
-                sentences = [s.strip() for s in sentences if s.strip()]
-            
-            # Strategy 3: If still no good sentences, split on common dialogue patterns
-            if not sentences or all(len(s) < 10 for s in sentences):
-                # Look for patterns like "Peter: ..." or "Stewie: ..."
-                if ':' in cleaned_text:
-                    parts = cleaned_text.split(':')
-                    if len(parts) >= 2:
-                        sentences = [parts[1].strip()]
-                    else:
-                        sentences = [cleaned_text]
-                else:
-                    # Fallback: use the whole text as one sentence
-                    sentences = [cleaned_text]
-            
-            # Filter out very short sentences (less than 5 characters)
-            sentences = [s for s in sentences if len(s) >= 5]
-            
-            # If still no sentences, use the whole text
-            if not sentences:
-                sentences = [cleaned_text]
-            
-            logger.info(f"Split text into {len(sentences)} sentences: {sentences}")
-            print(f"Split text into {len(sentences)} sentences: {sentences}")
             
             # Create segments for each sentence
             segments = []
+            current_time = 0
             audio_duration = len(audio) / 16000
             
-            if len(sentences) == 1:
-                # Single sentence - use the full audio duration
-                segments.append({
-                    "start": 0,
-                    "end": audio_duration,
-                    "text": sentences[0]
-                })
-            else:
-                # Multiple sentences - distribute time evenly
-                time_per_sentence = audio_duration / len(sentences)
-                current_time = 0
+            for i, sentence in enumerate(sentences):
+                # Estimate sentence duration (rough approximation)
+                word_count = len(sentence.split())
+                estimated_duration = max(2.0, word_count * 0.4)  # ~0.4s per word
                 
-                for i, sentence in enumerate(sentences):
-                    start_time = current_time
-                    end_time = min(current_time + time_per_sentence, audio_duration)
-                    
-                    # For the last sentence, use the remaining time
-                    if i == len(sentences) - 1:
-                        end_time = audio_duration
-                    
-                    segments.append({
-                        "start": start_time,
-                        "end": end_time,
-                        "text": sentence
-                    })
-                    
-                    current_time = end_time
-            
-            logger.info(f"Created {len(segments)} segments for alignment")
-            print(f"Created {len(segments)} segments for alignment")
+                start_time = current_time
+                end_time = min(current_time + estimated_duration, audio_duration)
+                
+                segments.append({
+                    "start": start_time,
+                    "end": end_time,
+                    "text": sentence
+                })
+                
+                current_time = end_time
             
             # Perform forced alignment for each sentence
             logger.info("Performing sentence-level alignment...")
