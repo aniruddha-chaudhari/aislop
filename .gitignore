@@ -78,3 +78,11 @@ temp_alignment
 generated_audio
 generated_videos
 generated_images
+
+# Prompts and documentation files (not for version control)
+100topics.md
+150topics.md
+captions.md
+image_analysis_prompt.md
+index.html
+stewie_peter_tech_prompt.md
