@@ -7,7 +7,6 @@ import audioRoutes from './routes/audioRoutes';
 import videoRoutes from './routes/videoRoutes';
 import imageRoutes from './routes/imageRoutes';
 
-// Load environment variables
 dotenv.config({ path: '.env.local' });
 
 const app: Express = express();
@@ -19,26 +18,21 @@ app.use((req, res, next) => {
   next();
 });
 
-// Middleware
 app.use(express.json());
 
-// Enhanced CORS configuration
+// Configure CORS
 const corsOptions = {
   origin: function (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
-    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
     
-    // Allow localhost and 127.0.0.1 origins for development
     if (origin.match(/^http:\/\/localhost:\d+$/) || origin.match(/^http:\/\/127\.0\.0\.1:\d+$/)) {
       return callback(null, true);
     }
     
-    // Allow 192.168.x.x origins for local network development
     if (origin.match(/^http:\/\/192\.168\.\d+\.\d+:\d+$/)) {
       return callback(null, true);
     }
     
-    // Allow specific origins
     const allowedOrigins = [
       'http://localhost:5376', 
       'http://127.0.0.1:5376', 
@@ -46,8 +40,8 @@ const corsOptions = {
       'http://127.0.0.1:3000',
       'http://192.168.56.1:5376',
       'http://192.168.56.1:3000',
-      'http://192.168.0.106:5376',  // Your current IP
-      'http://192.168.0.106:3000'   // Your current IP
+      'http://192.168.0.104:5376',
+      'http://192.168.0.104:3000'
     ];
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
@@ -58,22 +52,19 @@ const corsOptions = {
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
-  optionsSuccessStatus: 200 // some legacy browsers (IE11, various SmartTVs) choke on 204
+  optionsSuccessStatus: 200
 };
 
 app.use(cors(corsOptions));
 
-// Static files
 app.use('/generated_images', express.static(path.join(process.cwd(), 'generated_images')));
 
-// Additional CORS middleware for preflight requests and browser compatibility
+// Additional CORS headers
 app.use((req, res, next) => {
-  // Let the cors middleware handle the origin
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
   res.header('Access-Control-Allow-Credentials', 'true');
   
-  // Additional headers for browser compatibility
   res.header('X-Content-Type-Options', 'nosniff');
   res.header('X-Frame-Options', 'DENY');
   res.header('X-XSS-Protection', '1; mode=block');
@@ -86,13 +77,12 @@ app.use((req, res, next) => {
   }
 });
 
-// Routes
 app.use('/api/assistant', assistantRoutes);
 app.use('/api/audio', audioRoutes);
 app.use('/api/video', videoRoutes);
 app.use('/api/image', imageRoutes);
 
-// Test endpoint for debugging connectivity
+// Test endpoint
 app.get('/api/test', (req, res) => {
   console.log('Test endpoint hit!');
   res.json({
@@ -102,7 +92,7 @@ app.get('/api/test', (req, res) => {
   });
 });
 
-// Basic route
+// Root endpoint
 app.get('/', (req, res) => {
   res.json({
     message: 'Hello World!',
@@ -118,13 +108,11 @@ app.listen(port, '0.0.0.0', () => {
   console.log(`Backend API available at http://localhost:${port}/api/assistant`);
   console.log(`CORS enabled for origins: http://localhost:5376, http://127.0.0.1:5376, http://localhost:3000, http://127.0.0.1:3000, http://192.168.56.1:5376, http://192.168.56.1:3000, and all localhost/127.0.0.1/192.168.x.x origins`);
 
-  // Schedule ASS cache cleanup every 6 hours
-  const cleanupInterval = 6 * 60 * 60 * 1000; // 6 hours in milliseconds
+  const cleanupInterval = 6 * 60 * 60 * 1000;
   setInterval(async () => {
     try {
       console.log('🧹 [SCHEDULED] Running ASS cache cleanup...');
 
-      // Import the cleanup function dynamically
       const fs = require('fs');
       const path = require('path');
 
@@ -154,7 +142,7 @@ app.listen(port, '0.0.0.0', () => {
         console.log(`🗑️ [SCHEDULED] Cleaned up ${deletedCount} expired ASS files`);
       }
     } catch (error) {
-      console.error('❌ [SCHEDULED] Error during ASS cache cleanup:', error);
+      console.error(' [SCHEDULED] Error during ASS cache cleanup:', error);
     }
   }, cleanupInterval);
 

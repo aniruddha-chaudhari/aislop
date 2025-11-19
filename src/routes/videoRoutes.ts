@@ -69,7 +69,7 @@ router.delete('/delete/:filename', deleteVideo);
 // Clean up old video files (24h+)
 router.delete('/cleanup', cleanupVideoFiles);
 
-// 🎯 IMAGE EMBEDDING ROUTES
+//  IMAGE EMBEDDING ROUTES
 
 // Upload ASS file for analysis
 router.post('/upload-ass', upload.single('assFile'), uploadAssFile);
@@ -86,7 +86,7 @@ router.get('/image-plan/:sessionId', getImagePlanStatus);
 // Upload image for specific requirement
 router.post('/upload-image', imageUpload.single('image'), uploadImageForRequirement);
 
-// 🎯 USER-PROVIDED IMAGE ROUTES
+//  USER-PROVIDED IMAGE ROUTES
 
 // Upload user-provided image with metadata
 router.post('/upload-user-image', imageUpload.single('image'), uploadUserProvidedImage);
@@ -100,10 +100,10 @@ router.put('/user-images/:sessionId/:imageId', updateUserProvidedImage);
 // Get user image placement suggestions
 router.post('/user-image-suggestions/:sessionId', getUserImagePlacementSuggestions);
 
-// 🎯 NEW: Analyze user images for relevance and suggest placements
+//  NEW: Analyze user images for relevance and suggest placements
 router.post('/analyze-user-images', analyzeUserImages);
 
-// 🎯 NEW: Get image analysis results
+//  NEW: Get image analysis results
 router.get('/image-analysis/:sessionId', getImageAnalysis);
 
 // Delete user-provided image

@@ -1,30 +1,23 @@
 import { Request, Response } from 'express';
-// import { assistant } from '../service/assistant'; // This file doesn't exist
 import { ttsService } from '../service/tts';
 import { CharacterName } from '../config/tts-config';
 import fs from 'fs';
 import path from 'path';
 
+// Generate script from prompt
 export const generateScript = async (req: Request, res: Response) => {
   try {
     const { prompt } = req.body;
 
-    // Validate prompt
     if (!prompt || typeof prompt !== 'string' || prompt.trim() === '') {
       return res.status(400).json({
         error: 'Prompt is required and must be a non-empty string'
       });
     }
 
-    // Call the assistant function to generate only the script
-    // const result = await assistant(prompt);
-    // const conversation = result.object;
-    
-    // Use the function from assistants.ts
     const { generateConversation: generateConv } = await import('../service/assistants');
     const conversation = await generateConv(prompt);
 
-    // Return only the generated conversation script
     return res.status(200).json({
       success: true,
       data: conversation
@@ -39,18 +32,17 @@ export const generateScript = async (req: Request, res: Response) => {
   }
 };
 
+// Generate audio from conversation script
 export const generateAudioFromScript = async (req: Request, res: Response) => {
   try {
     const { conversation, sessionId } = req.body;
 
-    // Validate conversation
     if (!conversation || !Array.isArray(conversation) || conversation.length === 0) {
       return res.status(400).json({
         error: 'Conversation array is required and must not be empty'
       });
     }
 
-    // Validate conversation structure
     for (const item of conversation) {
       if (!item.character || !item.dialogue || !['Stewie', 'Peter'].includes(item.character)) {
         return res.status(400).json({
@@ -60,7 +52,7 @@ export const generateAudioFromScript = async (req: Request, res: Response) => {
     }
 
     let audioFiles: string[] = [];
-    
+
     try {
       console.log('Starting audio generation for approved script...');
       audioFiles = await ttsService.generateConversationAudio(conversation, sessionId);
@@ -74,7 +66,6 @@ export const generateAudioFromScript = async (req: Request, res: Response) => {
       });
     }
 
-    // Return the audio generation result
     return res.status(200).json({
       success: true,
       message: 'Audio generated successfully',
@@ -93,28 +84,22 @@ export const generateAudioFromScript = async (req: Request, res: Response) => {
   }
 };
 
+// Generate conversation and optionally audio
 export const generateConversation = async (req: Request, res: Response) => {
   try {
     const { prompt, generateAudio } = req.body;
 
-    // Validate prompt
     if (!prompt || typeof prompt !== 'string' || prompt.trim() === '') {
       return res.status(400).json({
         error: 'Prompt is required and must be a non-empty string'
       });
     }
 
-    // Call the assistant function
-    // const result = await assistant(prompt);
-    // const conversation = result.object;
-    
-    // Use the function from assistants.ts
     const { generateConversation: generateConv } = await import('../service/assistants');
     const conversation = await generateConv(prompt);
 
     let audioFiles: string[] = [];
-    
-    // Generate audio if requested
+
     if (generateAudio === true) {
       try {
         console.log('Starting audio generation...');
@@ -122,7 +107,6 @@ export const generateConversation = async (req: Request, res: Response) => {
         console.log(`Audio generation completed. Generated ${audioFiles.length} files.`);
       } catch (audioError) {
         console.error('Error generating audio:', audioError);
-        // Continue without audio if generation fails
         return res.status(200).json({
           success: true,
           data: conversation,
@@ -133,7 +117,6 @@ export const generateConversation = async (req: Request, res: Response) => {
       }
     }
 
-    // Return the generated conversation with audio info
     return res.status(200).json({
       success: true,
       data: conversation,
@@ -153,10 +136,11 @@ export const generateConversation = async (req: Request, res: Response) => {
   }
 };
 
+// Get list of generated audio files
 export const getAudioFiles = async (req: Request, res: Response) => {
   try {
     const audioDir = ttsService.getAudioOutputDirectory();
-    
+
     if (!fs.existsSync(audioDir)) {
       return res.status(200).json({
         success: true,
@@ -174,7 +158,7 @@ export const getAudioFiles = async (req: Request, res: Response) => {
             filename: file,
             path: path.join(sessionPath, file)
           }));
-        
+
         return {
           sessionId: dirent.name,
           files
@@ -195,6 +179,7 @@ export const getAudioFiles = async (req: Request, res: Response) => {
   }
 };
 
+// Download a specific audio file
 export const downloadAudio = async (req: Request, res: Response) => {
   try {
     const { filename } = req.params;
@@ -212,10 +197,9 @@ export const downloadAudio = async (req: Request, res: Response) => {
     if (sessionId) {
       filePath = path.join(audioDir, sessionId as string, filename);
     } else {
-      // Search for the file in all sessions
       const sessions = fs.readdirSync(audioDir, { withFileTypes: true })
         .filter(dirent => dirent.isDirectory());
-      
+
       let found = false;
       for (const session of sessions) {
         const testPath = path.join(audioDir, session.name, filename);
@@ -239,11 +223,9 @@ export const downloadAudio = async (req: Request, res: Response) => {
       });
     }
 
-    // Set headers for audio download
     res.setHeader('Content-Type', 'audio/wav');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
-    // Stream the file
     const fileStream = fs.createReadStream(filePath!);
     fileStream.pipe(res);
 
@@ -256,6 +238,7 @@ export const downloadAudio = async (req: Request, res: Response) => {
   }
 };
 
+// Test TTS generation
 export const testTTS = async (req: Request, res: Response) => {
   try {
     const { character, text } = req.body;
@@ -298,6 +281,7 @@ export const testTTS = async (req: Request, res: Response) => {
   }
 };
 
+// Get available TTS models
 export const getModels = async (req: Request, res: Response) => {
   try {
     console.log('Fetching available models from GPT-SoVITS API...');
@@ -318,6 +302,7 @@ export const getModels = async (req: Request, res: Response) => {
   }
 };
 
+// Set GPT weights
 export const setGPTWeights = async (req: Request, res: Response) => {
   try {
     const { weights_path } = req.query;
@@ -344,6 +329,7 @@ export const setGPTWeights = async (req: Request, res: Response) => {
   }
 };
 
+// Set SoVITS weights
 export const setSoVITSWeights = async (req: Request, res: Response) => {
   try {
     const { weights_path } = req.query;
@@ -370,24 +356,21 @@ export const setSoVITSWeights = async (req: Request, res: Response) => {
   }
 };
 
+// Test assistant generation
 export const testAssistants = async (req: Request, res: Response) => {
   try {
     const { topic } = req.body;
 
-    // Validate topic
     if (!topic || typeof topic !== 'string' || topic.trim() === '') {
       return res.status(400).json({
         error: 'Topic is required and must be a non-empty string'
       });
     }
 
-    // Import the functions dynamically to avoid conflicts
     const { generateConversation } = await import('../service/assistants');
 
-    // Call generateConversation
     const conversationResult = await generateConversation(topic);
 
-    // Return the results
     return res.status(200).json({
       success: true,
       data: {
@@ -406,24 +389,21 @@ export const testAssistants = async (req: Request, res: Response) => {
   }
 };
 
+// Test research functionality
 export const testResearch = async (req: Request, res: Response) => {
   try {
     const { topic } = req.body;
 
-    // Validate topic
     if (!topic || typeof topic !== 'string' || topic.trim() === '') {
       return res.status(400).json({
         error: 'Topic is required and must be a non-empty string'
       });
     }
 
-    // Import the research function
     const { researchontopicwithlinks } = await import('../service/assistants');
 
-    // Call research function
     const researchResult = await researchontopicwithlinks(topic);
 
-    // Return the results
     return res.status(200).json({
       success: true,
       data: {

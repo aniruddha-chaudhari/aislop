@@ -18,9 +18,9 @@ const WHISPERX_API_URL = 'http://127.0.0.1:6000'; // Adjust this URL as needed
 const ffmpegPath = ffmpegInstaller.path;
 if (ffmpegPath) {
   ffmpeg.setFfmpegPath(ffmpegPath);
-  console.log('🎬 [INIT] FFmpeg path set to:', ffmpegPath);
+  console.log(' [INIT] FFmpeg path set to:', ffmpegPath);
 } else {
-  console.log('⚠️ [INIT] FFmpeg path not found, using system default');
+  console.log(' [INIT] FFmpeg path not found, using system default');
 }
 
 // Video generation configuration
@@ -31,7 +31,7 @@ const TEMP_DIR = path.join(process.cwd(), 'temp_alignment');
 [VIDEO_OUTPUT_DIR, TEMP_DIR].forEach(dir => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
-    console.log(`📁 [INIT] Created directory: ${dir}`);
+    console.log(` [INIT] Created directory: ${dir}`);
   }
 });
 
@@ -46,7 +46,7 @@ const PRESCALED_CHARACTER_CACHE_DIR = path.join(process.cwd(), 'src', 'character
 // Ensure prescaled cache directory exists
 if (!fs.existsSync(PRESCALED_CHARACTER_CACHE_DIR)) {
   fs.mkdirSync(PRESCALED_CHARACTER_CACHE_DIR, { recursive: true });
-  console.log(`📁 [INIT] Created prescaled character cache directory: ${PRESCALED_CHARACTER_CACHE_DIR}`);
+  console.log(` [INIT] Created prescaled character cache directory: ${PRESCALED_CHARACTER_CACHE_DIR}`);
 }
 
 // Function to get or create prescaled character images
@@ -71,7 +71,7 @@ async function getOrCreatePrescaledCharacterImage(characterName: string, width: 
   }
 
   // Create prescaled version
-  console.log(`🔄 [PRESCALE] Creating prescaled ${characterName} image: ${width}x${height}`);
+  console.log(` [PRESCALE] Creating prescaled ${characterName} image: ${width}x${height}`);
   
   await new Promise<void>((resolve, reject) => {
     ffmpeg(originalPath)
@@ -81,11 +81,11 @@ async function getOrCreatePrescaledCharacterImage(characterName: string, width: 
       ])
       .output(prescaledPath)
       .on('end', () => {
-        console.log(`✅ [PRESCALE] Created prescaled image: ${prescaledFilename}`);
+        console.log(` [PRESCALE] Created prescaled image: ${prescaledFilename}`);
         resolve();
       })
       .on('error', (err: any) => {
-        console.error(`❌ [PRESCALE] Failed to create prescaled image for ${characterName}:`, err);
+        console.error(` [PRESCALE] Failed to create prescaled image for ${characterName}:`, err);
         reject(err);
       })
       .run();
@@ -137,15 +137,15 @@ export interface DialogueTimestamp {
 
 // WhisperX alignment function using FastAPI
 export async function getWhisperXAlignment(audioPath: string, text: string): Promise<WordTimestamp[]> {
-  console.log('🎯 [ALIGNMENT] Starting WhisperX alignment via API for:', path.basename(audioPath));
+  console.log(' [ALIGNMENT] Starting WhisperX alignment via API for:', path.basename(audioPath));
 
   try {
     // First, check if WhisperX API is available
     try {
       const healthCheck = await axios.get(`${WHISPERX_API_URL}/health`, { timeout: 5000 });
-      console.log('✅ [ALIGNMENT] WhisperX API is healthy:', healthCheck.data.status);
+      console.log(' [ALIGNMENT] WhisperX API is healthy:', healthCheck.data.status);
     } catch (healthError) {
-      console.warn('⚠️ [ALIGNMENT] WhisperX API health check failed, falling back to basic timing');
+      console.warn(' [ALIGNMENT] WhisperX API health check failed, falling back to basic timing');
       return await generateBasicWordTimestamps(audioPath, text);
     }
 
@@ -179,7 +179,7 @@ export async function getWhisperXAlignment(audioPath: string, text: string): Pro
 
     if (response.data.success && response.data.word_timestamps) {
       const wordTimestamps = response.data.word_timestamps;
-      console.log(`✅ [ALIGNMENT] WhisperX API returned ${wordTimestamps.length} word timestamps`);
+      console.log(` [ALIGNMENT] WhisperX API returned ${wordTimestamps.length} word timestamps`);
 
       // Validate and clean the timestamps
       const validTimestamps = wordTimestamps
@@ -191,18 +191,18 @@ export async function getWhisperXAlignment(audioPath: string, text: string): Pro
           confidence: word.confidence || 1.0
         }));
 
-      console.log(`✅ [ALIGNMENT] Processed ${validTimestamps.length} valid word timestamps`);
+      console.log(` [ALIGNMENT] Processed ${validTimestamps.length} valid word timestamps`);
       return validTimestamps;
     } else {
-      console.warn('⚠️ [ALIGNMENT] WhisperX API returned unsuccessful response, falling back to basic timing');
+      console.warn(' [ALIGNMENT] WhisperX API returned unsuccessful response, falling back to basic timing');
       return await generateBasicWordTimestamps(audioPath, text);
     }
 
   } catch (error) {
-    console.error('❌ [ALIGNMENT] WhisperX API error:', error instanceof Error ? error.message : String(error));
+    console.error(' [ALIGNMENT] WhisperX API error:', error instanceof Error ? error.message : String(error));
 
     if (axios.isAxiosError(error)) {
-      console.error('❌ [ALIGNMENT] Axios error details:', {
+      console.error(' [ALIGNMENT] Axios error details:', {
         status: error.response?.status,
         statusText: error.response?.statusText,
         data: error.response?.data
@@ -210,7 +210,7 @@ export async function getWhisperXAlignment(audioPath: string, text: string): Pro
     }
 
     // Fallback to basic timing estimation
-    console.log('⚠️ [ALIGNMENT] Falling back to basic timing estimation');
+    console.log(' [ALIGNMENT] Falling back to basic timing estimation');
     return await generateBasicWordTimestamps(audioPath, text);
   }
 }
@@ -252,7 +252,7 @@ function groupWordsIntoSentences(words: WordTimestamp[], originalText: string): 
     sentences.push(originalText.trim());
   }
 
-  console.log(`📝 [GROUP WORDS] Found ${sentences.length} sentences from text`);
+  console.log(` [GROUP WORDS] Found ${sentences.length} sentences from text`);
   console.log(`🔤 [GROUP WORDS] Available ${words.length} word timestamps`);
 
   // Group words into sentences based on sentence boundaries
@@ -270,7 +270,7 @@ function groupWordsIntoSentences(words: WordTimestamp[], originalText: string): 
       .split(/\s+/)
       .filter(w => w.length > 0);
 
-    console.log(`📝 [GROUP WORDS] Processing sentence ${i + 1}: "${sentenceText}" (${cleanSentenceWords.length} words)`);
+    console.log(` [GROUP WORDS] Processing sentence ${i + 1}: "${sentenceText}" (${cleanSentenceWords.length} words)`);
 
     // Match words from the word timestamps to this sentence
     let wordsMatched = 0;
@@ -316,9 +316,9 @@ function groupWordsIntoSentences(words: WordTimestamp[], originalText: string): 
         end: end
       });
 
-      console.log(`✅ [GROUP WORDS] Sentence ${i + 1}: ${sentenceWords.length} words, ${start.toFixed(2)}s - ${end.toFixed(2)}s`);
+      console.log(` [GROUP WORDS] Sentence ${i + 1}: ${sentenceWords.length} words, ${start.toFixed(2)}s - ${end.toFixed(2)}s`);
     } else {
-      console.warn(`⚠️ [GROUP WORDS] Could not match words for sentence: "${sentenceText}"`);
+      console.warn(` [GROUP WORDS] Could not match words for sentence: "${sentenceText}"`);
     }
   }
 
@@ -343,9 +343,9 @@ export async function getWhisperXCleanAlignment(audioPath: string, text: string)
     // First, check if WhisperX API is available
     try {
       const healthCheck = await axios.get(`${WHISPERX_API_URL}/health`, { timeout: 5000 });
-      console.log('✅ [CLEAN ALIGNMENT] WhisperX API is healthy:', healthCheck.data.status);
+      console.log(' [CLEAN ALIGNMENT] WhisperX API is healthy:', healthCheck.data.status);
     } catch (healthError) {
-      console.warn('⚠️ [CLEAN ALIGNMENT] WhisperX API health check failed');
+      console.warn(' [CLEAN ALIGNMENT] WhisperX API health check failed');
       return {
         success: false,
         error: 'WhisperX API not available'
@@ -381,13 +381,13 @@ export async function getWhisperXCleanAlignment(audioPath: string, text: string)
     });
 
     if (response.data.success) {
-      console.log(`✅ [CLEAN ALIGNMENT] WhisperX API returned clean sentence timestamps`);
+      console.log(` [CLEAN ALIGNMENT] WhisperX API returned clean sentence timestamps`);
       console.log(`📊 [CLEAN ALIGNMENT] Sentences found:`, response.data.sentences?.length || 0);
       console.log(`⏱️ [CLEAN ALIGNMENT] Total duration: ${response.data.total_duration?.toFixed(2) || 'unknown'}s`);
 
       // If no sentences returned, fall back to word timestamps and group them
       if (!response.data.sentences || response.data.sentences.length === 0) {
-        console.log('🔄 [CLEAN ALIGNMENT] No sentences returned, falling back to word timestamps grouping');
+        console.log(' [CLEAN ALIGNMENT] No sentences returned, falling back to word timestamps grouping');
         
         // Get regular word timestamps
         const wordResult = await getWhisperXAlignment(audioPath, text);
@@ -403,7 +403,7 @@ export async function getWhisperXCleanAlignment(audioPath: string, text: string)
             total_duration: response.data.total_duration
           };
         } else {
-          console.warn('⚠️ [CLEAN ALIGNMENT] Could not get word timestamps either');
+          console.warn(' [CLEAN ALIGNMENT] Could not get word timestamps either');
           return {
             success: false,
             error: 'Could not generate any timestamps'
@@ -417,7 +417,7 @@ export async function getWhisperXCleanAlignment(audioPath: string, text: string)
         total_duration: response.data.total_duration
       };
     } else {
-      console.warn('⚠️ [CLEAN ALIGNMENT] WhisperX API returned unsuccessful response');
+      console.warn(' [CLEAN ALIGNMENT] WhisperX API returned unsuccessful response');
       return {
         success: false,
         error: response.data.error || 'Unknown error from WhisperX API'
@@ -425,11 +425,11 @@ export async function getWhisperXCleanAlignment(audioPath: string, text: string)
     }
 
   } catch (error) {
-    console.error('❌ [CLEAN ALIGNMENT] WhisperX API error:', error instanceof Error ? error.message : String(error));
+    console.error(' [CLEAN ALIGNMENT] WhisperX API error:', error instanceof Error ? error.message : String(error));
 
     if (axios.isAxiosError(error)) {
-      console.error('❌ [CLEAN ALIGNMENT] Response status:', error.response?.status);
-      console.error('❌ [CLEAN ALIGNMENT] Response data:', error.response?.data);
+      console.error(' [CLEAN ALIGNMENT] Response status:', error.response?.status);
+      console.error(' [CLEAN ALIGNMENT] Response data:', error.response?.data);
     }
 
     return {
@@ -474,7 +474,7 @@ export async function generateBasicWordTimestamps(audioPath: string, text: strin
 
 // Generate SRT subtitle file with character names and timing
 export function generateSRTSubtitles(dialogueTimestamps: DialogueTimestamp[], outputPath: string): void {
-  console.log('📝 [SRT] Generating SRT subtitle file at:', outputPath);
+  console.log(' [SRT] Generating SRT subtitle file at:', outputPath);
 
   let srtContent = '';
 
@@ -504,12 +504,12 @@ export function generateSRTSubtitles(dialogueTimestamps: DialogueTimestamp[], ou
   });
 
   fs.writeFileSync(outputPath, srtContent, 'utf8');
-  console.log('✅ [SRT] Enhanced SRT subtitle file generated successfully');
+  console.log(' [SRT] Enhanced SRT subtitle file generated successfully');
 }
 
 // Generate ASS subtitle file with mobile-optimized 3-word rolling display
 export function generateASSSubtitles(dialogueTimestamps: DialogueTimestamp[], outputPath: string): void {
-  console.log('📝 [ASS] Generating mobile-optimized ASS subtitle file at:', outputPath);
+  console.log(' [ASS] Generating mobile-optimized ASS subtitle file at:', outputPath);
 
   let assContent = `[Script Info]
 Title: Mobile-Optimized Dialogue with 3-Word Rolling Display
@@ -662,11 +662,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   const outputDir = path.dirname(outputPath);
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
-    console.log(`📁 [ASS] Created directory: ${outputDir}`);
+    console.log(` [ASS] Created directory: ${outputDir}`);
   }
 
   fs.writeFileSync(outputPath, assContent, 'utf8');
-  console.log('✅ [ASS] Mobile-optimized ASS subtitle file generated successfully');
+  console.log(' [ASS] Mobile-optimized ASS subtitle file generated successfully');
 }
 
 // Main video generation function with burned-in subtitles
@@ -698,7 +698,7 @@ export async function generateVideoWithSubtitles(
       throw new Error('Background video speed must be between 0.1 and 2.0');
     }
 
-    console.log('🎬 [GENERATOR] Starting enhanced video generation with burned-in subtitles using device:', device);
+    console.log(' [GENERATOR] Starting enhanced video generation with burned-in subtitles using device:', device);
     console.log('🚀 [GENERATOR] Background video speed:', backgroundVideoSpeed);
 
     // Validation
@@ -731,13 +731,13 @@ export async function generateVideoWithSubtitles(
       throw new Error('No successful audio files found');
     }
 
-    console.log(`📝 [GENERATOR] Processing ${successfulDialogues.length} dialogues with enhanced timing`);
+    console.log(` [GENERATOR] Processing ${successfulDialogues.length} dialogues with enhanced timing`);
 
     // Pre-create scaled character images for better performance
-    console.log('🔄 [PRESCALE] Pre-scaling character images for optimal performance...');
+    console.log(' [PRESCALE] Pre-scaling character images for optimal performance...');
     const prescaledStewieImage = await getOrCreatePrescaledCharacterImage('Stewie', 500, 600);
     const prescaledPeterImage = await getOrCreatePrescaledCharacterImage('Peter', 550, 800);
-    console.log('✅ [PRESCALE] Character images pre-scaled successfully');
+    console.log(' [PRESCALE] Character images pre-scaled successfully');
 
     // Generate word-level timestamps using WhisperX
     const dialogueTimestamps: DialogueTimestamp[] = [];
@@ -807,10 +807,10 @@ export async function generateVideoWithSubtitles(
     
     // Check if ASS file already exists (copied from analysis)
     if (fs.existsSync(assSubtitlePath)) {
-      console.log('🎯 [SUBTITLES] Found existing ASS file, skipping generation');
-      console.log('🎯 [SUBTITLES] Existing ASS path:', assSubtitlePath);
+      console.log(' [SUBTITLES] Found existing ASS file, skipping generation');
+      console.log(' [SUBTITLES] Existing ASS path:', assSubtitlePath);
     } else {
-      console.log('📝 [SUBTITLES] Generating new ASS subtitle file');
+      console.log(' [SUBTITLES] Generating new ASS subtitle file');
       generateASSSubtitles(dialogueTimestamps, assSubtitlePath);
     }
     
@@ -823,7 +823,7 @@ export async function generateVideoWithSubtitles(
     if (!fs.existsSync(assSubtitlePath)) {
       throw new Error(`ASS subtitle file not found at: ${assSubtitlePath}`);
     }
-    console.log('✅ [SUBTITLES] Styled subtitle files verified successfully');
+    console.log(' [SUBTITLES] Styled subtitle files verified successfully');
 
     // Get background video duration to determine if we need to loop or trim
     const backgroundDuration = await new Promise<number>((resolve, reject) => {
@@ -833,15 +833,15 @@ export async function generateVideoWithSubtitles(
       });
     });
 
-    console.log(`🎬 [GENERATOR] Audio duration: ${cumulativeTime.toFixed(2)}s`);
-    console.log(`🎬 [GENERATOR] Background video duration: ${backgroundDuration.toFixed(2)}s`);
+    console.log(` [GENERATOR] Audio duration: ${cumulativeTime.toFixed(2)}s`);
+    console.log(` [GENERATOR] Background video duration: ${backgroundDuration.toFixed(2)}s`);
 
     // Handle background video looping if needed
     let finalVideoInput = backgroundVideoPath;
     let tempLoopedVideo: string | null = null;
 
     if (cumulativeTime > backgroundDuration) {
-      console.log('🔄 [GENERATOR] Audio longer than background - creating looped background video');
+      console.log(' [GENERATOR] Audio longer than background - creating looped background video');
       tempLoopedVideo = path.join(VIDEO_OUTPUT_DIR, `${sessionId}_temp_looped.mp4`);
 
       await new Promise<void>((resolveLoop, rejectLoop) => {
@@ -858,7 +858,7 @@ export async function generateVideoWithSubtitles(
           ])
           .output(tempLoopedVideo!)
           .on('end', () => {
-            console.log('✅ [GENERATOR] Looped background video created');
+            console.log(' [GENERATOR] Looped background video created');
             resolveLoop();
           })
           .on('error', rejectLoop)
@@ -987,13 +987,13 @@ export async function generateVideoWithSubtitles(
           .output(outputVideoPath)
           .on('start', (commandLine: any) => {
             const accelType = useActualHardwareAccel ? 'GPU-accelerated' : 'CPU-optimized';
-            console.log(`🎬 [OPTIMIZED] Starting ${accelType} FFmpeg video generation with optimized filterchain`);
+            console.log(` [OPTIMIZED] Starting ${accelType} FFmpeg video generation with optimized filterchain`);
           })
           .on('stderr', (stderrLine: string) => {
             // Log important information for debugging
             if (stderrLine.includes('error') || stderrLine.includes('Error') || 
                 stderrLine.includes('failed') || stderrLine.includes('fps=')) {
-              console.log('🎬 [FFmpeg]:', stderrLine);
+              console.log(' [FFmpeg]:', stderrLine);
             }
           })
           .on('progress', (progress: any) => {
@@ -1007,12 +1007,12 @@ export async function generateVideoWithSubtitles(
           .on('end', () => {
             clearTimeout(timeout);
             const accelType = useActualHardwareAccel ? 'GPU-accelerated' : 'CPU-optimized';
-            console.log(`✅ [OPTIMIZED] ${accelType} video generation completed successfully`);
+            console.log(` [OPTIMIZED] ${accelType} video generation completed successfully`);
             resolve();
           })
           .on('error', (err: any) => {
             clearTimeout(timeout);
-            console.error('❌ [OPTIMIZED] Video generation failed:', err);
+            console.error(' [OPTIMIZED] Video generation failed:', err);
             reject(err);
           })
           .run();
@@ -1021,7 +1021,7 @@ export async function generateVideoWithSubtitles(
       // Check if GPU encoding failed and we should retry with CPU
       if (useActualHardwareAccel && error instanceof Error && 
           (error.message.includes('h264_nvenc') || error.message.includes('preset') || error.message.includes('hardware'))) {
-        console.warn('⚠️ [GPU] Hardware encoding failed, falling back to CPU encoding...');
+        console.warn(' [GPU] Hardware encoding failed, falling back to CPU encoding...');
         
         // Retry without hardware acceleration
         try {
@@ -1107,12 +1107,12 @@ export async function generateVideoWithSubtitles(
             cpuFfmpegCommand
               .output(outputVideoPath)
               .on('start', (commandLine: any) => {
-                console.log(`🎬 [CPU FALLBACK] Starting CPU-optimized FFmpeg video generation`);
+                console.log(` [CPU FALLBACK] Starting CPU-optimized FFmpeg video generation`);
               })
               .on('stderr', (stderrLine: string) => {
                 if (stderrLine.includes('error') || stderrLine.includes('Error') || 
                     stderrLine.includes('failed') || stderrLine.includes('fps=')) {
-                  console.log('🎬 [CPU FFmpeg]:', stderrLine);
+                  console.log(' [CPU FFmpeg]:', stderrLine);
                 }
               })
               .on('progress', (progress: any) => {
@@ -1125,24 +1125,24 @@ export async function generateVideoWithSubtitles(
               })
               .on('end', () => {
                 clearTimeout(timeout);
-                console.log(`✅ [CPU FALLBACK] CPU-optimized video generation completed successfully`);
+                console.log(` [CPU FALLBACK] CPU-optimized video generation completed successfully`);
                 resolve();
               })
               .on('error', (err: any) => {
                 clearTimeout(timeout);
-                console.error('❌ [CPU FALLBACK] CPU video generation failed:', err);
+                console.error(' [CPU FALLBACK] CPU video generation failed:', err);
                 reject(err);
               })
               .run();
           });
         } catch (fallbackError) {
-          console.error('❌ [CPU FALLBACK] CPU fallback also failed:', fallbackError);
-          console.error('❌ [OPTIMIZED] Original GPU error:', error);
+          console.error(' [CPU FALLBACK] CPU fallback also failed:', fallbackError);
+          console.error(' [OPTIMIZED] Original GPU error:', error);
           const errorMessage = `Video generation failed (tried both GPU and CPU): GPU: ${error instanceof Error ? error.message : String(error)}, CPU: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`;
           throw new Error(errorMessage);
         }
       } else {
-        console.error('❌ [OPTIMIZED] Video generation failed:', error);
+        console.error(' [OPTIMIZED] Video generation failed:', error);
         // Throw error instead of fallback
         const errorMessage = `Video generation with character overlays and subtitles failed: ${error instanceof Error ? error.message : String(error)}`;
         throw new Error(errorMessage);
@@ -1169,7 +1169,7 @@ export async function generateVideoWithSubtitles(
       });
       console.log('🧹 [GENERATOR] Temporary files cleaned up (cached ASS files preserved)');
     } catch (err) {
-      console.warn('⚠️ [GENERATOR] Warning: Could not clean up some temporary files:', err);
+      console.warn(' [GENERATOR] Warning: Could not clean up some temporary files:', err);
     }
 
     // Get file stats and return response

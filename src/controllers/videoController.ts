@@ -19,7 +19,7 @@ const ASS_CACHE_DURATION_HOURS = 24; // Keep ASS files for 24 hours
 // Ensure ASS cache directory exists
 if (!fs.existsSync(ASS_CACHE_DIR)) {
   fs.mkdirSync(ASS_CACHE_DIR, { recursive: true });
-  console.log(`📁 [INIT] Created ASS cache directory: ${ASS_CACHE_DIR}`);
+  console.log(` [INIT] Created ASS cache directory: ${ASS_CACHE_DIR}`);
 }
 
 // Configure multer for file uploads
@@ -111,22 +111,22 @@ const checkAssCache = (sessionId: string, dialogueHash: string): string | null =
   const cacheKey = getAssCacheKey(sessionId, dialogueHash);
   const cachePath = getAssCachePath(cacheKey);
 
-  console.log(`🔍 [ASS CACHE] Checking for cached file: ${cacheKey}`);
-  console.log(`🔍 [ASS CACHE] Cache path: ${cachePath}`);
+  console.log(` [ASS CACHE] Checking for cached file: ${cacheKey}`);
+  console.log(` [ASS CACHE] Cache path: ${cachePath}`);
 
   if (fs.existsSync(cachePath)) {
     const stats = fs.statSync(cachePath);
     const ageInHours = (Date.now() - stats.birthtime.getTime()) / (1000 * 60 * 60);
 
     if (ageInHours <= ASS_CACHE_DURATION_HOURS) {
-      console.log(`✅ [ASS CACHE] Found valid cached ASS file: ${cacheKey} (${ageInHours.toFixed(2)}h old)`);
+      console.log(` [ASS CACHE] Found valid cached ASS file: ${cacheKey} (${ageInHours.toFixed(2)}h old)`);
       return cachePath;
     } else {
       console.log(`🗑️ [ASS CACHE] Cached ASS file expired: ${cacheKey} (${ageInHours.toFixed(2)}h old)`);
       fs.unlinkSync(cachePath);
     }
   } else {
-    console.log(`❌ [ASS CACHE] No cached file found: ${cacheKey}`);
+    console.log(` [ASS CACHE] No cached file found: ${cacheKey}`);
   }
 
   return null;
@@ -140,7 +140,7 @@ const saveAssToCache = (sessionId: string, dialogueHash: string, assContent: str
   const cacheDir = path.dirname(cachePath);
   if (!fs.existsSync(cacheDir)) {
     fs.mkdirSync(cacheDir, { recursive: true });
-    console.log(`📁 [ASS CACHE] Created cache directory: ${cacheDir}`);
+    console.log(` [ASS CACHE] Created cache directory: ${cacheDir}`);
   }
 
   fs.writeFileSync(cachePath, assContent, 'utf8');
@@ -176,17 +176,17 @@ const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'generated_images');
 // Ensure directories exist
 if (!fs.existsSync(VIDEO_OUTPUT_DIR)) {
   fs.mkdirSync(VIDEO_OUTPUT_DIR, { recursive: true });
-  console.log(`📁 [INIT] Created directory: ${VIDEO_OUTPUT_DIR}`);
+  console.log(` [INIT] Created directory: ${VIDEO_OUTPUT_DIR}`);
 }
 
 if (!fs.existsSync(TEMP_DIR)) {
   fs.mkdirSync(TEMP_DIR, { recursive: true });
-  console.log(`📁 [INIT] Created directory: ${TEMP_DIR}`);
+  console.log(` [INIT] Created directory: ${TEMP_DIR}`);
 }
 
 if (!fs.existsSync(IMAGE_UPLOAD_DIR)) {
   fs.mkdirSync(IMAGE_UPLOAD_DIR, { recursive: true });
-  console.log(`📁 [INIT] Created directory: ${IMAGE_UPLOAD_DIR}`);
+  console.log(` [INIT] Created directory: ${IMAGE_UPLOAD_DIR}`);
 }
 
 // Main video generation function with enhanced timing
@@ -213,10 +213,10 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
 
     // If we have an image plan, this is the final video generation with images
     if (imagePlan && !generateAssOnly) {
-      console.log('🎨 [CONTROLLER] FINAL VIDEO GENERATION with embedded images');
-      console.log('🎨 [CONTROLLER] Session ID:', sessionId);
-      console.log('🎨 [CONTROLLER] Image plan has', imagePlan.imageRequirements?.length || 0, 'requirements');
-      console.log('🎨 [CONTROLLER] Background video path:', backgroundVideoPath);
+      console.log(' [CONTROLLER] FINAL VIDEO GENERATION with embedded images');
+      console.log(' [CONTROLLER] Session ID:', sessionId);
+      console.log(' [CONTROLLER] Image plan has', imagePlan.imageRequirements?.length || 0, 'requirements');
+      console.log(' [CONTROLLER] Background video path:', backgroundVideoPath);
 
       // Use the new image embedding service
       const result = await ImageEmbeddingService.generateVideoWithEmbeddedImages(
@@ -236,9 +236,9 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
 
     // Handle user-provided images for video generation
     if (userImages && userImages.length > 0 && !generateAssOnly) {
-      console.log('🎨 [CONTROLLER] VIDEO GENERATION with user-provided images');
-      console.log('🎨 [CONTROLLER] Session ID:', sessionId);
-      console.log('🎨 [CONTROLLER] User images:', userImages.length);
+      console.log(' [CONTROLLER] VIDEO GENERATION with user-provided images');
+      console.log(' [CONTROLLER] Session ID:', sessionId);
+      console.log(' [CONTROLLER] User images:', userImages.length);
 
       try {
         // Get session data to generate ASS content
@@ -264,7 +264,7 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
 
         let assFilePath: string;
         if (cachedAssPath) {
-          console.log('✅ [CONTROLLER] Using cached WhisperX ASS file for image analysis');
+          console.log(' [CONTROLLER] Using cached WhisperX ASS file for image analysis');
           assFilePath = cachedAssPath;
         } else {
           console.log('🎯 [CONTROLLER] Generating accurate WhisperX ASS file for image analysis');
@@ -315,7 +315,7 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
               });
 
               cumulativeTime += audioDuration;
-              console.log(`✅ [CONTROLLER] Processed dialogue ${i + 1}, cumulative time: ${cumulativeTime.toFixed(2)}s`);
+              console.log(` [CONTROLLER] Processed dialogue ${i + 1}, cumulative time: ${cumulativeTime.toFixed(2)}s`);
             }
           }
 
@@ -334,7 +334,7 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
             fs.unlinkSync(tempAssPath);
           }
 
-          console.log('✅ [CONTROLLER] WhisperX ASS file generated and cached for image analysis');
+          console.log(' [CONTROLLER] WhisperX ASS file generated and cached for image analysis');
         }
 
         // Handle approved user image placements
@@ -349,7 +349,7 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
             try {
               const existingPlan = JSON.parse(fs.readFileSync(imagePlanFile, 'utf8'));
               existingAiImages = existingPlan.imageRequirements.filter((req: any) => req.uploaded && req.imagePath);
-              console.log(`✅ [CONTROLLER] Found ${existingAiImages.length} AI-generated images to include`);
+              console.log(` [CONTROLLER] Found ${existingAiImages.length} AI-generated images to include`);
             } catch (error) {
               console.warn('⚠️ [CONTROLLER] Could not load existing image plan:', error);
             }
@@ -465,7 +465,7 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
         }
 
       } catch (error) {
-        console.error('❌ [CONTROLLER] Error in user images video generation:', error);
+        console.error(' [CONTROLLER] Error in user images video generation:', error);
         return res.status(500).json({
           success: false,
           error: 'Failed to generate video with user images',
@@ -503,7 +503,7 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
         const cachedAssPath = checkAssCache(sessionId, dialogueHash);
 
         if (cachedAssPath) {
-          console.log('✅ [CONTROLLER] Using cached WhisperX ASS file for analysis');
+          console.log(' [CONTROLLER] Using cached WhisperX ASS file for analysis');
           return res.status(200).json({
             success: true,
             message: 'ASS file retrieved from cache',
@@ -561,7 +561,7 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
             });
 
             cumulativeTime += audioDuration;
-            console.log(`✅ [CONTROLLER] Processed dialogue ${i + 1}, cumulative time: ${cumulativeTime.toFixed(2)}s`);
+            console.log(` [CONTROLLER] Processed dialogue ${i + 1}, cumulative time: ${cumulativeTime.toFixed(2)}s`);
           }
         }
 
@@ -580,7 +580,7 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
           fs.unlinkSync(tempAssPath);
         }
 
-        console.log('✅ [CONTROLLER] WhisperX ASS file generated and cached for analysis');
+        console.log(' [CONTROLLER] WhisperX ASS file generated and cached for analysis');
 
         return res.status(200).json({
           success: true,
@@ -593,7 +593,7 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
         });
 
       } catch (error) {
-        console.error('❌ [CONTROLLER] Error generating ASS file with WhisperX:', error);
+        console.error(' [CONTROLLER] Error generating ASS file with WhisperX:', error);
         return res.status(500).json({
           success: false,
           error: 'Failed to generate ASS file with WhisperX API',
@@ -889,8 +889,8 @@ export const analyzeAssForImages = async (req: Request, res: Response) => {
       });
     }
 
-    console.log('🎨 [CONTROLLER] Starting clean timestamp-based image analysis for session:', sessionId);
-    console.log('🎨 [CONTROLLER] Using WhisperX clean alignment for better accuracy');
+    console.log(' [CONTROLLER] Starting clean timestamp-based image analysis for session:', sessionId);
+    console.log(' [CONTROLLER] Using WhisperX clean alignment for better accuracy');
 
     // Clean up old session files before starting new image plan generation
     console.log('🧹 [CONTROLLER] Cleaning up old session files before image plan generation...');
@@ -957,7 +957,7 @@ export const analyzeAssForImages = async (req: Request, res: Response) => {
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error analyzing clean timestamps for image plan:', error);
+    console.error(' [CONTROLLER] Error analyzing clean timestamps for image plan:', error);
     return res.status(500).json({
       success: false,
       error: `Failed to analyze clean timestamps: ${error instanceof Error ? error.message : String(error)}`
@@ -999,7 +999,7 @@ export const getImagePlanStatus = async (req: Request, res: Response) => {
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error getting image plan status:', error);
+    console.error(' [CONTROLLER] Error getting image plan status:', error);
     return res.status(500).json({
       success: false,
       error: 'Failed to get image plan status',
@@ -1091,7 +1091,7 @@ export const uploadImageForRequirement = async (req: MulterRequest, res: Respons
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error uploading image:', error);
+    console.error(' [CONTROLLER] Error uploading image:', error);
     return res.status(500).json({
       success: false,
       error: 'Failed to upload image',
@@ -1171,7 +1171,7 @@ export const uploadUserProvidedImage = async (req: MulterRequest, res: Response)
     existingImages.push(userImage);
     fs.writeFileSync(userImagesFile, JSON.stringify(existingImages, null, 2));
 
-    console.log('✅ [CONTROLLER] User-provided image uploaded and saved:', userImage.id);
+    console.log(' [CONTROLLER] User-provided image uploaded and saved:', userImage.id);
 
     return res.status(200).json({
       success: true,
@@ -1181,7 +1181,7 @@ export const uploadUserProvidedImage = async (req: MulterRequest, res: Response)
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error uploading user-provided image:', error);
+    console.error(' [CONTROLLER] Error uploading user-provided image:', error);
     return res.status(500).json({
       success: false,
       error: 'Failed to upload user-provided image',
@@ -1219,7 +1219,7 @@ export const getUserProvidedImages = async (req: Request, res: Response) => {
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error getting user-provided images:', error);
+    console.error(' [CONTROLLER] Error getting user-provided images:', error);
     return res.status(500).json({
       success: false,
       error: 'Failed to get user-provided images',
@@ -1275,7 +1275,7 @@ export const deleteUserProvidedImage = async (req: Request, res: Response) => {
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error deleting user-provided image:', error);
+    console.error(' [CONTROLLER] Error deleting user-provided image:', error);
     return res.status(500).json({
       success: false,
       error: 'Failed to delete user-provided image',
@@ -1326,7 +1326,7 @@ export const getUploadedImages = async (req: Request, res: Response) => {
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error getting uploaded images:', error);
+    console.error(' [CONTROLLER] Error getting uploaded images:', error);
     return res.status(500).json({
       success: false,
       error: 'Failed to get uploaded images',
@@ -1387,7 +1387,7 @@ export const deleteUploadedImage = async (req: Request, res: Response) => {
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error deleting uploaded image:', error);
+    console.error(' [CONTROLLER] Error deleting uploaded image:', error);
     return res.status(500).json({
       success: false,
       error: 'Failed to delete uploaded image',
@@ -1434,7 +1434,7 @@ export const uploadAssFile = async (req: MulterRequest, res: Response) => {
     const cachePath = getAssCachePath(cacheKey);
 
     if (fs.existsSync(cachePath)) {
-      console.log('✅ [ASS UPLOAD] Using existing cached ASS file');
+      console.log(' [ASS UPLOAD] Using existing cached ASS file');
 
       // Clean up the uploaded temp file
       fs.unlinkSync(file.path);
@@ -1467,7 +1467,7 @@ export const uploadAssFile = async (req: MulterRequest, res: Response) => {
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error uploading ASS file:', error);
+    console.error(' [CONTROLLER] Error uploading ASS file:', error);
     return res.status(500).json({
       success: false,
       error: 'Failed to upload ASS file',
@@ -1520,7 +1520,7 @@ export const updateUserProvidedImage = async (req: Request, res: Response) => {
     // Save updated metadata
     fs.writeFileSync(userImagesFile, JSON.stringify(userImages, null, 2));
 
-    console.log(`✅ [CONTROLLER] Updated user image metadata: ${imageId}`);
+    console.log(` [CONTROLLER] Updated user image metadata: ${imageId}`);
 
     return res.status(200).json({
       success: true,
@@ -1529,7 +1529,7 @@ export const updateUserProvidedImage = async (req: Request, res: Response) => {
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error updating user-provided image:', error);
+    console.error(' [CONTROLLER] Error updating user-provided image:', error);
     return res.status(500).json({
       success: false,
       error: 'Failed to update user-provided image',
@@ -1582,7 +1582,7 @@ export const getUserImagePlacementSuggestions = async (req: Request, res: Respon
       userImages
     );
 
-    console.log(`✅ [CONTROLLER] Generated ${suggestions.length} user image placement suggestions`);
+    console.log(` [CONTROLLER] Generated ${suggestions.length} user image placement suggestions`);
 
     return res.status(200).json({
       success: true,
@@ -1590,7 +1590,7 @@ export const getUserImagePlacementSuggestions = async (req: Request, res: Respon
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error getting user image placement suggestions:', error);
+    console.error(' [CONTROLLER] Error getting user image placement suggestions:', error);
     return res.status(500).json({
       success: false,
       error: 'Failed to get user image placement suggestions',
@@ -1611,8 +1611,8 @@ export const analyzeUserImages = async (req: Request, res: Response) => {
       });
     }
 
-    console.log('🔍 [CONTROLLER] Analyzing user images for session:', sessionId);
-    console.log('🔍 [CONTROLLER] Topic:', topic);
+    console.log(' [CONTROLLER] Analyzing user images for session:', sessionId);
+    console.log(' [CONTROLLER] Topic:', topic);
 
     // Get conversation data for this session
     const session = await prisma.session.findUnique({
@@ -1635,7 +1635,7 @@ export const analyzeUserImages = async (req: Request, res: Response) => {
     const userImagesPath = path.join(TEMP_DIR, `${sessionId}_user_images.json`);
     
     if (!fs.existsSync(userImagesPath)) {
-      console.log('❌ [CONTROLLER] User images file not found:', userImagesPath);
+      console.log(' [CONTROLLER] User images file not found:', userImagesPath);
       return res.status(400).json({
         success: false,
         error: 'No user images found for this session'
@@ -1652,7 +1652,7 @@ export const analyzeUserImages = async (req: Request, res: Response) => {
     console.log('📋 [CONTROLLER] Image details:', userImages.map((img: any) => ({ id: img.id, label: img.label, imagePath: img.imagePath })));
 
     if (!userImages || userImages.length === 0) {
-      console.log('❌ [CONTROLLER] No user images to analyze');
+      console.log(' [CONTROLLER] No user images to analyze');
       return res.status(400).json({
         success: false,
         error: 'No user images to analyze'
@@ -1688,7 +1688,7 @@ export const analyzeUserImages = async (req: Request, res: Response) => {
       const cachedAssPath = checkAssCache(sessionId, dialogueHash);
 
       if (cachedAssPath) {
-        console.log('✅ [CONTROLLER] Using cached WhisperX ASS file for analysis');
+        console.log(' [CONTROLLER] Using cached WhisperX ASS file for analysis');
         // Copy cached file to expected location
         fs.copyFileSync(cachedAssPath, tempAssPath);
       } else {
@@ -1750,7 +1750,7 @@ export const analyzeUserImages = async (req: Request, res: Response) => {
         const assContent = fs.readFileSync(tempAssPath, 'utf8');
         saveAssToCache(sessionId, dialogueHash, assContent);
 
-        console.log('✅ [CONTROLLER] WhisperX ASS file generated for analysis');
+        console.log(' [CONTROLLER] WhisperX ASS file generated for analysis');
       }
     }
 
@@ -1776,7 +1776,7 @@ export const analyzeUserImages = async (req: Request, res: Response) => {
       lowRelevance: suggestions.filter(s => s.relevanceScore < 0.6).length
     }, null, 2));
 
-    console.log('✅ [CONTROLLER] Image analysis completed:', suggestions.length, 'suggestions generated');
+    console.log(' [CONTROLLER] Image analysis completed:', suggestions.length, 'suggestions generated');
     console.log('📊 [CONTROLLER] Analysis summary:');
     console.log(`   - High relevance (>0.8): ${suggestions.filter(s => s.relevanceScore > 0.8).length}`);
     console.log(`   - Medium relevance (0.6-0.8): ${suggestions.filter(s => s.relevanceScore >= 0.6 && s.relevanceScore <= 0.8).length}`);
@@ -1816,7 +1816,7 @@ export const analyzeUserImages = async (req: Request, res: Response) => {
       
       // Save updated user images back to file
       fs.writeFileSync(userImagesPath, JSON.stringify(allUserImages, null, 2));
-      console.log(`✅ [CONTROLLER] Updated ${updatedCount} user images with timestamps`);
+      console.log(` [CONTROLLER] Updated ${updatedCount} user images with timestamps`);
     }
 
     return res.status(200).json({
@@ -1922,7 +1922,7 @@ export const cleanupAssCache = async (req: Request, res: Response) => {
     });
 
   } catch (error) {
-    console.error('❌ [ASS CACHE] Error during cleanup:', error);
+    console.error(' [ASS CACHE] Error during cleanup:', error);
     return res.status(500).json({
       success: false,
       error: 'Failed to cleanup ASS cache',
@@ -1965,14 +1965,14 @@ export const getAssContent = async (req: Request, res: Response) => {
 
     // Generate dialogue hash for caching
     const dialogueHash = generateDialogueHash(session.dialogues);
-    console.log('🔍 [ASS CONTENT] Generated dialogue hash:', dialogueHash);
+    console.log(' [ASS CONTENT] Generated dialogue hash:', dialogueHash);
 
     // Check if ASS file exists in cache
     let assContent = '';
     const cachedAssPath = checkAssCache(sessionId, dialogueHash);
 
     if (cachedAssPath) {
-      console.log('✅ [ASS CONTENT] Using cached ASS file:', cachedAssPath);
+      console.log(' [ASS CONTENT] Using cached ASS file:', cachedAssPath);
       assContent = fs.readFileSync(cachedAssPath, 'utf8');
     } else {
       console.log('🔄 [ASS CONTENT] Generating fresh ASS content');
@@ -2045,7 +2045,7 @@ export const getAssContent = async (req: Request, res: Response) => {
     });
 
   } catch (error) {
-    console.error('❌ [ASS CONTENT] Error getting ASS content:', error);
+    console.error(' [ASS CONTENT] Error getting ASS content:', error);
     return res.status(500).json({
       success: false,
       error: 'Failed to get ASS content',
@@ -2093,7 +2093,7 @@ export const uploadCustomSuggestions = async (req: Request, res: Response) => {
     const customSuggestionsPath = path.join(TEMP_DIR, `${sessionId}_custom_suggestions.json`);
     fs.writeFileSync(customSuggestionsPath, JSON.stringify(customData, null, 2), 'utf8');
 
-    console.log('✅ [CUSTOM SUGGESTIONS] Custom suggestions applied successfully');
+    console.log(' [CUSTOM SUGGESTIONS] Custom suggestions applied successfully');
 
     return res.status(200).json({
       success: true,
@@ -2103,7 +2103,7 @@ export const uploadCustomSuggestions = async (req: Request, res: Response) => {
     });
 
   } catch (error) {
-    console.error('❌ [CUSTOM SUGGESTIONS] Error processing custom suggestions:', error);
+    console.error(' [CUSTOM SUGGESTIONS] Error processing custom suggestions:', error);
     return res.status(500).json({
       success: false,
       error: 'Failed to process custom suggestions',

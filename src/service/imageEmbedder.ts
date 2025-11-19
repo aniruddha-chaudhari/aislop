@@ -5,35 +5,32 @@ import * as fs from 'fs';
 import * as path from 'path';
 const ffmpeg = require('fluent-ffmpeg');
 
-// 🎯 USAGE EXAMPLES AND HELPERS
+// Usage examples and helpers
 export class ImageEmbedderExamples {
-  // 📖 EXAMPLE: How to use user-provided images
+  // Example with user images
   static async exampleWithUserImages() {
-    // Create user-provided images
     const userImages: UserProvidedImage[] = [
       UserImageManager.createUserImage(
         './my-images/docker-architecture.png',
         'Docker Container Architecture',
         'Custom diagram showing Docker container layers and isolation',
-        5.0, // Show at 5 seconds
+        5.0,
         'high'
       ),
       UserImageManager.createUserImage(
         './my-images/kubernetes-cluster.png',
         'Kubernetes Pod Structure',
         'My custom Kubernetes pod and service diagram',
-        25.0, // Show at 25 seconds
+        25.0,
         'high'
       )
     ];
 
-    // Validate images
     const { valid, invalid } = UserImageManager.validateUserImages(userImages);
     if (invalid.length > 0) {
-      console.log('❌ Invalid images:', invalid);
+      console.log(' Invalid images:', invalid);
     }
 
-    // Generate image plan with user images
     const plan = await ImageEmbeddingService.generateImageEmbeddingPlan(
       'session_123',
       './subtitles.ass',
@@ -41,16 +38,15 @@ export class ImageEmbedderExamples {
       valid
     );
 
-    // Display the plan
     console.log(ImageEmbeddingService.formatPlanForUser(plan));
 
     return plan;
   }
 
-  // 💡 TIP: How to prepare user images
+  // Prepare user images
   static prepareUserImages() {
     return `
-📝 HOW TO PREPARE USER-PROVIDED IMAGES:
+HOW TO PREPARE USER-PROVIDED IMAGES:
 
 1. Create high-quality images (PNG/JPG, 1024x1024px minimum)
 2. Give them descriptive labels that match your content
@@ -63,8 +59,8 @@ const myImage = UserImageManager.createUserImage(
   './images/my-diagram.png',
   'Custom System Architecture',
   'My detailed diagram showing the complete system workflow',
-  10.5,  // Show at 10.5 seconds
-  'high' // High priority
+  10.5,
+  'high'
 );
 
 The AI will evaluate your images and decide if they're valuable for the video!
@@ -72,7 +68,6 @@ The AI will evaluate your images and decide if they're valuable for the video!
   }
 }
 
-// 🎯 ASS CONFIGURATION
 const ASS_CONFIG = {
   imageTimingOffset: 0.3, // Image appears 0.3 seconds before subtitle (reduced for more frequent images)
   minTextLength: 10,      // Minimum text length for image consideration (reduced from 20 for more technical diagrams)
@@ -80,7 +75,6 @@ const ASS_CONFIG = {
   imageDisplayDuration: 3.0 // Images stay on screen for dynamic duration (3-8 seconds based on dialogue relevance)
 };
 
-// 🎯 DATA TYPES
 export interface AssSubtitleEntry {
   startTime: number;
   endTime: number;
@@ -227,11 +221,11 @@ export interface UserImageSuggestion {
   }>;
 }
 
-// 🎯 1. ASS TIME PARSING - Converts ASS time format to seconds
+// Parse ASS time format to seconds
 export class AssFileProcessor {
+  // Parse ASS time
   static parseAssTime(timeString: string): number {
     try {
-      // ASS format: H:MM:SS.CC (hours:minutes:seconds.centiseconds)
       const parts = timeString.split(':');
       if (parts.length !== 3) throw new Error('Invalid time format');
 
@@ -241,7 +235,6 @@ export class AssFileProcessor {
       const seconds = parseInt(secondsParts[0]);
       const centiseconds = parseInt(secondsParts[1] || '0');
 
-      // 🕒 CONVERTS TO TOTAL SECONDS FOR VIDEO TIMING
       return hours * 3600 + minutes * 60 + seconds + centiseconds / 100;
     } catch (error) {
       console.error('Error parsing ASS time:', timeString, error);
@@ -249,6 +242,7 @@ export class AssFileProcessor {
     }
   }
 
+  // Parse ASS file
   static parseAssFile(content: string): AssFileData {
     const lines = content.split('\n');
     const entries: AssSubtitleEntry[] = [];
@@ -261,7 +255,6 @@ export class AssFileProcessor {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
 
-      // 🎯 2. SECTION DETECTION
       if (line.startsWith('[Script Info]')) {
         currentSection = 'script';
       } else if (line.startsWith('[V4+ Styles]')) {
@@ -271,14 +264,12 @@ export class AssFileProcessor {
         dialogueStartLine = i + 1;
       }
 
-      // 🎯 3. METADATA EXTRACTION
       if (currentSection === 'script' && line.includes(':')) {
         const [key, ...valueParts] = line.split(':');
         const value = valueParts.join(':').trim();
         metadata[key.trim()] = value;
       }
 
-      // 🎯 4. STYLE EXTRACTION
       if (currentSection === 'styles' && line.startsWith('Style:')) {
         const parts = line.substring(6).split(',');
         if (parts.length >= 4) {
@@ -292,7 +283,6 @@ export class AssFileProcessor {
         }
       }
 
-      // 🎯 5. DIALOGUE EXTRACTION - Group consecutive entries by logical dialogue segments
       if (currentSection === 'events' && line.startsWith('Dialogue:')) {
         try {
           const parts = line.substring(9).split(',');
@@ -303,7 +293,6 @@ export class AssFileProcessor {
             const actor = parts[4].trim();
             const text = parts.slice(9).join(',').trim();
 
-            // Remove ASS formatting tags
             const cleanText = text.replace(/{[^}]*}/g, '');
 
             entries.push({
@@ -321,22 +310,18 @@ export class AssFileProcessor {
       }
     }
 
-    // 📊 GROUP ENTRIES BY LOGICAL DIALOGUE SEGMENTS
     const groupedEntries: AssSubtitleEntry[] = [];
     let currentGroup: AssSubtitleEntry | null = null;
 
     for (const entry of entries) {
-      // If this is the first entry or a new logical segment (different character or gap > 0.5s)
       if (!currentGroup ||
-          currentGroup.character !== entry.character ||
-          (entry.startTime - currentGroup.endTime) > 0.5) {
+        currentGroup.character !== entry.character ||
+        (entry.startTime - currentGroup.endTime) > 0.5) {
 
-        // Save previous group if it exists
         if (currentGroup) {
           groupedEntries.push(currentGroup);
         }
 
-        // Start new group
         currentGroup = {
           startTime: entry.startTime,
           endTime: entry.endTime,
@@ -346,27 +331,23 @@ export class AssFileProcessor {
           layer: entry.layer
         };
       } else {
-        // Extend current group
         currentGroup.endTime = Math.max(currentGroup.endTime, entry.endTime);
-        // For cumulative text entries, replace with the longer version
         if (entry.text.length > currentGroup.text.length) {
           currentGroup.text = entry.text;
         }
       }
     }
 
-    // Add the last group
     if (currentGroup) {
       groupedEntries.push(currentGroup);
     }
 
-    // 📊 CALCULATE TOTAL DURATION
     const totalDuration = groupedEntries.length > 0
       ? Math.max(...groupedEntries.map(e => e.endTime))
       : 0;
 
     return {
-      entries: groupedEntries.sort((a, b) => a.startTime - b.startTime), // Sort by time
+      entries: groupedEntries.sort((a, b) => a.startTime - b.startTime),
       styles,
       metadata: {
         ...metadata,
@@ -376,20 +357,19 @@ export class AssFileProcessor {
     };
   }
 
-  // 🎯 6. IMAGE TIMING GENERATION - Extract timing for images based on subtitles
+  // Generate image timing from ASS
   static generateImageTimingFromAss(
     assData: AssFileData,
     imageDensity: 'low' | 'medium' | 'high' | 'ultra' = 'high'
-  ): Array<{startTime: number; endTime: number; text: string; character?: string}> {
+  ): Array<{ startTime: number; endTime: number; text: string; character?: string }> {
     const { entries } = assData;
-    const imageTimings: Array<{startTime: number; endTime: number; text: string; character?: string}> = [];
+    const imageTimings: Array<{ startTime: number; endTime: number; text: string; character?: string }> = [];
 
-    // 📏 DENSITY CONFIGURATION - How often to place images (more frequent now)
     const intervals = {
-      low: 8,     // Every 8 seconds
-      medium: 4,  // Every 4 seconds
-      high: 2,    // Every 2 seconds
-      ultra: 1.5  // Every 1.5 seconds (very frequent)
+      low: 8,
+      medium: 4,
+      high: 2,
+      ultra: 1.5
     };
 
     const interval = intervals[imageDensity];
@@ -397,20 +377,14 @@ export class AssFileProcessor {
     const maxImages = Math.floor((assData.metadata.duration / 60) * ASS_CONFIG.maxImagesPerMinute);
 
     for (const entry of entries) {
-      // 🎯 7. TECHNICAL IMAGE PLACEMENT - Strategic placement for educational content
-      // Only add image if:
-      // - Enough time has passed since last image
-      // - Text has minimum length (reduced threshold for technical content)
-      // - Haven't exceeded max images per minute
       if (entry.startTime - lastImageTime >= interval &&
-          entry.text.length > ASS_CONFIG.minTextLength &&
-          imageTimings.length < maxImages) {
+        entry.text.length > ASS_CONFIG.minTextLength &&
+        imageTimings.length < maxImages) {
 
         const imageStart = Math.max(0, entry.startTime - ASS_CONFIG.imageTimingOffset);
         const imageEnd = Math.min(assData.metadata.duration, entry.endTime + ASS_CONFIG.imageDisplayDuration);
 
         imageTimings.push({
-          // 🕒 INTELLIGENT TIMING OFFSET - Image appears slightly before subtitle and stays longer
           startTime: imageStart,
           endTime: imageEnd,
           text: entry.text,
@@ -424,7 +398,6 @@ export class AssFileProcessor {
   }
 }
 
-// CONTAMINATION-FREE IMAGE ANALYSIS PROMPT
 export class ImageEmbeddingAnalyzer {
   private static readonly IMAGE_ANALYSIS_PROMPT = `
 # Visual Image Recommendation System for Instagram Reels - Technical Education Focus
@@ -467,17 +440,17 @@ Create images that are **educationally effective** - they should be:
 
 ## TECHNICAL DEPTH GUIDELINES:
 
-### ✅ INCLUDE (Smart Technical Visuals):
+###  INCLUDE (Smart Technical Visuals):
 - **Simple system diagrams** showing 3-5 key components with clear labels
 - **Clean process flows** with 3-4 logical steps and arrows
 - **Before/after comparisons** showing clear technical improvements
 - **Essential code patterns** (max 2-3 lines, large fonts, key concepts only)
 - **Architecture overviews** with main building blocks clearly labeled
-- **Data flow diagrams** showing simple input → process → output
+- **Data flow diagrams** showing simple input -> process -> output
 - **Comparison charts** highlighting key differences between technologies
 - **Visual metaphors** that accurately represent technical concepts
 
-### ❌ AVOID (Too Simple or Too Complex):
+###  AVOID (Too Simple or Too Complex):
 **Too Simple:**
 - Generic logos or icons without educational value
 - Empty marketing graphics with no technical content
@@ -514,7 +487,7 @@ Create images that are **educationally effective** - they should be:
 
 #### 4. PROCESS VISUALIZATIONS (20% priority)
 - Build/deployment pipelines (3-4 key steps)
-- Development workflows (design → code → test → deploy)
+- Development workflows (design -> code -> test -> deploy)
 - Data processing chains
 - User interaction flows
 
@@ -522,7 +495,7 @@ Create images that are **educationally effective** - they should be:
 
 **GOOD Code Visuals:**
 - "function add(a: number, b: number): number" - Shows TypeScript typing concept
-- "// JavaScript: runtime error ❌" vs "// TypeScript: compile-time error ✅"
+- "// JavaScript: runtime error " vs "// TypeScript: compile-time error "
 - Key import statement showing framework usage
 - Single line showing syntax difference between languages
 
@@ -552,9 +525,9 @@ For each recommended image:
 ## EXAMPLE DESCRIPTIONS:
 
 **EXCELLENT Examples:**
-- "Simple diagram: 'TypeScript Code' → 'Compiler' → 'JavaScript Code' with type checking highlighted at compiler stage"
+- "Simple diagram: 'TypeScript Code' -> 'Compiler' -> 'JavaScript Code' with type checking highlighted at compiler stage"
 - "Split screen: Left shows 'let x = 5; x.toUpperCase()' with runtime error icon, Right shows 'let x: string = \"hello\"; x.toUpperCase()' with success checkmark"
-- "Clean architecture: Frontend (React icon) ↔ API Gateway ↔ Backend Services (3 boxes), with data flow arrows"
+- "Clean architecture: Frontend (React icon) <-> API Gateway <-> Backend Services (3 boxes), with data flow arrows"
 - "Before/After: Messy JavaScript function vs same function with TypeScript types, highlighting improved readability"
 
 ## DIALOGUE CLEANING EXAMPLES:
@@ -635,7 +608,7 @@ Return a JSON object with this structure:
 }
 `;
 
-  // 🎯 8. AI ANALYSIS FOR IMAGE REQUIREMENTS WITH GOOGLE SEARCH AND USER IMAGES
+  // Analyze dialogue for images
   static async analyzeDialogueForImages(
     sessionId: string,
     assData: AssFileData,
@@ -643,12 +616,11 @@ Return a JSON object with this structure:
     userProvidedImages?: UserProvidedImage[]
   ): Promise<ImageEmbeddingPlan> {
     try {
-      console.log('🤖 [AI] Starting enhanced AI analysis with Google search for technical diagrams');
+      console.log('[AI] Starting enhanced AI analysis with Google search for technical diagrams');
 
       const { entries } = assData;
-      const imageTimings = AssFileProcessor.generateImageTimingFromAss(assData, 'ultra'); // Use ultra density for more images
+      const imageTimings = AssFileProcessor.generateImageTimingFromAss(assData, 'ultra');
 
-      // CLEAN RESEARCH PROMPT - No contaminating examples
       console.log('Researching technical concepts for visual diagrams:', topic);
       const researchPrompt = `Research the technical topic "${topic}" and suggest specific visual diagrams and illustrations that would effectively explain the key technical concepts of this subject.
 
@@ -670,16 +642,14 @@ Provide specific diagram concepts that would work well in educational video cont
       });
 
       const visualResearch = researchResult.text;
-      console.log('✅ [SEARCH] Technical research completed');
+      console.log(' [SEARCH] Technical research completed');
 
-      // 🎯 10. PREPARE ENHANCED DIALOGUE SEQUENCE FOR AI
-      // Clean up ASS formatting artifacts from dialogue text
       const cleanDialogueEntries = entries.map(entry => {
         const cleanedText = entry.text
-          .replace(/\\N/g, ' ') // Replace \N with space
-          .replace(/\\n/g, ' ') // Replace \n with space
-          .replace(/\s+/g, ' ') // Replace multiple spaces with single space
-          .trim(); // Remove leading/trailing whitespace
+          .replace(/\\N/g, ' ')
+          .replace(/\\n/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
 
         return {
           ...entry,
@@ -687,24 +657,20 @@ Provide specific diagram concepts that would work well in educational video cont
         };
       });
 
-      // Debug: Log some entries to understand the ASS file content
-      console.log(`📊 [DEBUG] ASS file has ${entries.length} entries`);
+      console.log(` [DEBUG] ASS file has ${entries.length} entries`);
       if (entries.length > 0) {
-        console.log(`📊 [DEBUG] First few entries:`);
+        console.log(` [DEBUG] First few entries:`);
         for (let i = 0; i < Math.min(5, entries.length); i++) {
           const entry = entries[i];
-          console.log(`📊 [DEBUG] Entry ${i}: ${entry.startTime.toFixed(1)}s - ${entry.character || 'Unknown'}: "${entry.text?.substring(0, 50)}..."`);
+          console.log(` [DEBUG] Entry ${i}: ${entry.startTime.toFixed(1)}s - ${entry.character || 'Unknown'}: "${entry.text?.substring(0, 50)}..."`);
         }
       }
 
-      // Create comprehensive dialogue sequence with full context
       const dialogueSequence = cleanDialogueEntries
         .map((entry, index) => {
-          // Get broader context - include more surrounding dialogue entries
           const contextEntries = [];
-          const contextWindow = 30; // Look at 30 seconds before and after
+          const contextWindow = 30;
 
-          // Find all entries within the context window
           for (let i = 0; i < cleanDialogueEntries.length; i++) {
             const otherEntry = cleanDialogueEntries[i];
             const timeDiff = Math.abs(entry.startTime - otherEntry.startTime);
@@ -714,10 +680,8 @@ Provide specific diagram concepts that would work well in educational video cont
             }
           }
 
-          // Sort context entries by time
           contextEntries.sort((a, b) => a.startTime - b.startTime);
 
-          // Create a more comprehensive context line
           const contextLines = contextEntries.map(e =>
             `[${e.startTime.toFixed(1)}s] ${e.character}: ${e.text}`
           );
@@ -734,13 +698,11 @@ Provide specific diagram concepts that would work well in educational video cont
         `Use this research to inspire creative, impactful image suggestions that maximize visual learning and engagement.` +
         (userProvidedImages?.length ? `\n\nEVALUATE USER IMAGES: The user has explicitly provided ${userProvidedImages.length} images they want to include in the video. These images represent content they consider important for their audience. For each user-provided image, you should STRONGLY CONSIDER including it unless it is completely irrelevant to the technical topic or of very poor quality. If you decide to use a user image, you MUST provide a specific timestamp (in seconds) for when it should appear, based on the most relevant dialogue moment where the concept matches the image content. The timestamp is required, not optional. Give user images the benefit of the doubt and include them when there's reasonable relevance to the dialogue.` : '');
 
-      // 🎯 11. TECHNICAL IMAGE REQUIREMENT GENERATION WITH USER IMAGES AND CONTEXT-AWARE DURATIONS
       const schema = z.object({
         imageRequirements: z.array(z.object({
           timestamp: z.number(),
           dialogueText: z.string().describe("The complete, readable dialogue text being spoken at this timestamp. Must be a full sentence or complete thought, not fragments. Clean up any ASS formatting artifacts like \\N."),
           character: z.string().describe("The character speaking this dialogue (e.g., 'Peter', 'Stewie')"),
-          // Accept both legacy and improved image type categories
           imageType: z.enum(['architecture', 'process', 'comparison', 'diagram', 'workflow', 'infrastructure', 'lifecycle', 'concept_diagram', 'smart_code', 'process', 'architecture']),
           dialogueAtTimestamp: z.string().optional().describe("Optional: The exact dialogue text at this specific timestamp"),
           title: z.string(),
@@ -764,41 +726,34 @@ Provide specific diagram concepts that would work well in educational video cont
         prompt: enhancedPrompt
       });
 
-      // Debug: Log the AI response to understand what's being generated
-      console.log(`📊 [DEBUG] AI generated ${result.object.imageRequirements?.length || 0} image requirements`);
+      console.log(` [DEBUG] AI generated ${result.object.imageRequirements?.length || 0} image requirements`);
       if (result.object.imageRequirements?.length > 0) {
-        console.log(`📊 [DEBUG] First few AI requirements:`);
+        console.log(` [DEBUG] First few AI requirements:`);
         for (let i = 0; i < Math.min(3, result.object.imageRequirements.length); i++) {
           const req = result.object.imageRequirements[i];
-          console.log(`📊 [DEBUG] AI Req ${i}: "${req.title}" at ${req.timestamp}s`);
-          console.log(`📊 [DEBUG] - dialogueText: "${req.dialogueText}"`);
-          console.log(`📊 [DEBUG] - character: "${req.character}"`);
+          console.log(` [DEBUG] AI Req ${i}: "${req.title}" at ${req.timestamp}s`);
+          console.log(` [DEBUG] - dialogueText: "${req.dialogueText}"`);
+          console.log(` [DEBUG] - character: "${req.character}"`);
         }
       }
 
-      // 🎯 12. CREATE IMAGE REQUIREMENTS WITH UNIQUE IDS AND AI-DETERMINED DURATIONS
       const imageRequirements: ImageRequirement[] = (result.object as any).imageRequirements?.map((req: any, index: number) => {
-        // Find the specific dialogue entry for this timestamp (closest within 5s tolerance)
         let targetEntry: AssSubtitleEntry | undefined = entries.find(entry => Math.abs(entry.startTime - req.timestamp) < 1.0);
-        
-        // If no exact match within 1s, find the closest entry within 5s
+
         if (!targetEntry) {
           const sortedEntries = entries.sort((a, b) => Math.abs(a.startTime - req.timestamp) - Math.abs(b.startTime - req.timestamp));
           targetEntry = sortedEntries[0] && Math.abs(sortedEntries[0].startTime - req.timestamp) < 5.0 ? sortedEntries[0] : undefined;
         }
-        
-        // If still no match, find the entry that contains this timestamp
+
         if (!targetEntry) {
           targetEntry = entries.find(entry => entry.startTime <= req.timestamp && entry.endTime >= req.timestamp);
         }
-        
-        // If still no match, use the closest entry by time
+
         if (!targetEntry && entries.length > 0) {
           const sortedEntries = entries.sort((a, b) => Math.abs(a.startTime - req.timestamp) - Math.abs(b.startTime - req.timestamp));
           targetEntry = sortedEntries[0];
         }
 
-        // Always derive dialogue from ASS, never trust AI-provided text
         let cleanedTargetText = '';
         let derivedCharacter = '';
 
@@ -810,12 +765,10 @@ Provide specific diagram concepts that would work well in educational video cont
             .trim();
           derivedCharacter = targetEntry.character || '';
         } else {
-          // Fallback: use AI-provided dialogue text if no ASS entry found
           cleanedTargetText = req.dialogueText || '';
           derivedCharacter = req.character || 'Unknown';
         }
 
-        // Build full context from previous and current entries (ASS-derived only)
         let fullDialogue = cleanedTargetText;
         let dialogueAtTimestamp = cleanedTargetText;
         if (targetEntry) {
@@ -832,9 +785,7 @@ Provide specific diagram concepts that would work well in educational video cont
             return { ...entry, text: cleanedText };
           });
 
-          // Compose readable context without duplication
           const contextParts = cleanedContextEntries.map(entry => `${entry.character}: ${entry.text}`);
-          // Remove exact adjacent duplicates
           const dedupedParts: string[] = [];
           for (const part of contextParts) {
             if (dedupedParts[dedupedParts.length - 1] !== part) dedupedParts.push(part);
@@ -842,22 +793,19 @@ Provide specific diagram concepts that would work well in educational video cont
           fullDialogue = dedupedParts.join(' | ');
           dialogueAtTimestamp = `${derivedCharacter}: ${cleanedTargetText}`.trim();
         } else {
-          // If no target entry found, create a basic full context
           fullDialogue = `${derivedCharacter}: ${cleanedTargetText}`;
           dialogueAtTimestamp = `${derivedCharacter}: ${cleanedTargetText}`;
         }
 
-        // Ensure fullDialogue is never empty
         if (!fullDialogue || fullDialogue.trim() === '') {
           fullDialogue = `${derivedCharacter}: ${cleanedTargetText}`;
         }
 
-        // Debug: Log the fullDialogue creation
-        console.log(`📊 [DEBUG] Image requirement ${index}: "${req.title}"`);
-        console.log(`📊 [DEBUG] - cleanedTargetText: "${cleanedTargetText}"`);
-        console.log(`📊 [DEBUG] - derivedCharacter: "${derivedCharacter}"`);
-        console.log(`📊 [DEBUG] - fullDialogue: "${fullDialogue}"`);
-        console.log(`📊 [DEBUG] - dialogueAtTimestamp: "${dialogueAtTimestamp}"`);
+        console.log(` [DEBUG] Image requirement ${index}: "${req.title}"`);
+        console.log(` [DEBUG] - cleanedTargetText: "${cleanedTargetText}"`);
+        console.log(` [DEBUG] - derivedCharacter: "${derivedCharacter}"`);
+        console.log(` [DEBUG] - fullDialogue: "${fullDialogue}"`);
+        console.log(` [DEBUG] - dialogueAtTimestamp: "${dialogueAtTimestamp}"`);
 
         return {
           id: `img_${sessionId}_${index}`,
@@ -876,112 +824,105 @@ Provide specific diagram concepts that would work well in educational video cont
         };
       }) || [];
 
-      // 🎯 13. PROCESS USER IMAGE DECISIONS WITH DETAILED FEEDBACK
       let userProvidedUsed = 0;
       const userImageDecisions = (result.object as any).userImageDecisions || [];
 
-      console.log('📊 [AI] User Image Evaluation Results:');
+      console.log(' [AI] User Image Evaluation Results:');
       userImageDecisions.forEach((decision: any) => {
-        const status = decision.useImage ? '✅ ACCEPTED' : '❌ REJECTED';
+        const status = decision.useImage ? ' ACCEPTED' : ' REJECTED';
         console.log(`   ${status}: "${decision.userImageLabel}"`);
         if (decision.useImage) {
-          console.log(`      📍 Will appear at ${decision.timestamp?.toFixed(1) || 'optimal'}s`);
+          console.log(`       Will appear at ${decision.timestamp?.toFixed(1) || 'optimal'}s`);
         }
-        console.log(`      💭 Reason: ${decision.reasoning}`);
+        console.log(`       Reason: ${decision.reasoning}`);
         console.log('');
       });
 
-      // Add user-provided images that AI decided to use
-        userImageDecisions.forEach((decision: any) => {
-          console.log(`🤖 [AI-DECISION] User image decision:`, {
-            label: decision.userImageLabel,
-            useImage: decision.useImage,
-            timestamp: decision.timestamp,
-            reasoning: decision.reasoning
-          });
-          
-          if (decision.useImage && userProvidedImages) {
-            const userImage = userProvidedImages.find(img => img.label === decision.userImageLabel);
-            if (userImage) {
-              // Update the user image with AI-determined timestamp
-              userImage.preferredTimestamp = decision.timestamp || userImage.preferredTimestamp || 0;
-              userImage.contextualDuration = decision.contextualDuration || userImage.contextualDuration || 8;
-              userImage.relevanceReasoning = decision.reasoning || userImage.relevanceReasoning;
-              
-              const finalTimestamp = userImage.preferredTimestamp;
-              console.log(`📍 [TIMESTAMP] Updated "${userImage.label}" with AI timestamp: ${finalTimestamp}s`);
-              
-              const imageReq: ImageRequirement = {
-                id: `user_${sessionId}_${userProvidedUsed}`,
-                timestamp: finalTimestamp || 0,
-                dialogueText: userImage.description || userImage.label,
-                character: 'System',
-                imageType: 'diagram', // Default type for user images
-                title: userImage.label,
-                description: userImage.description || `User-provided image: ${userImage.label}`,
-                priority: userImage.priority || 'medium',
-                uploaded: true,
-                imagePath: userImage.imagePath,
-                contextualDuration: decision.contextualDuration || 8, // AI-determined duration for user images
-                relevanceReasoning: decision.reasoning || 'User-provided image with AI timing analysis'
-              };
-              imageRequirements.push(imageReq);
-              userProvidedUsed++;
-            }
-          }
-        });      // 🎯 FALLBACK: If AI rejected all user images but user images exist, try to place them based on keyword matching
-        if (userProvidedImages && userProvidedImages.length > 0 && userProvidedUsed === 0) {
-          console.log('🔄 [AI] AI rejected all user images, applying fallback placement logic...');
-          
-          userProvidedImages.forEach((userImage, index) => {
-            // Try to find a reasonable timestamp based on keywords in the dialogue
-            let fallbackTimestamp = 10 + (index * 15); // Default spacing
-            let foundMatch = false;
-            
-            // Look for keywords in the image label/description in the dialogue
-            const keywords = userImage.label.toLowerCase().split(/[\s\-_]+/).filter(word => word.length > 3);
-            
-            for (const entry of entries) {
-              const dialogueText = entry.text.toLowerCase();
-              if (keywords.some(keyword => dialogueText.includes(keyword))) {
-                fallbackTimestamp = entry.startTime + 2; // Show 2 seconds after the mention
-                foundMatch = true;
-                console.log(`   📍 Found keyword match for "${userImage.label}" at ${entry.startTime.toFixed(1)}s: "${entry.text.substring(0, 50)}..."`);
-                break;
-              }
-            }
-            
-            // Update the user image with fallback timestamp
-            userImage.preferredTimestamp = fallbackTimestamp;
-            userImage.contextualDuration = 8;
-            userImage.relevanceReasoning = foundMatch ? 
-              `Fallback placement: Keyword match found in dialogue` : 
-              `Fallback placement: Spaced placement for user-provided image`;
-            
-            console.log(`   📍 Fallback placement for "${userImage.label}" at ${fallbackTimestamp}s`);
-            
+      userImageDecisions.forEach((decision: any) => {
+        console.log(` [AI-DECISION] User image decision:`, {
+          label: decision.userImageLabel,
+          useImage: decision.useImage,
+          timestamp: decision.timestamp,
+          reasoning: decision.reasoning
+        });
+
+        if (decision.useImage && userProvidedImages) {
+          const userImage = userProvidedImages.find(img => img.label === decision.userImageLabel);
+          if (userImage) {
+            userImage.preferredTimestamp = decision.timestamp || userImage.preferredTimestamp || 0;
+            userImage.contextualDuration = decision.contextualDuration || userImage.contextualDuration || 8;
+            userImage.relevanceReasoning = decision.reasoning || userImage.relevanceReasoning;
+
+            const finalTimestamp = userImage.preferredTimestamp;
+            console.log(` [TIMESTAMP] Updated "${userImage.label}" with AI timestamp: ${finalTimestamp}s`);
+
             const imageReq: ImageRequirement = {
-              id: `user_fallback_${sessionId}_${userProvidedUsed}`,
-              timestamp: fallbackTimestamp,
+              id: `user_${sessionId}_${userProvidedUsed}`,
+              timestamp: finalTimestamp || 0,
               dialogueText: userImage.description || userImage.label,
               character: 'System',
-              imageType: 'diagram',
+              imageType: 'diagram', // Default type for user images
               title: userImage.label,
               description: userImage.description || `User-provided image: ${userImage.label}`,
               priority: userImage.priority || 'medium',
               uploaded: true,
               imagePath: userImage.imagePath,
-              contextualDuration: 8,
-              relevanceReasoning: userImage.relevanceReasoning
+              contextualDuration: decision.contextualDuration || 8, // AI-determined duration for user images
+              relevanceReasoning: decision.reasoning || 'User-provided image with AI timing analysis'
             };
             imageRequirements.push(imageReq);
             userProvidedUsed++;
-          });
-          
-          console.log(`✅ [AI] Applied fallback placement for ${userProvidedUsed} user images`);
+          }
         }
-        
-      // DEDUPLICATE REQUIREMENTS BY TIMESTAMP + CONTEXT to avoid repeated items
+      });      //  FALLBACK: If AI rejected all user images but user images exist, try to place them based on keyword matching
+      if (userProvidedImages && userProvidedImages.length > 0 && userProvidedUsed === 0) {
+        console.log(' [AI] AI rejected all user images, applying fallback placement logic...');
+
+        userProvidedImages.forEach((userImage, index) => {
+          let fallbackTimestamp = 10 + (index * 15); // Default spacing
+          let foundMatch = false;
+
+          const keywords = userImage.label.toLowerCase().split(/[\s\-_]+/).filter(word => word.length > 3);
+
+          for (const entry of entries) {
+            const dialogueText = entry.text.toLowerCase();
+            if (keywords.some(keyword => dialogueText.includes(keyword))) {
+              fallbackTimestamp = entry.startTime + 2; // Show 2 seconds after the mention
+              foundMatch = true;
+              console.log(`    Found keyword match for "${userImage.label}" at ${entry.startTime.toFixed(1)}s: "${entry.text.substring(0, 50)}..."`);
+              break;
+            }
+          }
+
+          userImage.preferredTimestamp = fallbackTimestamp;
+          userImage.contextualDuration = 8;
+          userImage.relevanceReasoning = foundMatch ?
+            `Fallback placement: Keyword match found in dialogue` :
+            `Fallback placement: Spaced placement for user-provided image`;
+
+          console.log(`    Fallback placement for "${userImage.label}" at ${fallbackTimestamp}s`);
+
+          const imageReq: ImageRequirement = {
+            id: `user_fallback_${sessionId}_${userProvidedUsed}`,
+            timestamp: fallbackTimestamp,
+            dialogueText: userImage.description || userImage.label,
+            character: 'System',
+            imageType: 'diagram',
+            title: userImage.label,
+            description: userImage.description || `User-provided image: ${userImage.label}`,
+            priority: userImage.priority || 'medium',
+            uploaded: true,
+            imagePath: userImage.imagePath,
+            contextualDuration: 8,
+            relevanceReasoning: userImage.relevanceReasoning
+          };
+          imageRequirements.push(imageReq);
+          userProvidedUsed++;
+        });
+
+        console.log(` [AI] Applied fallback placement for ${userProvidedUsed} user images`);
+      }
+
       const normalizeText = (t: string | undefined) => (t || '')
         .toLowerCase()
         .replace(/[^a-z0-9:\s|]/g, '')
@@ -997,23 +938,20 @@ Provide specific diagram concepts that would work well in educational video cont
         return true;
       });
 
-      // Replace with deduped list before matching existing images
       let workingImageRequirements: ImageRequirement[] = dedupedImageRequirements;
 
-      // 🎯 14. MATCH EXISTING IMAGES TO REQUIREMENTS
 
-        // Save updated user images with AI-determined timestamps back to file
-        if (userProvidedImages?.length) {
-          console.log('💾 [AI] Saving user images with updated timestamps:');
-          userProvidedImages.forEach(img => {
-            console.log(`   📍 "${img.label}" -> ${img.preferredTimestamp}s`);
-          });
-          UserImageManager.saveUserImages(userProvidedImages, sessionId);
-          console.log(`💾 [AI] Saved ${userProvidedImages.length} user images with AI-determined timestamps`);
-        }
+      if (userProvidedImages?.length) {
+        console.log(' [AI] Saving user images with updated timestamps:');
+        userProvidedImages.forEach(img => {
+          console.log(`    "${img.label}" -> ${img.preferredTimestamp}s`);
+        });
+        UserImageManager.saveUserImages(userProvidedImages, sessionId);
+        console.log(` [AI] Saved ${userProvidedImages.length} user images with AI-determined timestamps`);
+      }
 
-      console.log('🔍 [AI] Matching existing images to requirements...');
-      
+      console.log(' [AI] Matching existing images to requirements...');
+
       const sessionImageDir = path.join(process.cwd(), 'generated_images', sessionId);
       if (fs.existsSync(sessionImageDir)) {
         const existingImages = fs.readdirSync(sessionImageDir)
@@ -1024,11 +962,10 @@ Provide specific diagram concepts that would work well in educational video cont
             title: file.replace(/[_-]/g, ' ').replace(/\..*$/, '').replace(/img.*$/, '').trim()
           }));
 
-        console.log(`📁 [AI] Found ${existingImages.length} existing images in session directory`);
+        console.log(` [AI] Found ${existingImages.length} existing images in session directory`);
 
-        // Match existing images to requirements
         workingImageRequirements.forEach(req => {
-          const matchingImage = existingImages.find(img => 
+          const matchingImage = existingImages.find(img =>
             img.title.toLowerCase().includes(req.title.toLowerCase().substring(0, 10)) ||
             req.title.toLowerCase().includes(img.title.toLowerCase().substring(0, 10))
           );
@@ -1036,17 +973,16 @@ Provide specific diagram concepts that would work well in educational video cont
           if (matchingImage) {
             req.imagePath = matchingImage.path;
             req.uploaded = true;
-            console.log(`✅ [AI] Matched requirement "${req.title}" to existing image: ${matchingImage.filename}`);
+            console.log(` [AI] Matched requirement "${req.title}" to existing image: ${matchingImage.filename}`);
           } else {
-            console.log(`⚠️ [AI] No match found for requirement: "${req.title}"`);
+            console.log(` [AI] No match found for requirement: "${req.title}"`);
           }
         });
       } else {
-        console.log(`📁 [AI] No existing images directory found for session: ${sessionImageDir}`);
+        console.log(` [AI] No existing images directory found for session: ${sessionImageDir}`);
       }
 
-      // 🎬 ADD DEFAULT INTRODUCTION IMAGE SUGGESTION (Thumbnail)
-      console.log('🎬 [AI] Adding default Introduction image suggestion at 0:00 (thumbnail)');
+      console.log(' [AI] Adding default Introduction image suggestion at 0:00 (thumbnail)');
       const introductionImageReq: ImageRequirement = {
         id: `img_${sessionId}_introduction`,
         timestamp: 0.0,
@@ -1061,10 +997,8 @@ Provide specific diagram concepts that would work well in educational video cont
         relevanceReasoning: 'Introduction image acts as video thumbnail and sets the visual tone for the content'
       };
 
-      // Add introduction image at the beginning of the array
       workingImageRequirements.unshift(introductionImageReq);
 
-      // Final dedup including possible conflicts at t=0 after adding intro
       const finalSeenKeys = new Set<string>();
       const finalImageRequirements = workingImageRequirements.filter(req => {
         const roundedTs = Math.round((req.timestamp || 0) * 10) / 10;
@@ -1073,9 +1007,8 @@ Provide specific diagram concepts that would work well in educational video cont
         finalSeenKeys.add(key);
         return true;
       });
-      console.log(`✅ [AI] Added Introduction image suggestion: "${introductionImageReq.title}" at ${introductionImageReq.timestamp}s`);
+      console.log(` [AI] Added Introduction image suggestion: "${introductionImageReq.title}" at ${introductionImageReq.timestamp}s`);
 
-      // 📊 CALCULATE SUMMARY STATISTICS
       const highPriority = imageRequirements.filter(req => req.priority === 'high').length;
       const mediumPriority = imageRequirements.filter(req => req.priority === 'medium').length;
       const lowPriority = imageRequirements.filter(req => req.priority === 'low').length;
@@ -1096,21 +1029,21 @@ Provide specific diagram concepts that would work well in educational video cont
         }
       };
 
-      console.log('✅ [AI] Enhanced technical diagram analysis completed successfully');
-      console.log(`📊 [AI] Generated ${imageRequirements.length} technical diagram requirements with Google search research`);
+      console.log(' [AI] Enhanced technical diagram analysis completed successfully');
+      console.log(` [AI] Generated ${imageRequirements.length} technical diagram requirements with Google search research`);
       if (userProvidedImages?.length) {
-        console.log(`📊 [AI] Evaluated ${userProvidedImages.length} user images, using ${userProvidedUsed}`);
+        console.log(` [AI] Evaluated ${userProvidedImages.length} user images, using ${userProvidedUsed}`);
       }
 
       return plan;
 
     } catch (error) {
-      console.error('❌ [AI] Error in enhanced AI analysis:', error);
+      console.error(' [AI] Error in enhanced AI analysis:', error);
       throw new Error(`Failed to analyze dialogue for images: ${error}`);
     }
   }
 
-  // 💾 SAVE IMAGE PLAN TO FILE
+  // Save image plan to file
   static saveImagePlan(plan: ImageEmbeddingPlan, outputDir: string = './temp'): string {
     try {
       if (!fs.existsSync(outputDir)) {
@@ -1120,31 +1053,31 @@ Provide specific diagram concepts that would work well in educational video cont
       const filePath = path.join(outputDir, `${plan.sessionId}_image_plan.json`);
       fs.writeFileSync(filePath, JSON.stringify(plan, null, 2));
 
-      console.log('💾 [SAVE] Image plan saved to:', filePath);
+      console.log(' [SAVE] Image plan saved to:', filePath);
       return filePath;
 
     } catch (error) {
-      console.error('❌ [SAVE] Error saving image plan:', error);
+      console.error(' [SAVE] Error saving image plan:', error);
       throw new Error(`Failed to save image plan: ${error}`);
     }
   }
 
-  // 📖 LOAD IMAGE PLAN FROM FILE
+  // Load image plan from file
   static loadImagePlan(filePath: string): ImageEmbeddingPlan {
     try {
       const content = fs.readFileSync(filePath, 'utf8');
       const plan = JSON.parse(content) as ImageEmbeddingPlan;
 
-      console.log('📖 [LOAD] Image plan loaded from:', filePath);
+      console.log(' [LOAD] Image plan loaded from:', filePath);
       return plan;
 
     } catch (error) {
-      console.error('❌ [LOAD] Error loading image plan:', error);
+      console.error(' [LOAD] Error loading image plan:', error);
       throw new Error(`Failed to load image plan: ${error}`);
     }
   }
 
-  // 📊 GET UPLOAD PROGRESS
+  // Get upload progress
   static getUploadProgress(plan: ImageEmbeddingPlan): { uploaded: number; total: number; percentage: number } {
     const uploaded = plan.imageRequirements.filter(req => req.uploaded).length;
     const total = plan.imageRequirements.length;
@@ -1153,7 +1086,7 @@ Provide specific diagram concepts that would work well in educational video cont
     return { uploaded, total, percentage };
   }
 
-  // 🔄 UPDATE IMAGE UPLOAD STATUS
+  // Update image upload status
   static updateImageUploadStatus(
     plan: ImageEmbeddingPlan,
     imageId: string,
@@ -1178,9 +1111,9 @@ Provide specific diagram concepts that would work well in educational video cont
   }
 }
 
-// 🎯 USER-PROVIDED IMAGE MANAGEMENT
+// User-provided image management
 export class UserImageManager {
-  // 📝 CREATE USER-PROVIDED IMAGE OBJECT
+  // Create user image
   static createUserImage(
     imagePath: string,
     label: string,
@@ -1202,7 +1135,7 @@ export class UserImageManager {
     };
   }
 
-  // 📋 VALIDATE USER-PROVIDED IMAGES
+  // Validate user images
   static validateUserImages(images: UserProvidedImage[]): { valid: UserProvidedImage[]; invalid: string[] } {
     const valid: UserProvidedImage[] = [];
     const invalid: string[] = [];
@@ -1224,7 +1157,7 @@ export class UserImageManager {
     return { valid, invalid };
   }
 
-  // 💾 SAVE USER IMAGES TO FILE
+  // Save user images to file
   static saveUserImages(images: UserProvidedImage[], sessionId: string, outputDir: string = './temp'): string {
     try {
       if (!fs.existsSync(outputDir)) {
@@ -1234,41 +1167,41 @@ export class UserImageManager {
       const filePath = path.join(outputDir, `${sessionId}_user_images.json`);
       fs.writeFileSync(filePath, JSON.stringify(images, null, 2));
 
-      console.log('💾 [USER] User images saved to:', filePath);
+      console.log(' [USER] User images saved to:', filePath);
       return filePath;
 
     } catch (error) {
-      console.error('❌ [USER] Error saving user images:', error);
+      console.error(' [USER] Error saving user images:', error);
       throw new Error(`Failed to save user images: ${error}`);
     }
   }
 
-  // 📖 LOAD USER IMAGES FROM FILE
+  // Load user images from file
   static loadUserImages(filePath: string): UserProvidedImage[] {
     try {
       const content = fs.readFileSync(filePath, 'utf8');
       const images = JSON.parse(content) as UserProvidedImage[];
 
-      // Validate that image files actually exist
       const validImages = images.filter(img => {
         if (!fs.existsSync(img.imagePath)) {
-          console.warn(`⚠️ [USER] Skipping non-existent user image: ${img.label} (${img.imagePath})`);
+          console.warn(` [USER] Skipping non-existent user image: ${img.label} (${img.imagePath})`);
           return false;
         }
         return true;
       });
 
-      console.log(`📖 [USER] User images loaded from: ${filePath} (${validImages.length}/${images.length} valid)`);
+      console.log(` [USER] User images loaded from: ${filePath} (${validImages.length}/${images.length} valid)`);
       return validImages;
 
     } catch (error) {
-      console.error('❌ [USER] Error loading user images:', error);
+      console.error(' [USER] Error loading user images:', error);
       throw new Error(`Failed to load user images: ${error}`);
     }
   }
 }
+// Image embedding service
 export class ImageEmbeddingService {
-  // 🚀 NEW METHOD - GENERATE IMAGE PLAN USING CLEAN TIMESTAMPS FOR BETTER ACCURACY
+  // Generate image plan from clean timestamps
   static async generateImageEmbeddingPlanFromCleanTimestamps(
     sessionId: string,
     dialogues: Array<{ character: string; text: string; audioFile: { filePath: string } }>,
@@ -1277,16 +1210,14 @@ export class ImageEmbeddingService {
     density: 'low' | 'medium' | 'high' | 'ultra' = 'ultra'
   ): Promise<ImageEmbeddingPlan> {
     try {
-      console.log('🎬 [SERVICE] Starting clean timestamp-based image analysis for session:', sessionId);
-      console.log('🎬 [SERVICE] Using WhisperX clean alignment for accurate sentence-level timing');
+      console.log(' [SERVICE] Starting clean timestamp-based image analysis for session:', sessionId);
+      console.log(' [SERVICE] Using WhisperX clean alignment for accurate sentence-level timing');
       if (userProvidedImages?.length) {
-        console.log(`🎬 [SERVICE] Evaluating ${userProvidedImages.length} user-provided images`);
+        console.log(` [SERVICE] Evaluating ${userProvidedImages.length} user-provided images`);
       }
 
-      // Import clean alignment function
       const { getWhisperXCleanAlignment } = await import('./videoGenerator');
 
-      // Process each dialogue to get clean sentence-level timestamps
       const cleanTimestamps: Array<{
         character: string;
         sentences: Array<{
@@ -1299,12 +1230,11 @@ export class ImageEmbeddingService {
       let totalDuration = 0;
 
       for (const dialogue of dialogues) {
-        console.log(`🎯 [SERVICE] Processing clean alignment for: "${dialogue.text.substring(0, 50)}..."`);
+        console.log(` [SERVICE] Processing clean alignment for: "${dialogue.text.substring(0, 50)}..."`);
 
         const cleanResult = await getWhisperXCleanAlignment(dialogue.audioFile.filePath, dialogue.text);
 
         if (cleanResult.success && cleanResult.sentences) {
-          // Adjust timestamps to cumulative timeline
           const adjustedSentences = cleanResult.sentences.map(sentence => ({
             ...sentence,
             start: sentence.start + totalDuration,
@@ -1318,9 +1248,8 @@ export class ImageEmbeddingService {
 
           totalDuration += cleanResult.total_duration || 0;
         } else {
-          console.warn(`⚠️ [SERVICE] Failed to get clean timestamps for dialogue: ${cleanResult.error}`);
-          
-          // Fallback to basic duration estimation
+          console.warn(` [SERVICE] Failed to get clean timestamps for dialogue: ${cleanResult.error}`);
+
           const ffmpeg = require('fluent-ffmpeg');
           const audioDuration = await new Promise<number>((resolve, reject) => {
             ffmpeg.ffprobe(dialogue.audioFile.filePath, (err: any, metadata: any) => {
@@ -1329,7 +1258,6 @@ export class ImageEmbeddingService {
             });
           });
 
-          // Create a single sentence covering the entire dialogue
           cleanTimestamps.push({
             character: dialogue.character,
             sentences: [{
@@ -1343,9 +1271,8 @@ export class ImageEmbeddingService {
         }
       }
 
-      console.log(`📊 [SERVICE] Processed clean timestamps: ${cleanTimestamps.length} dialogues, ${totalDuration.toFixed(2)}s total duration`);
+      console.log(` [SERVICE] Processed clean timestamps: ${cleanTimestamps.length} dialogues, ${totalDuration.toFixed(2)}s total duration`);
 
-      // Convert clean timestamps to ASS-like format for existing analysis pipeline
       const assLikeData: AssFileData = {
         entries: cleanTimestamps.flatMap(dialogue =>
           dialogue.sentences.map(sentence => ({
@@ -1362,27 +1289,25 @@ export class ImageEmbeddingService {
         }
       };
 
-      // 🤖 ENHANCED AI ANALYSIS WITH GOOGLE SEARCH AND USER IMAGES
       const imagePlan = await ImageEmbeddingAnalyzer.analyzeDialogueForImages(sessionId, assLikeData, topic, userProvidedImages);
 
-      // 💾 SAVE PLAN TO FILE
       const planFilePath = await ImageEmbeddingAnalyzer.saveImagePlan(imagePlan);
 
-      console.log('✅ [SERVICE] Clean timestamp-based image plan generated successfully');
-      console.log(`📊 [SERVICE] Plan includes ${imagePlan.summary.totalImages} technical diagrams for maximum educational impact`);
+      console.log(' [SERVICE] Clean timestamp-based image plan generated successfully');
+      console.log(` [SERVICE] Plan includes ${imagePlan.summary.totalImages} technical diagrams for maximum educational impact`);
       if (userProvidedImages?.length) {
-        console.log(`📊 [SERVICE] ${imagePlan.summary.userProvidedUsed} user-provided images incorporated`);
+        console.log(` [SERVICE] ${imagePlan.summary.userProvidedUsed} user-provided images incorporated`);
       }
 
       return imagePlan;
 
     } catch (error) {
-      console.error('❌ [SERVICE] Error generating clean timestamp-based image embedding plan:', error);
+      console.error(' [SERVICE] Error generating clean timestamp-based image embedding plan:', error);
       throw new Error(`Failed to generate image embedding plan: ${error}`);
     }
   }
 
-  // 🚀 ORIGINAL METHOD - ANALYZE AND GENERATE IMAGE PLAN WITH USER-PROVIDED IMAGES (ASS-based)
+  // Generate image embedding plan
   static async generateImageEmbeddingPlan(
     sessionId: string,
     assFilePath: string,
@@ -1391,50 +1316,47 @@ export class ImageEmbeddingService {
     density: 'low' | 'medium' | 'high' | 'ultra' = 'ultra'
   ): Promise<ImageEmbeddingPlan> {
     try {
-      console.log('🎬 [SERVICE] Starting enhanced technical diagram analysis for session:', sessionId);
-      console.log('🎬 [SERVICE] Using ultra-high density for maximum technical visualization');
+      console.log(' [SERVICE] Starting enhanced technical diagram analysis for session:', sessionId);
+      console.log(' [SERVICE] Using ultra-high density for maximum technical visualization');
       if (userProvidedImages?.length) {
-        console.log(`🎬 [SERVICE] Evaluating ${userProvidedImages.length} user-provided images`);
+        console.log(` [SERVICE] Evaluating ${userProvidedImages.length} user-provided images`);
       }
 
-      // 📖 READ AND PARSE ASS FILE
       const assContent = fs.readFileSync(assFilePath, 'utf8');
       const assData = AssFileProcessor.parseAssFile(assContent);
 
-      console.log(`📊 [SERVICE] Parsed ASS file: ${assData.entries.length} dialogue entries, ${assData.metadata.duration}s duration`);
+      console.log(` [SERVICE] Parsed ASS file: ${assData.entries.length} dialogue entries, ${assData.metadata.duration}s duration`);
 
-      // 🤖 ENHANCED AI ANALYSIS WITH GOOGLE SEARCH AND USER IMAGES
       const imagePlan = await ImageEmbeddingAnalyzer.analyzeDialogueForImages(sessionId, assData, topic, userProvidedImages);
 
-      // 💾 SAVE PLAN TO FILE
       const planFilePath = await ImageEmbeddingAnalyzer.saveImagePlan(imagePlan);
 
-      console.log('✅ [SERVICE] Enhanced technical diagram plan generated successfully');
-      console.log(`📊 [SERVICE] Plan includes ${imagePlan.summary.totalImages} technical diagrams for maximum educational impact`);
+      console.log(' [SERVICE] Enhanced technical diagram plan generated successfully');
+      console.log(` [SERVICE] Plan includes ${imagePlan.summary.totalImages} technical diagrams for maximum educational impact`);
       if (userProvidedImages?.length) {
-        console.log(`📊 [SERVICE] ${imagePlan.summary.userProvidedUsed} user-provided images incorporated`);
+        console.log(` [SERVICE] ${imagePlan.summary.userProvidedUsed} user-provided images incorporated`);
       }
 
       return imagePlan;
 
     } catch (error) {
-      console.error('❌ [SERVICE] Error generating enhanced image embedding plan:', error);
+      console.error(' [SERVICE] Error generating enhanced image embedding plan:', error);
       throw new Error(`Failed to generate image embedding plan: ${error}`);
     }
   }
 
-  // 📋 FORMAT ENHANCED PLAN FOR USER DISPLAY
+  // Format plan for user display
   static formatPlanForUser(plan: ImageEmbeddingPlan): string {
     const progress = ImageEmbeddingAnalyzer.getUploadProgress(plan);
 
-    let output = `🎨 **ENHANCED IMAGE EMBEDDING PLAN FOR SESSION: ${plan.sessionId}**\n\n`;
-    output += `🚀 **ENHANCED FEATURES:**\n`;
+    let output = ` **ENHANCED IMAGE EMBEDDING PLAN FOR SESSION: ${plan.sessionId}**\n\n`;
+    output += ` **ENHANCED FEATURES:**\n`;
     output += `• Technical diagram focus (architectures, workflows, comparisons)\n`;
     output += `• AI-determined contextual image duration (3-15 seconds based on concept explanation length)\n`;
     output += `• Google search-powered technical research\n`;
     output += `• Quality over quantity - strategic technical visualizations\n\n`;
 
-    output += `📊 **SUMMARY:**\n`;
+    output += ` **SUMMARY:**\n`;
     output += `- Total Images Required: ${plan.summary.totalImages}\n`;
     output += `- High Priority: ${plan.summary.highPriority}\n`;
     output += `- Medium Priority: ${plan.summary.mediumPriority}\n`;
@@ -1447,52 +1369,51 @@ export class ImageEmbeddingService {
     output += `- Video Duration: ${plan.totalDuration.toFixed(1)}s\n`;
     output += `- Images per Minute: ${((plan.summary.totalImages / plan.totalDuration) * 60).toFixed(1)}\n\n`;
 
-    output += `📈 **UPLOAD PROGRESS:** ${progress.uploaded}/${progress.total} (${progress.percentage}%)\n\n`;
+    output += ` **UPLOAD PROGRESS:** ${progress.uploaded}/${progress.total} (${progress.percentage}%)\n\n`;
 
-    output += `🖼️ **REQUIRED IMAGES (ULTRA-DENSITY VISUAL EXPERIENCE):**\n\n`;
+    output += ` **REQUIRED IMAGES (ULTRA-DENSITY VISUAL EXPERIENCE):**\n\n`;
 
     plan.imageRequirements.forEach((req, index) => {
-      const status = req.uploaded ? '✅ UPLOADED' : '⏳ PENDING';
-      const priorityEmoji = req.priority === 'high' ? '🔴' : req.priority === 'medium' ? '🟡' : '🟢';
+      const status = req.uploaded ? ' UPLOADED' : ' PENDING';
+      const priorityEmoji = req.priority === 'high' ? '' : req.priority === 'medium' ? '' : '';
       const typeEmoji = {
-        'architecture': '🏗️',
-        'process': '⚙️',
-        'comparison': '⚖️',
-        'diagram': '�',
-        'workflow': '�',
-        'infrastructure': '�',
-        'lifecycle': '�'
-      }[req.imageType] || '🖼️';
+        'architecture': '',
+        'process': '',
+        'comparison': '',
+        'diagram': '',
+        'workflow': '',
+        'infrastructure': '',
+        'lifecycle': ''
+      }[req.imageType] || '';
 
-      // Special formatting for Introduction image
       if (req.title === 'Introduction') {
-        output += `${index + 1}. **${req.title}** ${status} 🎬 **(THUMBNAIL - OPTIONAL)**\n`;
-        output += `   🎯 Special: Acts as video thumbnail/opening image\n`;
+        output += `${index + 1}. **${req.title}** ${status}  **(THUMBNAIL - OPTIONAL)**\n`;
+        output += `    Special: Acts as video thumbnail/opening image\n`;
         output += `   ${priorityEmoji} Priority: ${req.priority.toUpperCase()}\n`;
         output += `   ${typeEmoji} Type: ${req.imageType}\n`;
-        output += `   🕒 Timestamp: ${req.timestamp.toFixed(1)}s (${req.contextualDuration}s display)\n`;
-        output += `   👤 Character: ${req.character}\n`;
-        output += `   � Context: "${req.dialogueText.substring(0, 60)}${req.dialogueText.length > 60 ? '...' : ''}"\n`;
-        output += `   🎨 AI Description: ${req.description}\n`;
-        output += `   ℹ️ **Note: If not uploaded, no default image will be added**\n\n`;
+        output += `    Timestamp: ${req.timestamp.toFixed(1)}s (${req.contextualDuration}s display)\n`;
+        output += `    Character: ${req.character}\n`;
+        output += `    Context: "${req.dialogueText.substring(0, 60)}${req.dialogueText.length > 60 ? '...' : ''}"\n`;
+        output += `    AI Description: ${req.description}\n`;
+        output += `    **Note: If not uploaded, no default image will be added**\n\n`;
       } else {
         output += `${index + 1}. **${req.title}** ${status}\n`;
         output += `   ${priorityEmoji} Priority: ${req.priority.toUpperCase()}\n`;
         output += `   ${typeEmoji} Type: ${req.imageType}\n`;
-        output += `   🕒 Timestamp: ${req.timestamp.toFixed(1)}s (${req.contextualDuration || 3}s display)\n`;
-        output += `   👤 Character: ${req.character}\n`;
-        output += `   � Context: "${req.dialogueText.substring(0, 60)}${req.dialogueText.length > 60 ? '...' : ''}"\n`;
-        output += `   🎨 AI Description: ${req.description}\n\n`;
+        output += `    Timestamp: ${req.timestamp.toFixed(1)}s (${req.contextualDuration || 3}s display)\n`;
+        output += `    Character: ${req.character}\n`;
+        output += `    Context: "${req.dialogueText.substring(0, 60)}${req.dialogueText.length > 60 ? '...' : ''}"\n`;
+        output += `    AI Description: ${req.description}\n\n`;
       }
     });
 
-    output += `📤 **NEXT STEPS:**\n`;
+    output += ` **NEXT STEPS:**\n`;
     output += `1. Upload the required images using the ultra-concise titles above\n`;
-    output += `2. 🎬 The "Introduction" image is optional - acts as a thumbnail/opening image\n`;
+    output += `2.  The "Introduction" image is optional - acts as a thumbnail/opening image\n`;
     output += `3. Each image will display for their specified duration at its timestamp\n`;
     output += `4. The system will create maximum visual impact with frequent, creative imagery\n\n`;
 
-    output += `💡 **ENHANCED TIPS:**\n`;
+    output += ` **ENHANCED TIPS:**\n`;
     output += `• Images focus on technical diagrams and architectures\n`;
     output += `• Introduction image creates engaging video thumbnail effect\n`;
     output += `• Each image stays longer for better technical understanding\n`;
@@ -1500,43 +1421,40 @@ export class ImageEmbeddingService {
     output += `• Quality technical diagrams enhance learning retention\n`;
     output += `• Strategic placement maximizes educational impact\n`;
 
-    // Add user-provided images section if any
     if (plan.userProvidedImages?.length) {
-      output += `\n\n👤 **USER-PROVIDED IMAGES EVALUATION:**\n\n`;
+      output += `\n\n **USER-PROVIDED IMAGES EVALUATION:**\n\n`;
 
-      // Show detailed AI decisions if available
       if (plan.userImageDecisions?.length) {
-        output += `🤖 **AI EVALUATION RESULTS:**\n`;
+        output += ` **AI EVALUATION RESULTS:**\n`;
         plan.userImageDecisions.forEach((decision, index) => {
-          const status = decision.useImage ? '✅ ACCEPTED' : '❌ REJECTED';
-          const priorityEmoji = decision.useImage ? '🎯' : '🚫';
+          const status = decision.useImage ? ' ACCEPTED' : ' REJECTED';
+          const priorityEmoji = decision.useImage ? '' : '';
 
           output += `${index + 1}. **${decision.userImageLabel}** ${status}\n`;
           output += `   ${priorityEmoji} Decision: ${decision.useImage ? 'Will be included in video' : 'Not suitable for this content'}\n`;
-          output += `   💭 AI Reasoning: ${decision.reasoning}\n`;
+          output += `    AI Reasoning: ${decision.reasoning}\n`;
           if (decision.useImage && decision.timestamp) {
-            output += `   🕒 Will appear at: ${decision.timestamp.toFixed(1)}s\n`;
+            output += `    Will appear at: ${decision.timestamp.toFixed(1)}s\n`;
           }
           output += `\n`;
         });
         output += `\n`;
       }
 
-      // Show summary of all user images
-      output += `📋 **ALL USER IMAGES SUMMARY:**\n`;
+      output += ` **ALL USER IMAGES SUMMARY:**\n`;
       plan.userProvidedImages.forEach((userImg, index) => {
         const isUsed = plan.imageRequirements.some(req => req.title === userImg.label && req.imagePath === userImg.imagePath);
-        const status = isUsed ? '✅ USED' : '❌ NOT USED';
-        const priorityEmoji = userImg.priority === 'high' ? '🔴' : userImg.priority === 'medium' ? '🟡' : '🟢';
+        const status = isUsed ? ' USED' : ' NOT USED';
+        const priorityEmoji = userImg.priority === 'high' ? '' : userImg.priority === 'medium' ? '' : '';
 
         output += `${index + 1}. **${userImg.label}** ${status}\n`;
         output += `   ${priorityEmoji} Priority: ${userImg.priority?.toUpperCase() || 'MEDIUM'}\n`;
         if (userImg.preferredTimestamp) {
-          output += `   🕒 Preferred Timestamp: ${userImg.preferredTimestamp.toFixed(1)}s\n`;
+          output += `    Preferred Timestamp: ${userImg.preferredTimestamp.toFixed(1)}s\n`;
         }
-        output += `   📁 Path: ${userImg.imagePath}\n`;
+        output += `    Path: ${userImg.imagePath}\n`;
         if (userImg.description) {
-          output += `   📝 Description: ${userImg.description}\n`;
+          output += `    Description: ${userImg.description}\n`;
         }
         output += `\n`;
       });
@@ -1545,7 +1463,7 @@ export class ImageEmbeddingService {
     return output;
   }
 
-  // 🎬 GENERATE FINAL VIDEO WITH ENHANCED EMBEDDED IMAGES
+  // Generate video with embedded images
   static async generateVideoWithEmbeddedImages(
     sessionId: string,
     backgroundVideoPath: string,
@@ -1554,62 +1472,57 @@ export class ImageEmbeddingService {
     backgroundVideoSpeed: number = 1.10
   ): Promise<{ success: boolean; videoPath?: string; error?: string }> {
     try {
-      console.log('🎨 [SERVICE] ENHANCED VIDEO GENERATION with technical diagram embeddings');
-      console.log('🎨 [SERVICE] Session ID:', sessionId);
-      console.log('🎨 [SERVICE] Background video:', backgroundVideoPath);
-      console.log('🎨 [SERVICE] Device:', device);
-      console.log('🚀 [SERVICE] Background video speed:', backgroundVideoSpeed);
+      console.log(' [SERVICE] ENHANCED VIDEO GENERATION with technical diagram embeddings');
+      console.log(' [SERVICE] Session ID:', sessionId);
+      console.log(' [SERVICE] Background video:', backgroundVideoPath);
+      console.log(' [SERVICE] Device:', device);
+      console.log(' [SERVICE] Background video speed:', backgroundVideoSpeed);
 
-      // Debug: Log all image requirements
-      console.log('🔍 [SERVICE] Image requirements:');
+      console.log(' [SERVICE] Image requirements:');
       imagePlan.imageRequirements?.forEach((req, index) => {
         console.log(`   ${index + 1}. ${req.title} (${req.imageType}) - uploaded: ${req.uploaded} - path: ${req.imagePath || 'NO PATH'}`);
       });
       const uploadedImages = imagePlan.imageRequirements.filter(req => req.uploaded && req.imagePath);
       const missingImages = imagePlan.imageRequirements.filter(req => !req.uploaded || !req.imagePath);
 
-      // Check for user-provided images that are NOT already in the image requirements
-      // (to avoid double-loading approved user images)
       let userProvidedImages: UserProvidedImage[] = [];
       try {
         const userImagesFile = path.join(process.cwd(), 'temp', `${sessionId}_user_images.json`);
         if (fs.existsSync(userImagesFile)) {
           const allUserImages = UserImageManager.loadUserImages(userImagesFile);
-          
-          // Only include user images that are NOT already in the image requirements
-          // (approved user images are already in imageRequirements with proper timestamps)
+
           const approvedImagePaths = new Set(
             imagePlan.imageRequirements
               .filter(req => req.imagePath)
               .map(req => req.imagePath)
           );
           userProvidedImages = allUserImages.filter(img => !approvedImagePaths.has(img.imagePath));
-          console.log(`👤 [SERVICE] Found ${allUserImages.length} total user images, ${userProvidedImages.length} unapproved (already approved: ${approvedImagePaths.size})`);
+          console.log(` [SERVICE] Found ${allUserImages.length} total user images, ${userProvidedImages.length} unapproved (already approved: ${approvedImagePaths.size})`);
         }
       } catch (error) {
-        console.warn('⚠️ [SERVICE] Could not load user-provided images:', error);
+        console.warn(' [SERVICE] Could not load user-provided images:', error);
       }
 
       const totalAvailableImages = uploadedImages.length + userProvidedImages.length;
 
-      console.log(`📊 [SERVICE] Image status: ${uploadedImages.length} uploaded, ${userProvidedImages.length} user-provided, ${missingImages.length} missing`);
-      console.log('🔍 [SERVICE] Uploaded images:');
+      console.log(` [SERVICE] Image status: ${uploadedImages.length} uploaded, ${userProvidedImages.length} user-provided, ${missingImages.length} missing`);
+      console.log(' [SERVICE] Uploaded images:');
       uploadedImages.forEach((img, index) => {
         console.log(`   ${index + 1}. ${img.title} (${img.imageType}) - ${img.timestamp}s - ${img.imagePath}`);
       });
-      console.log('🔍 [SERVICE] User-provided images:');
+      console.log(' [SERVICE] User-provided images:');
       userProvidedImages.forEach((img, index) => {
         console.log(`   ${index + 1}. ${img.label} - ${img.imagePath} - timestamp: ${img.preferredTimestamp || 'none'}`);
       });
-      console.log('🔍 [SERVICE] Missing images:');
+      console.log(' [SERVICE] Missing images:');
       missingImages.forEach((img, index) => {
         console.log(`   ${index + 1}. ${img.title} (${img.imageType}) - uploaded: ${img.uploaded} - path: ${img.imagePath || 'NO PATH'}`);
       });
-      console.log(`📊 [SERVICE] Total available images: ${totalAvailableImages}`);
-      console.log(`📊 [SERVICE] Expected images per minute: ${((imagePlan.summary.totalImages / imagePlan.totalDuration) * 60).toFixed(1)}`);
+      console.log(` [SERVICE] Total available images: ${totalAvailableImages}`);
+      console.log(` [SERVICE] Expected images per minute: ${((imagePlan.summary.totalImages / imagePlan.totalDuration) * 60).toFixed(1)}`);
 
       if (missingImages.length > 0) {
-        console.log('⚠️ [SERVICE] Proceeding with available images. Missing AI-generated images will be skipped.');
+        console.log(' [SERVICE] Proceeding with available images. Missing AI-generated images will be skipped.');
         missingImages.slice(0, 5).forEach(img => { // Show first 5 missing
           console.log(`   - ${img.title} (${img.imageType}, ${img.priority} priority)`);
         });
@@ -1619,31 +1532,27 @@ export class ImageEmbeddingService {
       }
 
       if (userProvidedImages.length > 0) {
-        console.log('👤 [SERVICE] User-provided images available:');
+        console.log(' [SERVICE] User-provided images available:');
         userProvidedImages.forEach(img => {
           console.log(`   - ${img.label} (${img.priority} priority) - ${img.description || 'No description'}`);
         });
       }
 
-      // Check if we have an existing ASS file from analysis that we can reuse
       const existingAssPath = path.join(process.cwd(), 'temp', `${sessionId}_subtitles.ass`);
 
       if (fs.existsSync(existingAssPath)) {
-        console.log('🎯 [SERVICE] Found existing ASS file from analysis, will reuse for video generation');
-        console.log('🎯 [SERVICE] Existing ASS path:', existingAssPath);
+        console.log(' [SERVICE] Found existing ASS file from analysis, will reuse for video generation');
+        console.log(' [SERVICE] Existing ASS path:', existingAssPath);
 
-        // Copy the existing ASS file to the expected location for video generation
         const videoAssPath = path.join(process.cwd(), 'generated_videos', `${sessionId}_styled_subtitles.ass`);
         fs.copyFileSync(existingAssPath, videoAssPath);
-        console.log('✅ [SERVICE] Reused existing ASS file for video generation');
+        console.log(' [SERVICE] Reused existing ASS file for video generation');
       } else {
-        console.log('⚠️ [SERVICE] No existing ASS file found, video generator will create new one');
+        console.log(' [SERVICE] No existing ASS file found, video generator will create new one');
       }
 
-      // Import the video generator service
       const { generateVideoWithSubtitles } = await import('./videoGenerator');
 
-      // Generate the base video with subtitles
       const baseVideoResult = await generateVideoWithSubtitles(sessionId, backgroundVideoPath, device, backgroundVideoSpeed);
 
       if (!baseVideoResult.success) {
@@ -1653,12 +1562,11 @@ export class ImageEmbeddingService {
         };
       }
 
-      // 🎨 IMPLEMENT ACTUAL IMAGE EMBEDDING
-      console.log('🎨 [SERVICE] Base video generated successfully.');
-      console.log('🎨 [SERVICE] Now implementing image embedding...');
+      console.log(' [SERVICE] Base video generated successfully.');
+      console.log(' [SERVICE] Now implementing image embedding...');
 
       if (totalAvailableImages === 0) {
-        console.log('🎨 [SERVICE] No uploaded images found (AI requirements or user-provided), returning base video');
+        console.log(' [SERVICE] No uploaded images found (AI requirements or user-provided), returning base video');
         if (!baseVideoResult.videoPath) {
           return {
             success: false,
@@ -1672,7 +1580,6 @@ export class ImageEmbeddingService {
         };
       }
 
-      // Generate video with embedded images
       if (!baseVideoResult.videoPath) {
         return {
           success: false,
@@ -1680,18 +1587,17 @@ export class ImageEmbeddingService {
         };
       }
 
-      // Check if we have any uploaded images to embed
       if (totalAvailableImages === 0) {
-        console.log('🎨 [SERVICE] No uploaded images found (AI requirements or user-provided) - returning enhanced base video with subtitles');
-        console.log('💡 [SERVICE] Upload technical diagram images to unlock enhanced educational visualization');
+        console.log(' [SERVICE] No uploaded images found (AI requirements or user-provided) - returning enhanced base video with subtitles');
+        console.log(' [SERVICE] Upload technical diagram images to unlock enhanced educational visualization');
         return {
           success: true,
           videoPath: baseVideoResult.videoPath
         };
       }
 
-      console.log('🎨 [SERVICE] Proceeding with technical diagram embedding...');
-      console.log(`🎨 [SERVICE] Will embed ${totalAvailableImages} images (${uploadedImages.length} AI-generated + ${userProvidedImages.length} user-provided) for maximum educational impact`);
+      console.log(' [SERVICE] Proceeding with technical diagram embedding...');
+      console.log(` [SERVICE] Will embed ${totalAvailableImages} images (${uploadedImages.length} AI-generated + ${userProvidedImages.length} user-provided) for maximum educational impact`);
 
       const finalVideoResult = await this.embedImagesInVideo(
         baseVideoResult.videoPath,
@@ -1703,7 +1609,7 @@ export class ImageEmbeddingService {
       return finalVideoResult;
 
     } catch (error) {
-      console.error('❌ [SERVICE] Error generating video with embedded images:', error);
+      console.error(' [SERVICE] Error generating video with embedded images:', error);
       return {
         success: false,
         error: `Failed to generate video with embedded images: ${error}`
@@ -1711,7 +1617,7 @@ export class ImageEmbeddingService {
     }
   }
 
-  // 🎨 EMBED IMAGES IN VIDEO USING FFMPEG
+  // Embed images in video
   static async embedImagesInVideo(
     baseVideoPath: string,
     uploadedImages: ImageRequirement[],
@@ -1719,28 +1625,23 @@ export class ImageEmbeddingService {
     userProvidedImages: UserProvidedImage[] = []
   ): Promise<{ success: boolean; videoPath?: string; error?: string; videoFile?: { filename: string; path: string; fileSize: number; sessionId: string } }> {
     try {
-      console.log('🎨 [EMBED] Starting image embedding process');
-      console.log(`🎨 [EMBED] Base video: ${baseVideoPath}`);
-      console.log(`🎨 [EMBED] AI-generated images to embed: ${uploadedImages.length}`);
-      console.log(`🎨 [EMBED] User-provided images to embed: ${userProvidedImages.length}`);
+      console.log(' [EMBED] Starting image embedding process');
+      console.log(` [EMBED] Base video: ${baseVideoPath}`);
+      console.log(` [EMBED] AI-generated images to embed: ${uploadedImages.length}`);
+      console.log(` [EMBED] User-provided images to embed: ${userProvidedImages.length}`);
 
-      // Filter out AI-generated images without valid paths
-      // Special handling: Skip Introduction image if not uploaded (no fallback required)
       const validAiImages = uploadedImages.filter(img => {
-        // If this is the Introduction image and it's not uploaded, skip it entirely
         if (img.title === 'Introduction' && (!img.uploaded || !img.imagePath)) {
-          console.log('🎬 [EMBED] Skipping Introduction image - not uploaded (acts as thumbnail suggestion only)');
+          console.log(' [EMBED] Skipping Introduction image - not uploaded (acts as thumbnail suggestion only)');
           return false;
         }
         return img.imagePath;
       });
-      console.log('🔍 [EMBED] Valid AI images:');
+      console.log(' [EMBED] Valid AI images:');
       validAiImages.forEach((img, index) => {
         console.log(`   ${index + 1}. ${img.title} - ${img.timestamp}s - ${img.imagePath}`);
       });
 
-      // User-provided images: Get the ones with AI-decided timestamps from userProvidedImages
-      // These have the correct timestamps from the AI analysis
       let validUserImages = userProvidedImages.filter(img =>
         img.imagePath &&
         fs.existsSync(img.imagePath) &&
@@ -1748,37 +1649,34 @@ export class ImageEmbeddingService {
         img.preferredTimestamp !== undefined && img.preferredTimestamp !== null // Only include images with proper timestamps
       );
 
-      // DEDUPLICATE: Only keep one image per label/timestamp combination
-      // This prevents multiple identical images from appearing at the same time
       const seenCombinations = new Set<string>();
       validUserImages = validUserImages.filter(img => {
         const combinationKey = `${img.label.toLowerCase()}_${Math.round(img.preferredTimestamp || 0)}`;
         if (seenCombinations.has(combinationKey)) {
-          console.log(`⚠️ [EMBED] Skipping duplicate: ${img.label} at ${img.preferredTimestamp}s (already have one)`);
+          console.log(` [EMBED] Skipping duplicate: ${img.label} at ${img.preferredTimestamp}s (already have one)`);
           return false;
         }
         seenCombinations.add(combinationKey);
         return true;
       });
 
-      console.log('🔍 [EMBED] Valid user images (with timestamps, deduplicated):');
+      console.log(' [EMBED] Valid user images (with timestamps, deduplicated):');
       validUserImages.forEach((img, index) => {
         console.log(`   ${index + 1}. ${img.label} - ${img.preferredTimestamp}s - ${img.imagePath}`);
       });
-      console.log('🔍 [EMBED] Filtered out user images:');
+      console.log(' [EMBED] Filtered out user images:');
       userProvidedImages.filter(img => !validUserImages.some(valid => valid.id === img.id)).forEach((img, index) => {
         console.log(`   ${index + 1}. ${img.label} - timestamp: ${img.preferredTimestamp || 'none'} - path: ${img.imagePath} - exists: ${fs.existsSync(img.imagePath)}`);
       });
 
-      console.log(`🎨 [EMBED] Valid AI-generated images: ${validAiImages.length}`);
-      console.log(`🎨 [EMBED] Valid user-provided images: ${validUserImages.length}`);
+      console.log(` [EMBED] Valid AI-generated images: ${validAiImages.length}`);
+      console.log(` [EMBED] Valid user-provided images: ${validUserImages.length}`);
 
       const totalValidImages = validAiImages.length + validUserImages.length;
-      console.log(`🎨 [EMBED] Total valid images: ${totalValidImages}`);
+      console.log(` [EMBED] Total valid images: ${totalValidImages}`);
 
-      // If no valid images, return the base video
       if (totalValidImages === 0) {
-        console.log('🎨 [EMBED] No valid images to embed, returning base video');
+        console.log(' [EMBED] No valid images to embed, returning base video');
         return {
           success: true,
           videoPath: baseVideoPath,
@@ -1791,16 +1689,14 @@ export class ImageEmbeddingService {
         };
       }
 
-      // Validate base video exists
       if (!fs.existsSync(baseVideoPath)) {
-        console.error(`❌ [EMBED] Base video file does not exist: ${baseVideoPath}`);
+        console.error(` [EMBED] Base video file does not exist: ${baseVideoPath}`);
         return {
           success: false,
           error: `Base video file not found: ${baseVideoPath}`
         };
       }
 
-      // Validate image files exist and are readable
       const allImagesToValidate = [
         ...validAiImages.map(img => ({ path: img.imagePath!, type: 'ai', title: img.title })),
         ...validUserImages.map(img => ({ path: img.imagePath, type: 'user', title: img.label }))
@@ -1808,17 +1704,16 @@ export class ImageEmbeddingService {
 
       for (const img of allImagesToValidate) {
         if (!fs.existsSync(img.path)) {
-          console.error(`❌ [EMBED] Image file does not exist: ${img.path}`);
+          console.error(` [EMBED] Image file does not exist: ${img.path}`);
           return {
             success: false,
             error: `Image file not found: ${img.path}`
           };
         }
 
-        // Check file size (basic validation)
         const stats = fs.statSync(img.path);
         if (stats.size === 0) {
-          console.error(`❌ [EMBED] Image file is empty: ${img.path}`);
+          console.error(` [EMBED] Image file is empty: ${img.path}`);
           return {
             success: false,
             error: `Image file is empty: ${img.path}`
@@ -1826,18 +1721,14 @@ export class ImageEmbeddingService {
         }
       }
 
-      // Set FFmpeg path if needed
       const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
       ffmpeg.setFfmpegPath(ffmpegPath);
 
-      // Output path for final video
       const outputVideoPath = path.join(process.cwd(), 'generated_videos', `${sessionId}_with_images.mp4`);
 
-      // Build FFmpeg command with image overlays
       let ffmpegCommand = ffmpeg().input(baseVideoPath);
-      console.log(`🎨 [EMBED] Added base video input: ${baseVideoPath}`);
+      console.log(` [EMBED] Added base video input: ${baseVideoPath}`);
 
-      // Combine and sort all images by timestamp
       const allImages = [
         ...validAiImages.map(img => ({
           path: img.imagePath!,
@@ -1857,90 +1748,76 @@ export class ImageEmbeddingService {
         }))
       ].sort((a, b) => a.timestamp - b.timestamp); // Sort by timestamp
 
-      console.log('🎨 [EMBED] Image schedule:');
+      console.log(' [EMBED] Image schedule:');
       allImages.forEach((img, index) => {
         console.log(`   ${index + 1}. ${img.title} (${img.type}) - ${img.timestamp.toFixed(1)}s - duration: ${(img.contextualDuration || 8).toFixed(1)}s`);
       });
 
-      // Add image inputs
       allImages.forEach((image, index) => {
         ffmpegCommand = ffmpegCommand.input(image.path);
-        console.log(`🎨 [EMBED] Added image input ${index + 1}: ${image.path} (${image.title}) - ${image.type}`);
+        console.log(` [EMBED] Added image input ${index + 1}: ${image.path} (${image.title}) - ${image.type}`);
       });
 
-      // Build filter chain for image overlays
       let filterChain = '';
 
-      // Add image overlay filters
       allImages.forEach((image, index) => {
         const inputIndex = index + 1; // FFmpeg inputs start at 1 (0 is base video)
         const startTime = image.timestamp;
 
-        // Use AI-determined contextual duration instead of spacing-based calculation
         let duration = image.contextualDuration || 6; // Use AI-determined duration, fallback to 6 seconds
-        
-        // Optional: Still respect spacing constraints to prevent overlaps
+
         if (index < allImages.length - 1) {
           const nextImageTime = allImages[index + 1].timestamp;
           const timeUntilNext = nextImageTime - startTime;
-          
-          // If AI duration would cause overlap, reduce it
+
           if (duration > timeUntilNext) {
             duration = Math.max(timeUntilNext * 0.9, 2); // Leave small gap, minimum 2 seconds
-            console.log(`🎨 [EMBED] Reduced duration for ${image.title} from ${image.contextualDuration}s to ${duration.toFixed(1)}s to prevent overlap`);
+            console.log(` [EMBED] Reduced duration for ${image.title} from ${image.contextualDuration}s to ${duration.toFixed(1)}s to prevent overlap`);
           }
         }
 
         const endTime = startTime + duration;
 
-        console.log(`🎨 [EMBED] Image ${index + 1}: ${image.title} - Start: ${startTime.toFixed(1)}s, Duration: ${duration.toFixed(1)}s, End: ${endTime.toFixed(1)}s`);
+        console.log(` [EMBED] Image ${index + 1}: ${image.title} - Start: ${startTime.toFixed(1)}s, Duration: ${duration.toFixed(1)}s, End: ${endTime.toFixed(1)}s`);
         if (image.relevanceReasoning) {
-          console.log(`🧠 [AI-DURATION] ${image.relevanceReasoning}`);
+          console.log(` [AI-DURATION] ${image.relevanceReasoning}`);
         }
 
-        // Scale and position image (top half with fixed size)
         const scaledLabel = `scaled_img_${index}`;
 
         if (index === 0) {
-          // First image overlay - centered in top half with padding
           filterChain += `[${inputIndex}:v]scale=960:720:force_original_aspect_ratio=decrease[${scaledLabel}];[0:v][${scaledLabel}]overlay=(W-w)/2:40:enable='between(t,${startTime},${endTime})'[with_img_${index}]`;
         } else {
-          // Subsequent image overlays - centered in top half with padding
           const prevLabel = `with_img_${index - 1}`;
           filterChain += `;[${inputIndex}:v]scale=960:720:force_original_aspect_ratio=decrease[${scaledLabel}];[${prevLabel}][${scaledLabel}]overlay=(W-w)/2:40:enable='between(t,${startTime},${endTime})'[with_img_${index}]`;
         }
 
-        // Labels are now properly assigned in the if-else block above
         if (index === allImages.length - 1) {
-          // For the last image, we need to output to final_with_images
           filterChain = filterChain.replace(`[with_img_${index}]`, '[final_with_images]');
         }
       });
 
-      console.log('🎨 [EMBED] Generated filter chain for image overlay');
-      console.log(`🎨 [EMBED] Filter complexity: ${allImages.length} images, ${filterChain.length} characters`);
+      console.log(' [EMBED] Generated filter chain for image overlay');
+      console.log(` [EMBED] Filter complexity: ${allImages.length} images, ${filterChain.length} characters`);
 
-      // If no valid images, just copy the video
       if (allImages.length === 0) {
         filterChain = '[0:v]copy[final_with_images]';
-        console.log('🎨 [EMBED] No images to embed, using copy filter');
+        console.log(' [EMBED] No images to embed, using copy filter');
       } else {
-        console.log(`🎨 [EMBED] Generated filter chain for ${allImages.length} image(s)`);
+        console.log(` [EMBED] Generated filter chain for ${allImages.length} image(s)`);
       }
 
-      console.log('🎨 [EMBED] Number of images to embed:', allImages.length);
-      console.log('🎨 [EMBED] Image positioning: Centered horizontally in top half at y=40, 960x720 taller size, maintains aspect ratio');
+      console.log(' [EMBED] Number of images to embed:', allImages.length);
+      console.log(' [EMBED] Image positioning: Centered horizontally in top half at y=40, 960x720 taller size, maintains aspect ratio');
 
-      // Validate filter chain before proceeding
       if (!filterChain || filterChain.trim() === '') {
-        console.error('❌ [EMBED] Empty filter chain generated');
+        console.error(' [EMBED] Empty filter chain generated');
         return {
           success: false,
           error: 'Failed to generate FFmpeg filter chain'
         };
       }
 
-      // Additional validation for multiple images
       if (allImages.length > 1) {
         const expectedLabels = allImages.length - 1; // Should have with_img_0 through with_img_(n-2)
         let labelCount = 0;
@@ -1950,20 +1827,19 @@ export class ImageEmbeddingService {
           }
         }
         if (labelCount !== expectedLabels) {
-          console.warn(`⚠️ [EMBED] Filter chain may have incorrect label count. Expected ${expectedLabels}, found ${labelCount}`);
+          console.warn(` [EMBED] Filter chain may have incorrect label count. Expected ${expectedLabels}, found ${labelCount}`);
         }
       }
 
-      // Execute FFmpeg command
-      console.log('🎨 [EMBED] Starting FFmpeg processing...');
-      console.log(`🎨 [EMBED] Processing ${allImages.length} images with complex overlay filters`);
-      
+      console.log(' [EMBED] Starting FFmpeg processing...');
+      console.log(` [EMBED] Processing ${allImages.length} images with complex overlay filters`);
+
       return new Promise((resolve) => {
         ffmpegCommand
           .outputOptions([
             '-map', '0:a', // Copy audio from base video
             '-map', '[final_with_images]', // Video with overlays
-            '-c:v', 'libx264', // H.264 doesn't support alpha, but overlay handles transparency during processing
+            '-c:v', 'libx264', 
             '-c:a', 'aac',
             '-b:v', '2000k',
             '-b:a', '128k',
@@ -1972,26 +1848,24 @@ export class ImageEmbeddingService {
           ])
           .output(outputVideoPath)
           .on('start', (commandLine: string) => {
-            console.log('🎨 [EMBED] Starting FFmpeg processing...');
+            console.log(' [EMBED] Starting FFmpeg processing...');
           })
           .on('progress', (progress: any) => {
-            // Progress logging removed - only log when done
           })
           .on('end', () => {
-            console.log('✅ [EMBED] Image embedding completed successfully');
-            console.log(`🎨 [EMBED] Output video: ${outputVideoPath}`);
-            console.log(`📊 [EMBED] Successfully embedded ${allImages.length} images:`);
+            console.log(' [EMBED] Image embedding completed successfully');
+            console.log(` [EMBED] Output video: ${outputVideoPath}`);
+            console.log(` [EMBED] Successfully embedded ${allImages.length} images:`);
             allImages.forEach((img, index) => {
               console.log(`   ${index + 1}. ${img.title} (${img.type}) at ${img.timestamp.toFixed(1)}s`);
             });
 
-            // Check if output file exists and has content
             if (fs.existsSync(outputVideoPath)) {
               const stats = fs.statSync(outputVideoPath);
-              console.log(`🎨 [EMBED] Output file size: ${stats.size} bytes`);
+              console.log(` [EMBED] Output file size: ${stats.size} bytes`);
 
               if (stats.size === 0) {
-                console.error('❌ [EMBED] Output file is empty');
+                console.error(' [EMBED] Output file is empty');
                 resolve({
                   success: false,
                   error: 'FFmpeg completed but output file is empty'
@@ -2012,7 +1886,7 @@ export class ImageEmbeddingService {
                 }
               });
             } else {
-              console.error('❌ [EMBED] Output file was not created');
+              console.error(' [EMBED] Output file was not created');
               resolve({
                 success: false,
                 error: 'FFmpeg completed but output file was not created'
@@ -2020,10 +1894,10 @@ export class ImageEmbeddingService {
             }
           })
           .on('error', (err: any) => {
-            console.error('❌ [EMBED] FFmpeg error:', err);
-            console.error('❌ [EMBED] Error message:', err.message);
-            console.error('❌ [EMBED] Error code:', err.code);
-            console.error('❌ [EMBED] Filter chain that failed:', filterChain);
+            console.error(' [EMBED] FFmpeg error:', err);
+            console.error(' [EMBED] Error message:', err.message);
+            console.error(' [EMBED] Error code:', err.code);
+            console.error(' [EMBED] Filter chain that failed:', filterChain);
             resolve({
               success: false,
               error: `FFmpeg embedding failed: ${err.message}`
@@ -2033,7 +1907,7 @@ export class ImageEmbeddingService {
       });
 
     } catch (error) {
-      console.error('❌ [EMBED] Error in image embedding:', error);
+      console.error(' [EMBED] Error in image embedding:', error);
       return {
         success: false,
         error: `Failed to embed images: ${error}`
@@ -2041,7 +1915,6 @@ export class ImageEmbeddingService {
     }
   }
 
-  // CLEAN USER IMAGE ANALYSIS PROMPT (No contamination)
   private static getUserImageAnalysisPrompt = (userImage: UserProvidedImage, dialogueEntries: any[], topic: string) => `
 Analyze this SPECIFIC user-provided image for placement in an educational video about "${topic}":
 
@@ -2054,8 +1927,8 @@ CRITICAL: You must ONLY analyze placement suggestions for THIS SPECIFIC IMAGE. T
 
 Available dialogue segments:
 ${dialogueEntries.map((entry: any, index: number) =>
-  `${index + 1}. [${entry.startTime.toFixed(1)}s-${entry.endTime.toFixed(1)}s] ${entry.character || 'Speaker'}: "${entry.text}"`
-).join('\n')}
+    `${index + 1}. [${entry.startTime.toFixed(1)}s-${entry.endTime.toFixed(1)}s] ${entry.character || 'Speaker'}: "${entry.text}"`
+  ).join('\n')}
 
 ANALYSIS GUIDELINES:
 1. ONLY suggest placements for the image with label "${userImage.label}"
@@ -2076,7 +1949,7 @@ EDUCATIONAL PLACEMENT STRATEGY:
 Return your analysis focusing on how well THIS SPECIFIC user-labeled image matches the dialogue content about "${topic}". Trust the user's labeling and find the best educational placement.
 `;
 
-  // 🎯 USER IMAGE PLACEMENT SUGGESTIONS
+  // Get user image placement suggestions
   static async getUserImagePlacementSuggestions(
     sessionId: string,
     assFilePath: string,
@@ -2084,29 +1957,27 @@ Return your analysis focusing on how well THIS SPECIFIC user-labeled image match
     userImages: UserProvidedImage[]
   ): Promise<UserImageSuggestion[]> {
     try {
-      console.log('🎯 [SUGGESTIONS] Analyzing user images for placement suggestions...');
-      console.log('📊 [SUGGESTIONS] Number of user images to analyze:', userImages.length);
-      console.log('📋 [SUGGESTIONS] User image labels:', userImages.map(img => `"${img.label}"`).join(', '));
+      console.log(' [SUGGESTIONS] Analyzing user images for placement suggestions...');
+      console.log(' [SUGGESTIONS] Number of user images to analyze:', userImages.length);
+      console.log(' [SUGGESTIONS] User image labels:', userImages.map(img => `"${img.label}"`).join(', '));
 
-      // Parse ASS file to get dialogue entries
       const assContent = fs.readFileSync(assFilePath, 'utf8');
       const assData = AssFileProcessor.parseAssFile(assContent);
       const dialogueEntries = assData.entries.filter((entry: AssSubtitleEntry) =>
         entry.text && entry.text.length > 10 // Filter meaningful dialogue
       );
 
-      console.log(`📊 [SUGGESTIONS] Found ${dialogueEntries.length} dialogue entries in ASS file`);
-      console.log(`📊 [SUGGESTIONS] First entry: ${dialogueEntries[0]?.startTime}s - "${dialogueEntries[0]?.text?.substring(0, 50)}..."`);
-      console.log(`📊 [SUGGESTIONS] Last entry: ${dialogueEntries[dialogueEntries.length - 1]?.startTime}s`);
-      
-      // Log a few more entries to help debug
+      console.log(` [SUGGESTIONS] Found ${dialogueEntries.length} dialogue entries in ASS file`);
+      console.log(` [SUGGESTIONS] First entry: ${dialogueEntries[0]?.startTime}s - "${dialogueEntries[0]?.text?.substring(0, 50)}..."`);
+      console.log(` [SUGGESTIONS] Last entry: ${dialogueEntries[dialogueEntries.length - 1]?.startTime}s`);
+
       for (let i = 0; i < Math.min(10, dialogueEntries.length); i++) {
         const entry = dialogueEntries[i];
-        console.log(`📊 [SUGGESTIONS] Entry ${i + 1}: ${entry.startTime.toFixed(1)}s - ${entry.character}: "${entry.text?.substring(0, 60)}..."`);
+        console.log(` [SUGGESTIONS] Entry ${i + 1}: ${entry.startTime.toFixed(1)}s - ${entry.character}: "${entry.text?.substring(0, 60)}..."`);
       }
 
       if (dialogueEntries.length === 0) {
-        console.error('❌ [SUGGESTIONS] No valid dialogue entries found in ASS file');
+        console.error(' [SUGGESTIONS] No valid dialogue entries found in ASS file');
         return [];
       }
 
@@ -2114,12 +1985,11 @@ Return your analysis focusing on how well THIS SPECIFIC user-labeled image match
       const usedTimestamps = new Set<number>(); // Track used timestamps to avoid clustering
 
       for (const userImage of userImages) {
-        console.log(`📝 [SUGGESTIONS] Analyzing placement for: "${userImage.label}"`);
+        console.log(` [SUGGESTIONS] Analyzing placement for: "${userImage.label}"`);
 
-        // Use AI to analyze the image against dialogue content with distribution awareness
         const analysisPrompt = this.getUserImageAnalysisPrompt(userImage, dialogueEntries, topic);
 
-        console.log(`🤖 [SUGGESTIONS] AI Prompt for "${userImage.label}": Using clean, topic-specific analysis prompt`);
+        console.log(` [SUGGESTIONS] AI Prompt for "${userImage.label}": Using clean, topic-specific analysis prompt`);
 
         const analysisSchema = z.object({
           bestDialogueIndex: z.number().min(1).max(dialogueEntries.length).describe(`Index of best matching dialogue (1-based, must be between 1 and ${dialogueEntries.length})`),
@@ -2137,55 +2007,48 @@ Return your analysis focusing on how well THIS SPECIFIC user-labeled image match
           });
 
           const result = analysis.object;
-          
-          console.log(`🤖 [SUGGESTIONS] AI selected dialogue index: ${result.bestDialogueIndex} (1-based)`);
-          console.log(`🤖 [SUGGESTIONS] AI relevance score: ${result.relevanceScore}`);
-          console.log(`🤖 [SUGGESTIONS] AI reasoning: ${result.reasoning.substring(0, 100)}...`);
 
-          // Validate and get the selected dialogue
-          // AI returns 1-based index, convert to 0-based array index
+          console.log(` [SUGGESTIONS] AI selected dialogue index: ${result.bestDialogueIndex} (1-based)`);
+          console.log(` [SUGGESTIONS] AI relevance score: ${result.relevanceScore}`);
+          console.log(` [SUGGESTIONS] AI reasoning: ${result.reasoning.substring(0, 100)}...`);
+
           let dialogueIndex = Math.max(0, Math.min(result.bestDialogueIndex - 1, dialogueEntries.length - 1));
-          
-          // Additional validation: if AI returned an invalid index, default to index 0
+
           if (result.bestDialogueIndex < 1 || result.bestDialogueIndex > dialogueEntries.length) {
-            console.log(`⚠️ [SUGGESTIONS] AI returned invalid dialogue index ${result.bestDialogueIndex}, defaulting to 0`);
+            console.log(` [SUGGESTIONS] AI returned invalid dialogue index ${result.bestDialogueIndex}, defaulting to 0`);
             dialogueIndex = 0;
           }
-          
+
           let bestDialogue = dialogueEntries[dialogueIndex];
 
-          console.log(`✅ [SUGGESTIONS] Selected dialogue [${dialogueIndex}]: "${bestDialogue.text?.substring(0, 50)}..." at ${bestDialogue.startTime}s`);
-          console.log(`📍 [SUGGESTIONS] Expected timestamp around: ${bestDialogue.startTime.toFixed(1)}s, Character: ${bestDialogue.character}`);
-          
-          // If this timestamp is too close to an already used one, try alternatives
+          console.log(` [SUGGESTIONS] Selected dialogue [${dialogueIndex}]: "${bestDialogue.text?.substring(0, 50)}..." at ${bestDialogue.startTime}s`);
+          console.log(` [SUGGESTIONS] Expected timestamp around: ${bestDialogue.startTime.toFixed(1)}s, Character: ${bestDialogue.character}`);
+
           if (usedTimestamps.has(Math.round(bestDialogue.startTime))) {
-            console.log(`⚠️ [SUGGESTIONS] Timestamp ${bestDialogue.startTime}s already used, trying alternatives...`);
-            console.log(`📋 [SUGGESTIONS] Alternative indices from AI: ${result.alternativeIndices.join(', ')}`);
-            
+            console.log(` [SUGGESTIONS] Timestamp ${bestDialogue.startTime}s already used, trying alternatives...`);
+            console.log(` [SUGGESTIONS] Alternative indices from AI: ${result.alternativeIndices.join(', ')}`);
+
             for (const altIndex of result.alternativeIndices) {
-              // Convert 1-based AI index to 0-based array index
               const arrayIndex = altIndex - 1;
               if (arrayIndex >= 0 && arrayIndex < dialogueEntries.length) {
                 const altDialogue = dialogueEntries[arrayIndex];
                 if (!usedTimestamps.has(Math.round(altDialogue.startTime))) {
                   dialogueIndex = arrayIndex;
                   bestDialogue = altDialogue;
-                  console.log(`✅ [SUGGESTIONS] Using alternative at ${altDialogue.startTime}s`);
+                  console.log(` [SUGGESTIONS] Using alternative at ${altDialogue.startTime}s`);
                   break;
                 }
               }
             }
           }
-          
+
           if (!result.isRelevant || result.relevanceScore < 1) {
-            console.log(`⚠️ [SUGGESTIONS] Image "${userImage.label}" not relevant (score: ${result.relevanceScore})`);
+            console.log(` [SUGGESTIONS] Image "${userImage.label}" not relevant (score: ${result.relevanceScore})`);
             continue; // Skip irrelevant images
           }
 
-          // Mark this timestamp as used
           usedTimestamps.add(Math.round(bestDialogue.startTime));
 
-          // Calculate alternative placements (excluding used timestamps)
           const alternatives = result.alternativeIndices
             .filter((idx: number) => idx !== dialogueIndex && idx < dialogueEntries.length)
             .filter((idx: number) => !usedTimestamps.has(Math.round(dialogueEntries[idx].startTime)))
@@ -2210,16 +2073,14 @@ Return your analysis focusing on how well THIS SPECIFIC user-labeled image match
             alternativePlacements: alternatives
           });
 
-          console.log(`✅ [SUGGESTIONS] "${userImage.label}" -> ${bestDialogue.startTime}s (score: ${result.relevanceScore})`);
+          console.log(` [SUGGESTIONS] "${userImage.label}" -> ${bestDialogue.startTime}s (score: ${result.relevanceScore})`);
 
         } catch (aiError) {
-          console.error(`❌ [SUGGESTIONS] AI analysis failed for "${userImage.label}":`, aiError);
+          console.error(` [SUGGESTIONS] AI analysis failed for "${userImage.label}":`, aiError);
 
-          // Fallback: Only suggest placement if there's a clear keyword match
           let bestMatch = { dialogueIndex: -1, score: 0, reasoning: 'No clear relevance found' };
 
           dialogueEntries.forEach((entry: any, index: number) => {
-            // Skip if timestamp already used
             if (usedTimestamps.has(Math.round(entry.startTime))) {
 
               return;
@@ -2248,7 +2109,6 @@ Return your analysis focusing on how well THIS SPECIFIC user-labeled image match
             }
           });
 
-          // Only create suggestion if there's a meaningful match (score >= 2 for user-provided images)
           if (bestMatch.score >= 2 && bestMatch.dialogueIndex >= 0) {
             const bestDialogue = dialogueEntries[bestMatch.dialogueIndex];
             usedTimestamps.add(Math.round(bestDialogue.startTime));
@@ -2266,52 +2126,46 @@ Return your analysis focusing on how well THIS SPECIFIC user-labeled image match
               alternativePlacements: []
             });
 
-            console.log(`✅ [SUGGESTIONS] "${userImage.label}" -> ${bestDialogue.startTime}s (fallback, score: ${bestMatch.score})`);
+            console.log(` [SUGGESTIONS] "${userImage.label}" -> ${bestDialogue.startTime}s (fallback, score: ${bestMatch.score})`);
           } else {
-            console.log(`⚠️ [SUGGESTIONS] "${userImage.label}" not relevant enough for fallback (score: ${bestMatch.score})`);
+            console.log(` [SUGGESTIONS] "${userImage.label}" not relevant enough for fallback (score: ${bestMatch.score})`);
           }
         }
 
-        // FINAL FALLBACK: If no suggestion was created for this user image, create one anyway
-        // since the user explicitly uploaded it
         const hasSuggestion = suggestions.some(s => s.userImageId === userImage.id);
         if (!hasSuggestion) {
-          console.log(`🔄 [SUGGESTIONS] No suggestion created for "${userImage.label}", applying final fallback...`);
-          
-          // Find a reasonable placement - prefer dialogue that mentions the topic or related terms
+          console.log(` [SUGGESTIONS] No suggestion created for "${userImage.label}", applying final fallback...`);
+
           let bestPlacement = { index: 0, score: 0 };
-          
+
           dialogueEntries.forEach((entry, index) => {
             if (usedTimestamps.has(Math.round(entry.startTime))) return;
-            
+
             let score = 0;
             const dialogueText = entry.text.toLowerCase();
-            
-            // Check if dialogue mentions the image label or related terms
+
             const labelWords = userImage.label.toLowerCase().split(/\s+/);
             labelWords.forEach(word => {
               if (word.length > 3 && dialogueText.includes(word)) score += 3;
             });
-            
-            // Check topic relevance
+
             const topicWords = topic.toLowerCase().split(/\s+/);
             topicWords.forEach(word => {
               if (word.length > 3 && dialogueText.includes(word)) score += 1;
             });
-            
+
             if (score > bestPlacement.score) {
               bestPlacement = { index, score };
             }
           });
-          
-          // If no good match, just pick a middle timestamp
+
           if (bestPlacement.score === 0) {
             bestPlacement.index = Math.floor(dialogueEntries.length / 2);
           }
-          
+
           const placementDialogue = dialogueEntries[bestPlacement.index];
           usedTimestamps.add(Math.round(placementDialogue.startTime));
-          
+
           suggestions.push({
             userImageId: userImage.id,
             userImageLabel: userImage.label,
@@ -2324,37 +2178,35 @@ Return your analysis focusing on how well THIS SPECIFIC user-labeled image match
             suggestedDuration: 4.0,
             alternativePlacements: []
           });
-          
-          console.log(`✅ [SUGGESTIONS] Final fallback placement for "${userImage.label}" at ${placementDialogue.startTime}s`);
+
+          console.log(` [SUGGESTIONS] Final fallback placement for "${userImage.label}" at ${placementDialogue.startTime}s`);
         }
       }
 
-      // Remove duplicate suggestions and sort by relevance
-      const uniqueSuggestions = suggestions.filter((suggestion, index, self) => 
-        index === self.findIndex(s => 
-          s.userImageId === suggestion.userImageId && 
+      const uniqueSuggestions = suggestions.filter((suggestion, index, self) =>
+        index === self.findIndex(s =>
+          s.userImageId === suggestion.userImageId &&
           Math.abs(s.suggestedTimestamp - suggestion.suggestedTimestamp) < 5 // Merge suggestions within 5 seconds
         )
       );
-      
+
       uniqueSuggestions.sort((a, b) => b.relevanceScore - a.relevanceScore);
 
-      console.log(`✅ [SUGGESTIONS] Generated ${uniqueSuggestions.length} placement suggestions (removed ${suggestions.length - uniqueSuggestions.length} duplicates)`);
-      console.log(`📊 [SUGGESTIONS] Timestamp distribution:`, uniqueSuggestions.map(s => `${s.userImageLabel}@${s.suggestedTimestamp.toFixed(1)}s`).join(', '));
-      
-      // Return all suggestions without artificial limits
+      console.log(` [SUGGESTIONS] Generated ${uniqueSuggestions.length} placement suggestions (removed ${suggestions.length - uniqueSuggestions.length} duplicates)`);
+      console.log(` [SUGGESTIONS] Timestamp distribution:`, uniqueSuggestions.map(s => `${s.userImageLabel}@${s.suggestedTimestamp.toFixed(1)}s`).join(', '));
+
       if (uniqueSuggestions.length > 0) {
-        console.log(`🏆 [SUGGESTIONS] Returning all ${uniqueSuggestions.length} suggestions:`);
+        console.log(` [SUGGESTIONS] Returning all ${uniqueSuggestions.length} suggestions:`);
         uniqueSuggestions.forEach((s, i) => {
           console.log(`  ${i + 1}. "${s.userImageLabel}" (score: ${s.relevanceScore})`);
         });
         return uniqueSuggestions;
       }
-      
+
       return uniqueSuggestions;
 
     } catch (error) {
-      console.error('❌ [SUGGESTIONS] Error generating user image placement suggestions:', error);
+      console.error(' [SUGGESTIONS] Error generating user image placement suggestions:', error);
       throw error;
     }
   }

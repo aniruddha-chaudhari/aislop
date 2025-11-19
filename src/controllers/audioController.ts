@@ -137,7 +137,7 @@ export function cleanupOldUserImageFiles(): void {
             console.log(`🧹 [CLEANUP] Removed old subtitles file: ${file}`);
           }
         } catch (error) {
-          console.warn(`⚠️ [CLEANUP] Error checking age of ${file}:`, error);
+          console.warn(` [CLEANUP] Error checking age of ${file}:`, error);
         }
       }
     }
@@ -154,7 +154,7 @@ export function cleanupOldUserImageFiles(): void {
           console.log(`🧹 [CLEANUP] Removed old ASS cache file: ${cacheFile}`);
         }
       } catch (error) {
-        console.warn(`⚠️ [CLEANUP] Error cleaning ASS cache directory:`, error);
+        console.warn(` [CLEANUP] Error cleaning ASS cache directory:`, error);
       }
     }
     
@@ -174,7 +174,7 @@ export function cleanupOldUserImageFiles(): void {
           }
         }
       } catch (error) {
-        console.warn(`⚠️ [CLEANUP] Error cleaning generated images directory:`, error);
+        console.warn(` [CLEANUP] Error cleaning generated images directory:`, error);
       }
     }
     
@@ -184,7 +184,7 @@ export function cleanupOldUserImageFiles(): void {
       console.log(`🧹 [CLEANUP] No old temp files to clean`);
     }
   } catch (error) {
-    console.warn(`⚠️ [CLEANUP] Error cleaning up old temp files:`, error);
+    console.warn(` [CLEANUP] Error cleaning up old temp files:`, error);
   }
 }
 
@@ -287,7 +287,7 @@ async function generateAudioWithChatterbox(
       maxBodyLength: Infinity
     });
 
-    console.log(`✅ TTS API response status: ${generateResponse.status}`);
+    console.log(` TTS API response status: ${generateResponse.status}`);
     console.log(`TTS API response:`, generateResponse.data);
 
     if (!generateResponse.data || !generateResponse.data.audio_file_path) {
@@ -312,17 +312,17 @@ async function generateAudioWithChatterbox(
 
     return new Promise((resolve, reject) => {
       writer.on('finish', () => {
-        console.log(`✅ Audio saved successfully: ${outputPath}`);
+        console.log(` Audio saved successfully: ${outputPath}`);
         resolve();
       });
       writer.on('error', (err) => {
-        console.error(`❌ Error writing audio file: ${err.message}`);
+        console.error(` Error writing audio file: ${err.message}`);
         reject(err);
       });
     });
 
   } catch (error: any) {
-    console.error(`❌ Error generating audio with Chatterbox TTS for ${character}:`, error.message);
+    console.error(` Error generating audio with Chatterbox TTS for ${character}:`, error.message);
     
     // Enhanced debugging for 422 errors
     if (error.response) {
@@ -331,7 +331,7 @@ async function generateAudioWithChatterbox(
       console.error('Response Data:', JSON.stringify(error.response.data, null, 2));
       
       if (error.response.status === 422 && error.response.data?.detail) {
-        console.error('🔍 FastAPI Validation Errors:');
+        console.error(' FastAPI Validation Errors:');
         if (Array.isArray(error.response.data.detail)) {
           error.response.data.detail.forEach((err: any, index: number) => {
             console.error(`  ${index + 1}. Field: ${err.loc.join('.')} | Type: ${err.type} | Message: ${err.msg}`);
@@ -344,14 +344,14 @@ async function generateAudioWithChatterbox(
         }
       }
     } else if (error.request) {
-      console.error('❌ No response received from server');
+      console.error(' No response received from server');
       console.error('Request config:', {
         url: error.config?.url,
         method: error.config?.method,
         timeout: error.config?.timeout
       });
     } else {
-      console.error('❌ Request setup error:', error.message);
+      console.error(' Request setup error:', error.message);
     }
     
     // Format error message
@@ -461,7 +461,7 @@ export const generateConversationWithAudio = async (req: Request, res: Response)
       });
     }
 
-    console.log(`✅ Generated conversation with ${conversation.conversation.length} dialogue items`);
+    console.log(` Generated conversation with ${conversation.conversation.length} dialogue items`);
 
     return res.status(200).json({
       success: true,
@@ -557,7 +557,7 @@ export const generateAudioFromScript = async (req: Request, res: Response) => {
     }
 
     // Test TTS API connection
-    console.log('🔍 Testing TTS API connection...');
+    console.log(' Testing TTS API connection...');
     const apiConnected = await testTTSApiConnection();
     if (!apiConnected) {
       return res.status(503).json({
@@ -565,10 +565,10 @@ export const generateAudioFromScript = async (req: Request, res: Response) => {
         error: 'TTS API is not available. Please ensure the Chatterbox TTS server is running on port 8000.'
       });
     }
-    console.log('✅ TTS API connection successful');
+    console.log(' TTS API connection successful');
 
     // Verify audio files exist before proceeding
-    console.log('🔍 Checking reference audio files...');
+    console.log(' Checking reference audio files...');
     for (const [char, audioPath] of Object.entries(REFERENCE_AUDIO_PATHS)) {
       if (!fs.existsSync(audioPath)) {
         return res.status(500).json({
@@ -576,7 +576,7 @@ export const generateAudioFromScript = async (req: Request, res: Response) => {
           error: `Reference audio file missing for ${char}: ${audioPath}`
         });
       }
-      console.log(`✅ ${char} audio file exists: ${audioPath}`);
+      console.log(` ${char} audio file exists: ${audioPath}`);
     }
 
     // Create session in database
@@ -647,7 +647,7 @@ export const generateAudioFromScript = async (req: Request, res: Response) => {
 
       // Validate character
       if (!['Stewie', 'Peter'].includes(convCharacter)) {
-        console.warn(`⚠️ Skipping invalid character: ${convCharacter}`);
+        console.warn(` Skipping invalid character: ${convCharacter}`);
 
         // Update dialogue record with error
         await prisma.dialogue.update({
@@ -691,7 +691,7 @@ export const generateAudioFromScript = async (req: Request, res: Response) => {
           }
         });
 
-        console.log(`✅ Audio ${i + 1} completed: ${filename}`);
+        console.log(` Audio ${i + 1} completed: ${filename}`);
 
         // Short delay between requests
         if (i < conversation.conversation.length - 1) {
@@ -700,7 +700,7 @@ export const generateAudioFromScript = async (req: Request, res: Response) => {
         }
 
       } catch (audioError) {
-        console.error(`❌ Failed to generate audio ${i + 1} for ${convCharacter}:`, audioError);
+        console.error(` Failed to generate audio ${i + 1} for ${convCharacter}:`, audioError);
 
         // Create audio file record with error
         await prisma.audioFile.create({
@@ -821,7 +821,7 @@ export const regenerateAudioFile = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid order in filename' });
     }
 
-    console.log('🔍 Parsed filename:', { 
+    console.log(' Parsed filename:', { 
       urlSessionId: sessionId,
       actualSessionId, 
       filename, 
@@ -919,9 +919,9 @@ export const regenerateAudioFile = async (req: Request, res: Response) => {
       });
     }
 
-    console.log(`✅ Audio generation completed for: ${filename}`);
-    console.log(`✅ File saved to: ${outputPath}`);
-    console.log(`✅ File size: ${fileSize} bytes`);
+    console.log(` Audio generation completed for: ${filename}`);
+    console.log(` File saved to: ${outputPath}`);
+    console.log(` File size: ${fileSize} bytes`);
 
     return res.status(200).json({
       success: true,
