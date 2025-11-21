@@ -28,7 +28,7 @@ The system uses Prisma for database management, FFmpeg for professional multimed
 
 **Frontend**: Next.js 15, React 19, TypeScript, Tailwind CSS, HTML5 Audio API
 
-**AI & ML**: OpenAI GPT models, Google AI services, WhisperX for speech-to-text, advanced TTS synthesis, computer vision for image analysis, automated video production pipelines
+**AI & ML**: Google AI services, WhisperX for speech-to-text, advanced TTS synthesis, computer vision for image analysis, automated video production pipelines
 
 ## License
 
