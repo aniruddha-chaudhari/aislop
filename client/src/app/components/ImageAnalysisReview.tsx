@@ -54,12 +54,12 @@ interface ImageAnalysisReviewProps {
   onBack: () => void;
 }
 
-export default function ImageAnalysisReview({ 
-  sessionId, 
-  topic, 
-  userImages, 
-  onApprovalComplete, 
-  onBack 
+export default function ImageAnalysisReview({
+  sessionId,
+  topic,
+  userImages,
+  onApprovalComplete,
+  onBack
 }: ImageAnalysisReviewProps) {
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisData, setAnalysisData] = useState<ImageAnalysisData | null>(null);
@@ -115,7 +115,15 @@ export default function ImageAnalysisReview({
         // Backends may return either { analysis: { suggestions, summary }} or { suggestions }
         const suggestions = data.analysis?.suggestions || data.suggestions || [];
         const summary = data.analysis?.summary || data.summary || {};
-        setAnalysisData({ suggestions, summary });
+        setAnalysisData({
+          sessionId,
+          topic,
+          analysisDate: new Date().toISOString(),
+          userImages,
+          suggestions,
+          totalSuggestions: suggestions.length,
+          summary
+        });
         setSuccess(`Analysis complete! Found ${suggestions.length} potential placements.`);
       } else {
         throw new Error(data.error || 'Analysis failed');
@@ -140,11 +148,11 @@ export default function ImageAnalysisReview({
 
   const approveAllHighRelevance = () => {
     if (!analysisData) return;
-    
+
     const highRelevanceSuggestions = analysisData.suggestions
       .filter(s => s.relevanceScore >= 0.8)
       .map(s => s.userImageId);
-    
+
     setApprovedPlacements(new Set(highRelevanceSuggestions));
   };
 
@@ -154,11 +162,11 @@ export default function ImageAnalysisReview({
 
   const proceedWithApprovedPlacements = () => {
     if (!analysisData) return;
-    
+
     const approvedSuggestions = analysisData.suggestions.filter(suggestion =>
       approvedPlacements.has(suggestion.userImageId)
     );
-    
+
     onApprovalComplete(approvedSuggestions);
   };
 
@@ -198,7 +206,7 @@ export default function ImageAnalysisReview({
         document.body.appendChild(textArea);
         textArea.focus();
         textArea.select();
-        
+
         try {
           const successful = document.execCommand('copy');
           if (successful) {
@@ -253,7 +261,7 @@ export default function ImageAnalysisReview({
         document.body.appendChild(textArea);
         textArea.focus();
         textArea.select();
-        
+
         try {
           const successful = document.execCommand('copy');
           if (successful) {
@@ -298,7 +306,7 @@ export default function ImageAnalysisReview({
 
     try {
       const customData = JSON.parse(pasteText);
-      
+
       // Basic validation
       if (!customData.suggestions || !Array.isArray(customData.suggestions)) {
         throw new Error('Invalid format: missing "suggestions" array');
@@ -321,7 +329,7 @@ export default function ImageAnalysisReview({
       }
 
       const result = await response.json();
-      
+
       // Update the analysis data with the new custom suggestions
       if (result.success && customData.suggestions) {
         setAnalysisData({
@@ -329,7 +337,7 @@ export default function ImageAnalysisReview({
           suggestions: customData.suggestions,
           summary: customData.summary || analysisData!.summary
         });
-        
+
         // Update approved placements if provided
         if (customData.approvedPlacements && Array.isArray(customData.approvedPlacements)) {
           setApprovedPlacements(new Set(customData.approvedPlacements));
@@ -381,7 +389,7 @@ export default function ImageAnalysisReview({
             ← Back
           </button>
         </div>
-        
+
         <div className="bg-[#E7F3F8] border border-[#337EA9]/20 rounded-md p-2 sm:p-4">
           <p className="text-[#37352F] mb-1 sm:mb-2 text-xs sm:text-sm">
             <strong>Session:</strong> {sessionId} | <strong>Topic:</strong> {topic}
@@ -400,7 +408,7 @@ export default function ImageAnalysisReview({
             >
               {analyzing ? '🔄 Analyzing Images...' : '🎯 Start AI Analysis'}
             </button>
-            
+
             {userImages.length === 0 && (
               <p className="text-[#D44C47] text-sm mt-2">
                 Please upload images first before starting analysis.
@@ -429,23 +437,23 @@ export default function ImageAnalysisReview({
           {/* Summary */}
           <div className="bg-[#2F3438] border border-[#787774]/20 rounded-lg shadow-lg p-3 sm:p-6">
             <h3 className="text-lg sm:text-xl font-semibold text-[#F1F1EF] mb-3 sm:mb-4">📊 Analysis Summary</h3>
-            
+
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
               <div className="bg-[#E7F3F8] border border-[#337EA9]/20 p-4 rounded-md text-center">
                 <div className="text-2xl font-bold text-[#337EA9]">{analysisData.summary.totalSuggestions}</div>
                 <div className="text-sm text-[#37352F]">Total Suggestions</div>
               </div>
-              
+
               <div className="bg-[#EDF3EC] border border-[#448361]/20 p-4 rounded-md text-center">
                 <div className="text-2xl font-bold text-[#448361]">{analysisData.summary.highRelevance}</div>
                 <div className="text-sm text-[#37352F]">High Relevance</div>
               </div>
-              
+
               <div className="bg-[#FBF3DB] border border-[#CB912F]/20 p-4 rounded-md text-center">
                 <div className="text-2xl font-bold text-[#CB912F]">{analysisData.summary.mediumRelevance}</div>
                 <div className="text-sm text-[#37352F]">Medium Relevance</div>
               </div>
-              
+
               <div className="bg-[#FDEBEC] border border-[#D44C47]/20 p-4 rounded-md text-center">
                 <div className="text-2xl font-bold text-[#D44C47]">{analysisData.summary.lowRelevance}</div>
                 <div className="text-sm text-[#37352F]">Low Relevance</div>
@@ -461,7 +469,7 @@ export default function ImageAnalysisReview({
                 >
                   ✅ All High
                 </button>
-                
+
                 <button
                   onClick={clearAllApprovals}
                   className="px-2 py-1.5 bg-[#D44C47] hover:bg-[#D44C47]/80 text-[#F1F1EF] text-xs rounded-md transition-colors flex-1"
@@ -469,7 +477,7 @@ export default function ImageAnalysisReview({
                   ❌ Clear All
                 </button>
               </div>
-              
+
               <div className="text-xs text-[#787774] text-center">
                 {approvedPlacements.size} of {analysisData.suggestions.length} approved
               </div>
@@ -478,7 +486,7 @@ export default function ImageAnalysisReview({
             {/* Copy & Paste Management Section */}
             <div className="border-t border-[#787774]/30 pt-6 mt-6">
               <h4 className="text-lg font-semibold text-[#F1F1EF] mb-4">📋 Copy & Paste Management</h4>
-              
+
               <div className="grid grid-cols-1 gap-2">
                 <button
                   onClick={loadAssContent}
@@ -487,7 +495,7 @@ export default function ImageAnalysisReview({
                 >
                   {loadingAss ? '⏳ Loading...' : '👁️ View ASS'}
                 </button>
-                
+
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     onClick={copyCurrentSuggestionsJSON}
@@ -495,7 +503,7 @@ export default function ImageAnalysisReview({
                   >
                     📋 Copy
                   </button>
-                  
+
                   <button
                     onClick={() => setShowPasteInterface(true)}
                     className="px-2 py-1.5 bg-[#D9730D] hover:bg-[#D9730D]/80 text-[#F1F1EF] text-xs rounded-md transition-colors text-center"
@@ -534,7 +542,7 @@ export default function ImageAnalysisReview({
                   </button>
                 </div>
               </div>
-              
+
               <div className="bg-[#F1F1EF] border border-[#787774]/20 rounded-md p-4 max-h-96 overflow-y-auto">
                 <pre className="text-sm text-[#37352F] font-mono whitespace-pre-wrap">
                   {assContent}
@@ -555,7 +563,7 @@ export default function ImageAnalysisReview({
                   ✕ Cancel
                 </button>
               </div>
-              
+
               <div className="space-y-4">
                 <div className="flex items-center space-x-3">
                   <button
@@ -600,16 +608,15 @@ export default function ImageAnalysisReview({
           {/* Suggestions List */}
           <div className="bg-[#2F3438] border border-[#787774]/20 rounded-lg shadow-lg p-3 sm:p-6">
             <h3 className="text-lg sm:text-xl font-semibold text-[#F1F1EF] mb-3 sm:mb-4">🎬 Suggested Image Placements</h3>
-            
+
             <div className="space-y-3 sm:space-y-4">
               {analysisData.suggestions.map((suggestion, index) => (
                 <div
                   key={suggestion.userImageId}
-                  className={`border-2 rounded-lg p-3 sm:p-4 transition-all ${
-                    approvedPlacements.has(suggestion.userImageId)
+                  className={`border-2 rounded-lg p-3 sm:p-4 transition-all ${approvedPlacements.has(suggestion.userImageId)
                       ? 'border-[#448361] bg-[#EDF3EC]/20'
                       : 'border-[#787774]/30 hover:border-[#337EA9]/50 bg-[#3F4448]'
-                  }`}
+                    }`}
                 >
                   <div className="flex flex-col space-y-3">
                     {/* Image Info Row */}
@@ -618,7 +625,7 @@ export default function ImageAnalysisReview({
                         <div className="w-12 h-12 sm:w-16 sm:h-16 bg-[#787774]/20 rounded-md flex items-center justify-center flex-shrink-0">
                           <span className="text-lg sm:text-2xl">🖼️</span>
                         </div>
-                        
+
                         <div className="flex-1 min-w-0">
                           <h4 className="font-semibold text-[#F1F1EF] text-sm sm:text-base truncate">{suggestion.userImageLabel}</h4>
                           <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-2 space-y-1 sm:space-y-0 mt-1">
@@ -635,11 +642,10 @@ export default function ImageAnalysisReview({
                       {/* Approval Button - Now in top right */}
                       <button
                         onClick={() => togglePlacementApproval(suggestion.userImageId)}
-                        className={`px-2 py-1 sm:px-4 sm:py-2 rounded-md font-medium text-xs sm:text-sm transition-all flex-shrink-0 ml-2 ${
-                          approvedPlacements.has(suggestion.userImageId)
+                        className={`px-2 py-1 sm:px-4 sm:py-2 rounded-md font-medium text-xs sm:text-sm transition-all flex-shrink-0 ml-2 ${approvedPlacements.has(suggestion.userImageId)
                             ? 'bg-[#448361] hover:bg-[#448361]/80 text-[#F1F1EF]'
                             : 'bg-[#787774]/20 hover:bg-[#787774]/30 text-[#F1F1EF]'
-                        }`}
+                          }`}
                       >
                         {approvedPlacements.has(suggestion.userImageId) ? '✅' : '👆'}
                       </button>
@@ -661,8 +667,8 @@ export default function ImageAnalysisReview({
                         <strong>🤖 AI Reasoning:</strong>{' '}
                         {suggestion.reasoning.length > 100 ? (
                           <>
-                            {expandedReasoningIds.has(suggestion.userImageId) 
-                              ? suggestion.reasoning 
+                            {expandedReasoningIds.has(suggestion.userImageId)
+                              ? suggestion.reasoning
                               : `${suggestion.reasoning.substring(0, 100)}...`}
                             <button
                               onClick={() => toggleReasoningExpansion(suggestion.userImageId)}
@@ -692,7 +698,7 @@ export default function ImageAnalysisReview({
                     Video with subtitles and {approvedPlacements.size} approved images.
                   </p>
                 </div>
-                
+
                 <button
                   onClick={proceedWithApprovedPlacements}
                   disabled={generatingVideo}

@@ -304,7 +304,7 @@ export default function ImageEmbedder() {
 
   const deleteUploadedImage = async (filename: string) => {
     try {
-      const response = await fetch(`${API_ENDPOINTS.deleteImage}/${selectedSession}/${filename}`, {
+      const response = await fetch(API_ENDPOINTS.deleteUploadedImage(selectedSession, filename), {
         method: 'DELETE',
       });
 
@@ -377,13 +377,13 @@ export default function ImageEmbedder() {
 
       if (data.success) {
         setSuccess(`User image "${userImageLabel}" uploaded successfully!`);
-        
+
         // Reset form
         setUserImageFile(null);
         setUserImageLabel('');
         setUserImageDescription('');
         setUserImagePriority('medium');
-        
+
         // Refresh user images
         fetchUserImages();
       } else {
@@ -399,7 +399,7 @@ export default function ImageEmbedder() {
 
   const deleteUserImage = async (imageId: string) => {
     try {
-      const response = await fetch(`${API_ENDPOINTS.deleteUserImage}/${selectedSession}/${imageId}`, {
+      const response = await fetch(API_ENDPOINTS.deleteUserImage(selectedSession, imageId), {
         method: 'DELETE',
       });
 
@@ -655,7 +655,7 @@ export default function ImageEmbedder() {
             <p className="text-sm text-gray-500 mb-4">
               Max 10MB per image • PNG, JPG, GIF supported
             </p>
-            
+
             <input
               type="file"
               accept="image/*"
@@ -682,7 +682,7 @@ export default function ImageEmbedder() {
             >
               Browse Files
             </label>
-            
+
             {userImageFile && (
               <p className="mt-2 text-sm text-green-600">
                 ✅ Selected: {userImageFile.name}
@@ -745,7 +745,7 @@ export default function ImageEmbedder() {
               >
                 {uploadingUserImage ? '📤 Uploading...' : '📤 Upload Image'}
               </button>
-              
+
               <button
                 onClick={() => {
                   setUserImageFile(null);
@@ -997,11 +997,10 @@ export default function ImageEmbedder() {
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-2">
                       <h4 className="font-semibold text-gray-800">{suggestion.userImageLabel}</h4>
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                        suggestion.relevanceScore >= 8 ? 'text-green-600 bg-green-100' :
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${suggestion.relevanceScore >= 8 ? 'text-green-600 bg-green-100' :
                         suggestion.relevanceScore >= 6 ? 'text-yellow-600 bg-yellow-100' :
-                        'text-red-600 bg-red-100'
-                      }`}>
+                          'text-red-600 bg-red-100'
+                        }`}>
                         Score: {suggestion.relevanceScore}/10
                       </span>
                       {approvedPlacements.has(suggestion.userImageId) && (
@@ -1039,11 +1038,10 @@ export default function ImageEmbedder() {
 
                   <button
                     onClick={() => togglePlacementApproval(suggestion.userImageId)}
-                    className={`px-4 py-2 rounded-md font-medium ${
-                      approvedPlacements.has(suggestion.userImageId)
-                        ? 'bg-green-600 text-white hover:bg-green-700'
-                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                    }`}
+                    className={`px-4 py-2 rounded-md font-medium ${approvedPlacements.has(suggestion.userImageId)
+                      ? 'bg-green-600 text-white hover:bg-green-700'
+                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      }`}
                   >
                     {approvedPlacements.has(suggestion.userImageId) ? '✅ Approved' : '👆 Approve'}
                   </button>

@@ -117,7 +117,7 @@ export default function ConversationGenerator() {
 
     try {
       console.log('Generating conversation with audio...');
-      
+
       const response = await fetch(API_ENDPOINTS.script, {
         method: 'POST',
         headers: {
@@ -192,7 +192,7 @@ export default function ConversationGenerator() {
         sampleLine: conversation[0]?.dialogue?.slice(0, 80),
         parameters: ttsParameters
       });
-      
+
       const response = await fetch(API_ENDPOINTS.audioFromScript, {
         method: 'POST',
         headers: {
@@ -200,8 +200,10 @@ export default function ConversationGenerator() {
           'Accept': 'application/json',
         },
         body: JSON.stringify({
-          conversation,
-          topic,
+          conversation: {
+            conversation,
+            topic
+          },
           ...ttsParameters
         }),
         mode: 'cors',
@@ -216,10 +218,10 @@ export default function ConversationGenerator() {
       const data = await response.json();
 
       if (data.success) {
-        console.log('Audio generation successful:', { 
-          audioFilesCount: data.audioFiles?.length, 
+        console.log('Audio generation successful:', {
+          audioFilesCount: data.audioFiles?.length,
           returnedSessionId: data.sessionId,
-          currentSessionId: sessionId 
+          currentSessionId: sessionId
         });
         setAudioFiles(data.audioFiles || []);
         setSessionId(data.sessionId || sessionId); // Update sessionId with the real one from database
@@ -359,7 +361,7 @@ export default function ConversationGenerator() {
       topic,
       conversation
     };
-    
+
     try {
       await navigator.clipboard.writeText(JSON.stringify(conversationData, null, 2));
       setSuccessMessage('Conversation JSON copied to clipboard!');
@@ -373,11 +375,11 @@ export default function ConversationGenerator() {
   const handleImportJson = () => {
     try {
       const parsedData = JSON.parse(jsonImportText);
-      
+
       if (!parsedData.conversation || !Array.isArray(parsedData.conversation)) {
         throw new Error('Invalid JSON format: missing conversation array');
       }
-      
+
       // Validate conversation items
       for (const item of parsedData.conversation) {
         if (!item.character || !item.dialogue) {
@@ -387,7 +389,7 @@ export default function ConversationGenerator() {
           throw new Error('Invalid character: must be Stewie or Peter');
         }
       }
-      
+
       setConversation(parsedData.conversation);
       setTopic(parsedData.topic || '');
       setPrompt(''); // Clear prompt when importing
@@ -477,7 +479,7 @@ export default function ConversationGenerator() {
 
       // Remove the deleted audio file from the state
       setAudioFiles(prev => prev.filter(file => file.filename !== filename));
-      
+
       console.log('Audio file deleted successfully');
     } catch (error) {
       console.error('Error deleting audio file:', error);
@@ -518,7 +520,7 @@ export default function ConversationGenerator() {
             📤 Import JSON
           </button>
         </div>
-        
+
         {showJsonImport && (
           <div className="space-y-3">
             <textarea
@@ -601,7 +603,7 @@ export default function ConversationGenerator() {
               className="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white text-xs sm:text-sm rounded-md transition-colors"
               title="Copy conversation as JSON"
             >
- Copy JSON
+              Copy JSON
             </button>
             <button
               onClick={() => setShowJsonImport(!showJsonImport)}
@@ -612,7 +614,7 @@ export default function ConversationGenerator() {
             </button>
           </div>
         </div>
-        
+
         {showJsonImport && (
           <div className="space-y-3">
             <textarea
@@ -649,7 +651,7 @@ export default function ConversationGenerator() {
 
       <div className="p-3 sm:p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md">
         <p className="text-yellow-800 dark:text-yellow-200 text-sm sm:text-base">
-          <strong>Review the script below:</strong> You can edit any dialogue by clicking on it. 
+          <strong>Review the script below:</strong> You can edit any dialogue by clicking on it.
           Once you're satisfied with the script, click "Approve & Generate Audio" to create the audio files.
         </p>
       </div>
@@ -661,19 +663,17 @@ export default function ConversationGenerator() {
             {conversation.map((item, index) => (
               <div
                 key={index}
-                className={`p-4 rounded-lg border-l-4 ${
-                  item.character === 'Stewie'
+                className={`p-4 rounded-lg border-l-4 ${item.character === 'Stewie'
                     ? 'bg-purple-50 dark:bg-purple-900/20 border-purple-400'
                     : 'bg-green-50 dark:bg-green-900/20 border-green-400'
-                }`}
+                  }`}
               >
                 <div className="mb-2 flex items-center justify-between">
                   <span
-                    className={`font-semibold text-lg ${
-                      item.character === 'Stewie'
+                    className={`font-semibold text-lg ${item.character === 'Stewie'
                         ? 'text-purple-700 dark:text-purple-300'
                         : 'text-green-700 dark:text-green-300'
-                    }`}
+                      }`}
                   >
                     {item.character}:
                   </span>
@@ -774,19 +774,17 @@ export default function ConversationGenerator() {
             {conversation.map((item, index) => (
               <div
                 key={index}
-                className={`p-4 rounded-lg border-l-4 ${
-                  item.character === 'Stewie'
+                className={`p-4 rounded-lg border-l-4 ${item.character === 'Stewie'
                     ? 'bg-purple-50 dark:bg-purple-900/20 border-purple-400'
                     : 'bg-green-50 dark:bg-green-900/20 border-green-400'
-                }`}
+                  }`}
               >
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
                   <span
-                    className={`font-semibold text-lg flex-shrink-0 ${
-                      item.character === 'Stewie'
+                    className={`font-semibold text-lg flex-shrink-0 ${item.character === 'Stewie'
                         ? 'text-purple-700 dark:text-purple-300'
                         : 'text-green-700 dark:text-green-300'
-                    }`}
+                      }`}
                   >
                     {item.character}:
                   </span>
@@ -920,7 +918,7 @@ export default function ConversationGenerator() {
             onClick={() => setCurrentStep('video-generation')}
             className="w-full bg-purple-500 hover:bg-purple-600 text-white font-medium py-3 px-4 rounded-md transition-colors duration-200"
           >
- Proceed to Video Generation
+            Proceed to Video Generation
           </button>
         </div>
       )}
@@ -971,20 +969,18 @@ export default function ConversationGenerator() {
           </h3>
           <div className="space-y-3">
             {userImageDecisions.map((decision, index) => (
-              <div key={index} className={`p-3 rounded-md border ${
-                decision.useImage
+              <div key={index} className={`p-3 rounded-md border ${decision.useImage
                   ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
                   : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
-              }`}>
+                }`}>
                 <div className="flex items-center justify-between mb-2">
                   <h4 className="font-medium text-gray-800 dark:text-gray-200">
                     {decision.userImageLabel}
                   </h4>
-                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                    decision.useImage
+                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${decision.useImage
                       ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200'
                       : 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200'
-                  }`}>
+                    }`}>
                     {decision.useImage ? ' ACCEPTED' : ' REJECTED'}
                   </span>
                 </div>
@@ -1065,12 +1061,12 @@ export default function ConversationGenerator() {
           </div>
         </div>
         <div className="mt-2 bg-gray-200 rounded-full h-2">
-          <div 
-            className="bg-blue-600 h-2 rounded-full transition-all duration-300" 
-            style={{ 
-              width: currentStep === 'input' ? '25%' : 
-                     currentStep === 'script-review' ? '50%' : 
-                     currentStep === 'audio-generation' ? '75%' : '100%' 
+          <div
+            className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+            style={{
+              width: currentStep === 'input' ? '25%' :
+                currentStep === 'script-review' ? '50%' :
+                  currentStep === 'audio-generation' ? '75%' : '100%'
             }}
           ></div>
         </div>

@@ -104,8 +104,8 @@ export default function VideoGenerator() {
   const [topic, setTopic] = useState<string>('');
   const [imagePlan, setImagePlan] = useState<any>(null);
   const [planProgress, setPlanProgress] = useState<any>(null);
-  const [uploadingRequiredImages, setUploadingRequiredImages] = useState<{[key: string]: boolean}>({});
-  const [requiredImageErrors, setRequiredImageErrors] = useState<{[key: string]: string}>({});
+  const [uploadingRequiredImages, setUploadingRequiredImages] = useState<{ [key: string]: boolean }>({});
+  const [requiredImageErrors, setRequiredImageErrors] = useState<{ [key: string]: string }>({});
 
   // Normalize audio sessions coming from either the Node backend ({ success, sessions })
   // or the Python backend ({ sessions, files } without a success flag).
@@ -137,11 +137,11 @@ export default function VideoGenerator() {
   useEffect(() => {
     fetchAudioSessions();
     fetchTemplateVideos();
-    
+
     // Check for session ID in URL parameters
     const urlParams = new URLSearchParams(window.location.search);
     const urlSessionId = urlParams.get('sessionId');
-    
+
     // Load session data from sessionStorage if available
     const savedSessionData = sessionStorage.getItem('videoGenerator_sessionData');
     if (savedSessionData) {
@@ -155,7 +155,7 @@ export default function VideoGenerator() {
         setPlanProgress(parsedData.planProgress || null);
         setUserImages(parsedData.userImages || []);
         setApprovedUserImagePlacements(parsedData.approvedUserImagePlacements || []);
-        
+
         // If there's a session ID in URL that's different, update it
         if (urlSessionId && urlSessionId !== parsedData.selectedSession) {
           setSelectedSession(urlSessionId);
@@ -186,7 +186,7 @@ export default function VideoGenerator() {
       approvedUserImagePlacements,
       lastSaved: Date.now()
     };
-    
+
     try {
       sessionStorage.setItem('videoGenerator_sessionData', JSON.stringify(sessionData));
     } catch (error) {
@@ -198,7 +198,7 @@ export default function VideoGenerator() {
   useEffect(() => {
     if (selectedSession || topic || backgroundVideoPath || imagePlan || userImages.length > 0) {
       saveSessionData();
-      
+
       // Update URL with session ID
       if (selectedSession) {
         const url = new URL(window.location.href);
@@ -227,7 +227,7 @@ export default function VideoGenerator() {
       const urlParams = new URLSearchParams(window.location.search);
       const urlSessionId = urlParams.get('sessionId');
       const savedSessionData = sessionStorage.getItem('videoGenerator_sessionData');
-      
+
       let targetSessionId = '';
       if (savedSessionData) {
         try {
@@ -237,12 +237,12 @@ export default function VideoGenerator() {
           console.error('Error parsing saved session data:', error);
         }
       }
-      
+
       // URL parameter takes precedence
       if (urlSessionId) {
         targetSessionId = urlSessionId;
       }
-      
+
       // Auto-select and set topic if session exists
       if (targetSessionId && normalizedSessions.some((s: any) => s.sessionId === targetSessionId)) {
         setSelectedSession(targetSessionId);
@@ -250,7 +250,7 @@ export default function VideoGenerator() {
         if (selectedSessionData && !topic) {
           setTopic(selectedSessionData.name || `Session ${targetSessionId}`);
         }
-        
+
         // Try to restore existing image plan for this session
         setTimeout(() => {
           fetchImagePlanStatus();
@@ -350,10 +350,10 @@ export default function VideoGenerator() {
     setTopic('');
     setImagePlan(null);
     setPlanProgress(null);
-    
+
     // Clear session data from sessionStorage
     sessionStorage.removeItem('videoGenerator_sessionData');
-    
+
     // Clear URL parameters
     const url = new URL(window.location.href);
     url.searchParams.delete('sessionId');
@@ -383,7 +383,7 @@ export default function VideoGenerator() {
     setLoading(true);
     setError('');
     setSuccess('');
-    
+
     // Clear previous workflow data when generating new plan
     setUserImages([]);
     setApprovedUserImagePlacements([]);
@@ -507,18 +507,18 @@ export default function VideoGenerator() {
     if (!selectedSession) return;
 
     try {
-      const response = await fetch(`${API_ENDPOINTS.imagePlan}/${selectedSession}`);
+      const response = await fetch(API_ENDPOINTS.imagePlanStatus(selectedSession));
       if (response.ok) {
         const data = await response.json();
         if (data.success && data.imagePlan) {
           setImagePlan(data.imagePlan);
           setPlanProgress(data.progress);
-          
+
           // Update current step based on image plan status
           if (data.imagePlan.imageRequirements && data.imagePlan.imageRequirements.length > 0) {
             const hasAnyUploaded = data.imagePlan.imageRequirements.some((req: any) => req.uploaded);
             const allUploaded = data.imagePlan.imageRequirements.every((req: any) => req.uploaded);
-            
+
             if (allUploaded) {
               setCurrentStep('upload-extra');
             } else if (hasAnyUploaded || currentStep === 'select') {
@@ -637,7 +637,7 @@ export default function VideoGenerator() {
     <div className="bg-[#2F3438] rounded-lg shadow-lg p-3 sm:p-4 border border-[#787774]/20 overflow-visible">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
         <h2 className="text-lg font-bold text-[#F1F1EF]">
- Video Generator with Image Analysis
+          Video Generator with Image Analysis
         </h2>
         <div className="flex flex-col sm:flex-row gap-2">
           <button
@@ -653,7 +653,7 @@ export default function VideoGenerator() {
               className="px-4 py-2 bg-[#787774] hover:bg-[#787774]/80 text-[#F1F1EF] rounded-md transition-colors"
               disabled={generating}
             >
- Reset
+              Reset
             </button>
           )}
         </div>
@@ -664,11 +664,11 @@ export default function VideoGenerator() {
         <div className="flex items-center justify-between mb-4">
           <span className="text-sm font-medium text-[#F1F1EF]">Workflow Progress</span>
           <span className="text-sm text-[#787774]">
-            Step {currentStep === 'select' ? '1' : 
-                   currentStep === 'generate-plan' ? '2' : 
-                   currentStep === 'upload-required' ? '3' :
-                   currentStep === 'upload-extra' ? '4' :
-                   currentStep === 'review-analysis' ? '5' : '6'} of 6
+            Step {currentStep === 'select' ? '1' :
+              currentStep === 'generate-plan' ? '2' :
+                currentStep === 'upload-required' ? '3' :
+                  currentStep === 'upload-extra' ? '4' :
+                    currentStep === 'review-analysis' ? '5' : '6'} of 6
           </span>
         </div>
         <div className="w-full bg-[#787774]/20 rounded-full h-2">
@@ -676,10 +676,10 @@ export default function VideoGenerator() {
             className="bg-gradient-to-r from-[#9065B0] to-[#C14C8A] h-2 rounded-full transition-all duration-300"
             style={{
               width: currentStep === 'select' ? '16%' :
-                     currentStep === 'generate-plan' ? '32%' :
-                     currentStep === 'upload-required' ? '48%' :
-                     currentStep === 'upload-extra' ? '64%' :
-                     currentStep === 'review-analysis' ? '80%' : '100%'
+                currentStep === 'generate-plan' ? '32%' :
+                  currentStep === 'upload-required' ? '48%' :
+                    currentStep === 'upload-extra' ? '64%' :
+                      currentStep === 'review-analysis' ? '80%' : '100%'
             }}
           ></div>
         </div>
@@ -739,7 +739,7 @@ export default function VideoGenerator() {
                 }
               }}
               className="w-full px-3 py-2 text-base border border-[#787774]/30 bg-[#2F3438] text-[#F1F1EF] rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#337EA9] focus:border-[#337EA9] appearance-none"
-              style={{ 
+              style={{
                 WebkitAppearance: 'none',
                 MozAppearance: 'none',
                 backgroundImage: `url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23F1F1EF' stroke-width='2'%3e%3cpolyline points='6,9 12,15 18,9'/%3e%3c/svg%3e")`,
@@ -755,7 +755,7 @@ export default function VideoGenerator() {
                 const sessionName = session.name || `Session ${session.sessionId}`;
                 // Truncate long session names for mobile
                 const displayName = sessionName.length > 30 ? `${sessionName.substring(0, 30)}...` : sessionName;
-                
+
                 return (
                   <option key={session.sessionId} value={session.sessionId}>
                     {displayName} - {session.stats.audioFilesGenerated} files
@@ -786,7 +786,7 @@ export default function VideoGenerator() {
                   value={templateVideos.some(v => v.path === backgroundVideoPath) ? backgroundVideoPath : ''}
                   onChange={(e) => handleTemplateSelect(e.target.value)}
                   className="w-full px-3 py-2 text-base border border-[#787774]/30 bg-[#2F3438] text-[#F1F1EF] rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#337EA9] focus:border-[#337EA9] appearance-none"
-                  style={{ 
+                  style={{
                     WebkitAppearance: 'none',
                     MozAppearance: 'none',
                     backgroundImage: `url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23F1F1EF' stroke-width='2'%3e%3cpolyline points='6,9 12,15 18,9'/%3e%3c/svg%3e")`,
@@ -842,7 +842,7 @@ export default function VideoGenerator() {
             </div>
           </div>
 
-{/* Next Step Button */}
+          {/* Next Step Button */}
           <div className="flex justify-end">
             <button
               onClick={() => setCurrentStep('generate-plan')}
@@ -860,7 +860,7 @@ export default function VideoGenerator() {
         <div className="space-y-6">
           <div className="bg-[#E7F3F8] border border-[#337EA9]/20 rounded-md p-4">
             <h3 className="text-lg font-semibold text-[#337EA9] mb-2">
- Generate AI Image Plan
+              Generate AI Image Plan
             </h3>
             <p className="text-[#37352F] text-sm">
               Our AI will analyze your dialogue content and create a strategic plan for where images should be placed for maximum educational impact.
@@ -930,16 +930,15 @@ export default function VideoGenerator() {
                     <div className="flex items-center gap-2 mb-2">
                       <span className="text-lg"></span>
                       <h5 className="font-semibold text-[#F1F1EF]">{requirement.title}</h5>
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                        requirement.priority === 'high' ? 'text-[#D44C47] bg-[#FDEBEC]' :
-                        requirement.priority === 'medium' ? 'text-[#CB912F] bg-[#FBF3DB]' :
-                        'text-[#448361] bg-[#EDF3EC]'
-                      }`}>
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${requirement.priority === 'high' ? 'text-[#D44C47] bg-[#FDEBEC]' :
+                          requirement.priority === 'medium' ? 'text-[#CB912F] bg-[#FBF3DB]' :
+                            'text-[#448361] bg-[#EDF3EC]'
+                        }`}>
                         {requirement.priority.toUpperCase()}
                       </span>
                       {requirement.uploaded && (
                         <span className="px-2 py-1 rounded-full text-xs font-medium text-[#448361] bg-[#EDF3EC]">
- UPLOADED
+                          UPLOADED
                         </span>
                       )}
                     </div>
@@ -979,19 +978,18 @@ export default function VideoGenerator() {
                       />
                       <label
                         htmlFor={`upload-${requirement.id}`}
-                        className={`px-4 py-2 rounded-md cursor-pointer inline-block transition-colors ${
-                          uploadingRequiredImages[requirement.id]
+                        className={`px-4 py-2 rounded-md cursor-pointer inline-block transition-colors ${uploadingRequiredImages[requirement.id]
                             ? 'bg-[#787774]/50 text-[#787774] cursor-not-allowed'
                             : requirement.uploaded
-                            ? 'bg-[#448361] text-[#F1F1EF] hover:bg-[#448361]/80'
-                            : 'bg-[#337EA9] text-[#F1F1EF] hover:bg-[#337EA9]/80'
-                        }`}
+                              ? 'bg-[#448361] text-[#F1F1EF] hover:bg-[#448361]/80'
+                              : 'bg-[#337EA9] text-[#F1F1EF] hover:bg-[#337EA9]/80'
+                          }`}
                       >
                         {uploadingRequiredImages[requirement.id] ? ' Uploading...' : requirement.uploaded ? ' Uploaded' : ' Upload'}
                       </label>
                       {requiredImageErrors[requirement.id] && (
                         <div className="mt-2 text-sm text-[#D44C47] bg-[#FDEBEC] p-2 rounded">
- {requiredImageErrors[requirement.id]}
+                          {requiredImageErrors[requirement.id]}
                         </div>
                       )}
                     </div>
@@ -1008,7 +1006,7 @@ export default function VideoGenerator() {
             >
               ← Back
             </button>
-            
+
             <button
               onClick={handleRequiredImagesComplete}
               className="px-6 py-3 bg-[#448361] hover:bg-[#448361]/80 text-[#F1F1EF] font-medium rounded-md transition-colors"
@@ -1036,7 +1034,7 @@ export default function VideoGenerator() {
             >
               ← Back
             </button>
-            
+
             <button
               onClick={handleAnalyzeImages}
               className="px-6 py-3 bg-[#9065B0] hover:bg-[#9065B0]/80 text-[#F1F1EF] font-medium rounded-md transition-colors"
@@ -1063,7 +1061,7 @@ export default function VideoGenerator() {
         <div className="text-center py-8">
           <div className="animate-spin rounded-full h-12 w-12 border-4 border-[#337EA9] border-t-transparent mx-auto mb-4"></div>
           <h3 className="text-lg font-semibold text-[#F1F1EF] mb-2">
- Generating Your Video
+            Generating Your Video
           </h3>
           <p className="text-[#787774]">
             Creating video with required images + {approvedUserImagePlacements.length} approved extra images...
@@ -1078,7 +1076,7 @@ export default function VideoGenerator() {
       {generatedVideo && (
         <div className="mt-6 p-4 bg-[#EDF3EC] border border-[#448361]/20 rounded-md">
           <h3 className="text-lg font-semibold text-[#448361] mb-3">
- Video Generated Successfully!
+            Video Generated Successfully!
           </h3>
           <div className="text-[#37352F] text-sm mb-4">
             <p><strong>Filename:</strong> {generatedVideo.filename}</p>

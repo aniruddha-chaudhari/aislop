@@ -42,6 +42,7 @@ interface AudioSession {
   sessionId: string;
   name?: string;
   createdAt: string;
+  updatedAt?: string;
   parameters: SessionParameters;
   stats: SessionStats;
   dialogues: Dialogue[];
@@ -100,7 +101,7 @@ export default function AudioBrowser() {
       return () => { cancelled = true; };
     }
 
-  // If backend already provided totals on each session, use those first
+    // If backend already provided totals on each session, use those first
     const backendTotals: Record<string, number> = {};
     let hasAnyBackendTotal = false;
     sessions.forEach((s: any) => {
@@ -111,18 +112,18 @@ export default function AudioBrowser() {
     });
     if (hasAnyBackendTotal) {
       setSessionDurations(backendTotals);
-    // Also use backend-provided start offsets per dialogue if present
-    const offsets: Record<string, Record<string, number>> = {};
-    sessions.forEach((s: any) => {
-      const map: Record<string, number> = {};
-      s.dialogues?.forEach((d: any) => {
-        if (typeof d.startOffsetSeconds === 'number') {
-          map[d.id] = Math.max(0, Math.floor(d.startOffsetSeconds));
-        }
+      // Also use backend-provided start offsets per dialogue if present
+      const offsets: Record<string, Record<string, number>> = {};
+      sessions.forEach((s: any) => {
+        const map: Record<string, number> = {};
+        s.dialogues?.forEach((d: any) => {
+          if (typeof d.startOffsetSeconds === 'number') {
+            map[d.id] = Math.max(0, Math.floor(d.startOffsetSeconds));
+          }
+        });
+        offsets[s.sessionId] = map;
       });
-      offsets[s.sessionId] = map;
-    });
-    setSessionOffsets(offsets);
+      setSessionOffsets(offsets);
       return () => { cancelled = true; };
     }
 
@@ -233,9 +234,9 @@ export default function AudioBrowser() {
             name: item.topic || `Session ${sessionId}`,
             createdAt: item.generatedAt
               ? new Date(
-                  // generatedAt from stat.mtime is seconds; heuristic to convert
-                  item.generatedAt > 10_000_000_000 ? item.generatedAt : item.generatedAt * 1000
-                ).toISOString()
+                // generatedAt from stat.mtime is seconds; heuristic to convert
+                item.generatedAt > 10_000_000_000 ? item.generatedAt : item.generatedAt * 1000
+              ).toISOString()
               : new Date().toISOString(),
             parameters: {
               exaggeration: item.exaggeration ?? 0.6,
@@ -264,8 +265,8 @@ export default function AudioBrowser() {
           fileSize: item.fileSize || 0,
           generatedAt: item.generatedAt
             ? new Date(
-                item.generatedAt > 10_000_000_000 ? item.generatedAt : item.generatedAt * 1000
-              ).toISOString()
+              item.generatedAt > 10_000_000_000 ? item.generatedAt : item.generatedAt * 1000
+            ).toISOString()
             : new Date().toISOString(),
           duration: item.duration || 0
         };
@@ -475,7 +476,7 @@ export default function AudioBrowser() {
 
       // Refresh the audio files list
       await fetchAudioFiles();
-      
+
       console.log('Audio file deleted successfully');
     } catch (error) {
       console.error('Error deleting audio file:', error);
@@ -552,13 +553,13 @@ export default function AudioBrowser() {
   const deleteSession = async (sessionId: string) => {
     const session = sessions.find(s => s.sessionId === sessionId);
     const sessionName = session?.name || `Session ${sessionId}`;
-    
+
     if (!confirm(`Are you sure you want to delete "${sessionName}" and all its audio files? This action cannot be undone.`)) {
       return;
     }
 
     try {
-      const response = await fetch(`${API_ENDPOINTS.deleteSession}/${sessionId}`, {
+      const response = await fetch(API_ENDPOINTS.deleteAudioSession(sessionId), {
         method: 'DELETE',
       });
 
@@ -637,7 +638,7 @@ export default function AudioBrowser() {
           <p className="text-gray-600 dark:text-gray-400 mb-4">
             Found {sessions.length} conversation session{sessions.length !== 1 ? 's' : ''}
           </p>
-          
+
           {sessions.map((session) => (
             <div
               key={session.sessionId}
@@ -716,13 +717,12 @@ export default function AudioBrowser() {
                   {session.dialogues.map((dialogue) => (
                     <div
                       key={dialogue.id}
-                      className={`dialogue-container p-3 sm:p-4 rounded-lg border-l-4 overflow-visible ${
-                        dialogue.character === 'Stewie'
-                          ? 'bg-purple-50 dark:bg-purple-900/20 border-purple-400'
-                          : dialogue.character === 'Peter'
+                      className={`dialogue-container p-3 sm:p-4 rounded-lg border-l-4 overflow-visible ${dialogue.character === 'Stewie'
+                        ? 'bg-purple-50 dark:bg-purple-900/20 border-purple-400'
+                        : dialogue.character === 'Peter'
                           ? 'bg-green-50 dark:bg-green-900/20 border-green-400'
                           : 'bg-gray-50 dark:bg-gray-700 border-gray-400'
-                      }`}
+                        }`}
                     >
                       <div className="space-y-3 min-w-0">
                         <div className="flex items-start space-x-2 sm:space-x-3 mb-2">
@@ -730,13 +730,12 @@ export default function AudioBrowser() {
                             {dialogue.character === 'Stewie' ? '👶' : dialogue.character === 'Peter' ? '👨' : '🎵'}
                           </span>
                           <div className="min-w-0 flex-1">
-                            <p className={`font-semibold text-sm sm:text-base ${
-                              dialogue.character === 'Stewie'
-                                ? 'text-purple-700 dark:text-purple-300'
-                                : dialogue.character === 'Peter'
+                            <p className={`font-semibold text-sm sm:text-base ${dialogue.character === 'Stewie'
+                              ? 'text-purple-700 dark:text-purple-300'
+                              : dialogue.character === 'Peter'
                                 ? 'text-green-700 dark:text-green-300'
                                 : 'text-gray-700 dark:text-gray-300'
-                            }`}>
+                              }`}>
                               {dialogue.character} - Line {dialogue.order}
                             </p>
                             {dialogue.audioFile && (
@@ -754,7 +753,7 @@ export default function AudioBrowser() {
                             &ldquo;{dialogue.text}&rdquo;
                           </p>
                         </div>
-                        
+
                         {dialogue.audioFile && (
                           <div className="flex flex-wrap gap-2 ml-0 sm:ml-11 mt-3">
                             <button
@@ -762,60 +761,60 @@ export default function AudioBrowser() {
                               className="px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white text-xs sm:text-sm rounded-md transition-colors flex items-center gap-1"
                               title="Play audio"
                             >
-                            <span>▶️</span>
-                            <span className="hidden sm:inline">Play</span>
-                          </button>
-                          <button
-                            onClick={() => downloadAudio(dialogue.audioFile!.filename, session.sessionId)}
-                            className="px-3 py-2 bg-gray-500 hover:bg-gray-600 text-white text-xs sm:text-sm rounded-md transition-colors flex items-center gap-1"
-                            title="Download audio"
-                          >
-                            <span>⬇️</span>
-                            <span className="hidden sm:inline">Download</span>
-                          </button>
-                          <button
-                            onClick={() => deleteAudioFile(dialogue.audioFile!.filename, session.sessionId)}
-                            className="px-3 py-2 bg-red-500 hover:bg-red-600 text-white text-xs sm:text-sm rounded-md transition-colors flex items-center gap-1"
-                            title="Delete audio file"
-                          >
-                            <span>🗑️</span>
-                            <span className="hidden sm:inline">Delete</span>
-                          </button>
-                          <div className="relative">
-                            <button
-                              onClick={() => {
-                                setShowRegenerateDropdown(
-                                  showRegenerateDropdown === dialogue.audioFile!.filename
-                                    ? null
-                                    : dialogue.audioFile!.filename
-                                );
-                                // Reset parameters with current text
-                                console.log(' Opening regenerate dropdown for:', dialogue.audioFile!.filename);
-                                console.log(' Current dialogue text:', dialogue.text);
-                                setRegenerateParams(prev => ({
-                                  ...prev,
-                                  text: dialogue.text
-                                }));
-                                console.log(' Set regenerateParams.text to:', dialogue.text);
-                              }}
-                              className="px-3 py-2 bg-orange-500 hover:bg-orange-600 text-white text-xs sm:text-sm rounded-md transition-colors flex items-center gap-1"
-                              title="Regenerate audio with different parameters"
-                              disabled={regeneratingIndex === dialogue.audioFile!.filename}
-                            >
-                              <span></span>
-                              <span className="hidden sm:inline">
-                                {regeneratingIndex === dialogue.audioFile!.filename ? 'Regenerating...' : 'Regenerate'}
-                              </span>
+                              <span>▶️</span>
+                              <span className="hidden sm:inline">Play</span>
                             </button>
+                            <button
+                              onClick={() => downloadAudio(dialogue.audioFile!.filename, session.sessionId)}
+                              className="px-3 py-2 bg-gray-500 hover:bg-gray-600 text-white text-xs sm:text-sm rounded-md transition-colors flex items-center gap-1"
+                              title="Download audio"
+                            >
+                              <span>⬇️</span>
+                              <span className="hidden sm:inline">Download</span>
+                            </button>
+                            <button
+                              onClick={() => deleteAudioFile(dialogue.audioFile!.filename, session.sessionId)}
+                              className="px-3 py-2 bg-red-500 hover:bg-red-600 text-white text-xs sm:text-sm rounded-md transition-colors flex items-center gap-1"
+                              title="Delete audio file"
+                            >
+                              <span>🗑️</span>
+                              <span className="hidden sm:inline">Delete</span>
+                            </button>
+                            <div className="relative">
+                              <button
+                                onClick={() => {
+                                  setShowRegenerateDropdown(
+                                    showRegenerateDropdown === dialogue.audioFile!.filename
+                                      ? null
+                                      : dialogue.audioFile!.filename
+                                  );
+                                  // Reset parameters with current text
+                                  console.log(' Opening regenerate dropdown for:', dialogue.audioFile!.filename);
+                                  console.log(' Current dialogue text:', dialogue.text);
+                                  setRegenerateParams(prev => ({
+                                    ...prev,
+                                    text: dialogue.text
+                                  }));
+                                  console.log(' Set regenerateParams.text to:', dialogue.text);
+                                }}
+                                className="px-3 py-2 bg-orange-500 hover:bg-orange-600 text-white text-xs sm:text-sm rounded-md transition-colors flex items-center gap-1"
+                                title="Regenerate audio with different parameters"
+                                disabled={regeneratingIndex === dialogue.audioFile!.filename}
+                              >
+                                <span></span>
+                                <span className="hidden sm:inline">
+                                  {regeneratingIndex === dialogue.audioFile!.filename ? 'Regenerating...' : 'Regenerate'}
+                                </span>
+                              </button>
+                            </div>
                           </div>
-                        </div>
                         )}
 
                         {/* Regenerate Parameters - Show inline on mobile, dropdown on desktop */}
                         {showRegenerateDropdown === dialogue.audioFile!.filename && (
                           <div className="mt-4 p-4 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md">
                             <h4 className="text-sm font-semibold mb-3 text-gray-800 dark:text-gray-200">Regenerate Parameters</h4>
-                            
+
                             <div className="space-y-3">
                               <div>
                                 <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -831,7 +830,7 @@ export default function AudioBrowser() {
                                   className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
                                 />
                               </div>
-                              
+
                               <div>
                                 <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
                                   Temperature: {regenerateParams.temperature}
@@ -846,7 +845,7 @@ export default function AudioBrowser() {
                                   className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
                                 />
                               </div>
-                              
+
                               <div>
                                 <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
                                   Seed: {regenerateParams.seedNum}
@@ -860,7 +859,7 @@ export default function AudioBrowser() {
                                   className="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                                 />
                               </div>
-                              
+
                               <div>
                                 <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
                                   CFG Weight: {regenerateParams.cfgWeight}
@@ -875,7 +874,7 @@ export default function AudioBrowser() {
                                   className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
                                 />
                               </div>
-                              
+
                               <div>
                                 <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
                                   Min P: {regenerateParams.minP}
@@ -890,7 +889,7 @@ export default function AudioBrowser() {
                                   className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
                                 />
                               </div>
-                              
+
                               <div>
                                 <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
                                   Top P: {regenerateParams.topP}
@@ -905,7 +904,7 @@ export default function AudioBrowser() {
                                   className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
                                 />
                               </div>
-                              
+
                               <div>
                                 <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
                                   Repetition Penalty: {regenerateParams.repetitionPenalty}
@@ -921,7 +920,7 @@ export default function AudioBrowser() {
                                 />
                               </div>
                             </div>
-                            
+
                             <div className="space-y-3 mt-4">
                               <div>
                                 <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
