@@ -106,6 +106,7 @@ export default function VideoGenerator() {
   const [planProgress, setPlanProgress] = useState<any>(null);
   const [uploadingRequiredImages, setUploadingRequiredImages] = useState<{ [key: string]: boolean }>({});
   const [requiredImageErrors, setRequiredImageErrors] = useState<{ [key: string]: string }>({});
+  const [videoStyle, setVideoStyle] = useState<string>('standard');
 
   // Normalize audio sessions coming from either the Node backend ({ success, sessions })
   // or the Python backend ({ sessions, files } without a success flag).
@@ -150,6 +151,7 @@ export default function VideoGenerator() {
         setSelectedSession(parsedData.selectedSession || '');
         setTopic(parsedData.topic || '');
         setBackgroundVideoPath(parsedData.backgroundVideoPath || '');
+        setVideoStyle(parsedData.videoStyle || 'standard');
         setCurrentStep(parsedData.currentStep || 'select');
         setImagePlan(parsedData.imagePlan || null);
         setPlanProgress(parsedData.planProgress || null);
@@ -179,6 +181,7 @@ export default function VideoGenerator() {
       selectedSession,
       topic,
       backgroundVideoPath,
+      videoStyle,
       currentStep,
       imagePlan,
       planProgress,
@@ -206,7 +209,7 @@ export default function VideoGenerator() {
         window.history.replaceState({}, '', url.toString());
       }
     }
-  }, [selectedSession, topic, backgroundVideoPath, currentStep, imagePlan, planProgress, userImages, approvedUserImagePlacements]);
+  }, [selectedSession, topic, backgroundVideoPath, videoStyle, currentStep, imagePlan, planProgress, userImages, approvedUserImagePlacements]);
 
   const fetchAudioSessions = async () => {
     setLoading(true);
@@ -566,7 +569,8 @@ export default function VideoGenerator() {
         sessionId: selectedSession,
         backgroundVideoPath: backgroundVideoPath,
         userImages: userImages,
-        approvedUserImagePlacements: approvedPlacements
+        approvedUserImagePlacements: approvedPlacements,
+        videoStyle: videoStyle
       };
 
       // Include imagePlan if it exists and has uploaded images
@@ -770,16 +774,45 @@ export default function VideoGenerator() {
             )}
           </div>
 
-          {/* Background Video Input */}
+          {/* Video Style Selection */}
           <div className="mb-6">
             <label className="block text-sm font-medium text-[#F1F1EF] mb-2">
-              Background Video
+              Video Style
+            </label>
+            <select
+              value={videoStyle}
+              onChange={(e) => setVideoStyle(e.target.value)}
+              className="w-full px-3 py-2 text-base border border-[#787774]/30 bg-[#2F3438] text-[#F1F1EF] rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#337EA9] focus:border-[#337EA9] appearance-none"
+              style={{
+                WebkitAppearance: 'none',
+                MozAppearance: 'none',
+                backgroundImage: `url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23F1F1EF' stroke-width='2'%3e%3cpolyline points='6,9 12,15 18,9'/%3e%3c/svg%3e")`,
+                backgroundRepeat: 'no-repeat',
+                backgroundPosition: 'right 0.7rem center',
+                backgroundSize: '1.2em',
+                paddingRight: '2.5rem'
+              }}
+              disabled={generating}
+            >
+              <option value="standard">Standard Video (9:16, Subtitles)</option>
+              <option value="reel_dynamic">Reel (Dynamic) - Vertical with transitions & music</option>
+            </select>
+            <p className="text-xs text-[#787774] mt-1">
+              {videoStyle === 'standard' && 'Traditional vertical video with character overlays and subtitles'}
+              {videoStyle === 'reel_dynamic' && 'Dynamic reel-style with transitions, background music, and SFX (90-150s target)'}
+            </p>
+          </div>
+
+          {/* Background Media Input */}
+          <div className="mb-6">
+            <label className="block text-sm font-medium text-[#F1F1EF] mb-2">
+              Background Media (video or image)
             </label>
 
-            {/* Template Videos Selection */}
+            {/* Template Media Selection */}
             <div className="mb-4">
               <label className="block text-sm text-[#787774] mb-2">
-                Select from Template Videos
+                Select from Template Media
               </label>
               {templateVideos.length > 0 ? (
                 <select
@@ -796,7 +829,7 @@ export default function VideoGenerator() {
                     paddingRight: '2.5rem'
                   }}
                 >
-                  <option value="">Choose a template video...</option>
+                  <option value="">Choose a template (video or image)...</option>
                   {templateVideos.map((video) => (
                     <option key={video.filename} value={video.path}>
                       {video.filename} ({formatFileSize(video.fileSize)})
@@ -805,7 +838,7 @@ export default function VideoGenerator() {
                 </select>
               ) : (
                 <p className="text-sm text-[#787774]">
-                  No template videos found. Upload one below or use the file path option.
+                  No template media found. Upload one below or use the file path option.
                 </p>
               )}
             </div>
@@ -813,31 +846,31 @@ export default function VideoGenerator() {
             {/* Upload New Template */}
             <div className="mb-4">
               <label className="block text-sm text-[#787774] mb-2">
-                Or Upload New Template Video
+                Or Upload New Template (video or image)
               </label>
               <FileUploader
                 onFileSelect={(file) => file && uploadTemplateVideo(file)}
-                accept="video/*"
+                accept="video/*,image/*"
                 disabled={uploadingTemplate}
-                placeholder="Upload Video Template"
+                placeholder="Upload Background Media"
               />
             </div>
 
             {/* File Path Option */}
             <div className="mb-4">
               <label className="block text-sm text-[#787774] mb-2">
-                Or Enter Custom File Path (Advanced)
+                Or Enter Custom File Path (video or image)
               </label>
               <input
                 type="text"
                 value={backgroundVideoPath}
                 onChange={handlePathInput}
-                placeholder="e.g., F:\path\to\background.mp4"
+                placeholder="e.g., F:\path\to\background.mp4 or .png"
                 className="w-full px-3 py-2 border border-[#787774]/30 bg-[#2F3438] text-[#F1F1EF] rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#337EA9] focus:border-[#337EA9] placeholder-[#787774]"
                 disabled={generating}
               />
               <p className="text-xs text-[#787774] mt-1">
-                Use this if your video file is already on the server
+                Use this if your media file is already on the server (video or image)
               </p>
             </div>
           </div>
@@ -851,6 +884,15 @@ export default function VideoGenerator() {
             >
               Next: Generate Image Plan →
             </button>
+            {videoStyle === 'reel_dynamic' && (
+              <button
+                onClick={() => setCurrentStep('generate-plan')}
+                disabled={!selectedSession || !backgroundVideoPath}
+                className="ml-3 px-6 py-3 bg-[#448361] hover:bg-[#448361]/80 disabled:bg-[#787774]/50 text-[#F1F1EF] font-medium rounded-md transition-colors"
+              >
+                Start Reel Planner →
+              </button>
+            )}
           </div>
         </>
       )}
@@ -873,7 +915,11 @@ export default function VideoGenerator() {
               disabled={loading}
               className="px-8 py-4 bg-[#448361] hover:bg-[#448361]/80 disabled:bg-[#787774]/50 text-[#F1F1EF] font-semibold rounded-md transition-colors text-lg"
             >
-              {loading ? ' Analyzing Dialogue & Creating Plan...' : ' Generate Image Plan with AI'}
+              {loading
+                ? ' Analyzing Dialogue & Creating Plan...'
+                : videoStyle === 'reel_dynamic'
+                  ? 'Create Plan'
+                  : 'Generate Image Plan with AI'}
             </button>
           </div>
 

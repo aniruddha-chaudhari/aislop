@@ -171,6 +171,22 @@ export default function ConversationGenerator() {
     }
   };
 
+  const checkTTSConnection = async (): Promise<boolean> => {
+    try {
+      const response = await fetch(API_ENDPOINTS.testTTSConnection, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+        },
+      });
+      const data = await response.json();
+      return data.success === true;
+    } catch (error) {
+      console.error('Error checking TTS connection:', error);
+      return false;
+    }
+  };
+
   const handleApproveAndGenerateAudio = async () => {
     setLoading(true);
     setError('');
@@ -179,6 +195,15 @@ export default function ConversationGenerator() {
     // If audio files are already generated, skip API call
     if (audioFiles.length > 0) {
       setCurrentStep('audio-generation');
+      setLoading(false);
+      return;
+    }
+
+    // Check TTS connection before attempting to generate audio
+    console.log('Checking TTS connection...');
+    const ttsConnected = await checkTTSConnection();
+    if (!ttsConnected) {
+      setError('TTS API is not available. Please ensure the Chatterbox TTS server is running on port 8000.\n\nYou can start it by running: cd F:\\Aniruddha\\AI\\chatterbox && .venv\\Scripts\\Activate.ps1 && python fastapi_tts_server.py');
       setLoading(false);
       return;
     }
@@ -211,8 +236,24 @@ export default function ConversationGenerator() {
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+        let errorMessage = `HTTP error! status: ${response.status}`;
+        try {
+          const errorData = await response.json();
+          if (errorData.error) {
+            errorMessage = errorData.error;
+          } else if (errorData.message) {
+            errorMessage = errorData.message;
+          }
+          // Add suggestion if available
+          if (errorData.suggestion) {
+            errorMessage += `\n\n${errorData.suggestion}`;
+          }
+        } catch {
+          // If JSON parsing fails, try text
+          const errorText = await response.text();
+          errorMessage = errorText || errorMessage;
+        }
+        throw new Error(errorMessage);
       }
 
       const data = await response.json();
@@ -234,7 +275,8 @@ export default function ConversationGenerator() {
       }
     } catch (error) {
       console.error('Error generating audio:', error);
-      setError('Failed to generate audio. Please try again.');
+      const errorMessage = error instanceof Error ? error.message : 'Failed to generate audio. Please try again.';
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -1029,7 +1071,7 @@ export default function ConversationGenerator() {
       {/* Error Display */}
       {error && (
         <div className="mb-4 sm:mb-6 p-3 sm:p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md">
-          <p className="text-red-600 dark:text-red-400 text-sm sm:text-base">{error}</p>
+          <p className="text-red-600 dark:text-red-400 text-sm sm:text-base whitespace-pre-line">{error}</p>
         </div>
       )}
 

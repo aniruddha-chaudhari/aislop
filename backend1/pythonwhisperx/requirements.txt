@@ -1,0 +1,19 @@
+# Audio processing dependencies
+pydub>=0.25.1
+
+# OpenAI Whisper for transcription
+openai-whisper
+
+# PyTorch for Whisper backend (CPU version)
+# For GPU version with CUDA 12.1, replace with:
+# torch>=2.0.0 --index-url https://download.pytorch.org/whl/cu121
+torch>=2.0.0
+
+# Additional useful dependencies for audio processing
+numpy>=1.21.0
+librosa>=0.10.0  # Alternative audio processing library
+soundfile>=0.12.0  # Better audio file I/O
+
+# Web framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0

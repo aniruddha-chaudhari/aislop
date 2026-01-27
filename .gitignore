@@ -73,6 +73,17 @@ Thumbs.db
 .yarn-integrity
 temp
 /src/generated/prisma
+# Backend media assets (not needed in git)
+backend/src/character_audio/
+backend/src/character_images/
+backend1/src/character_audio/
+backend1/src/character_images/
+#
+# Documentation / README files (not needed in git)
+README*
+*README*.md
+VIDEO_API_DOCUMENTATION.md
+VIDEO_FRONTEND_README.md
 video_template
 temp_alignment
 generated_audio
