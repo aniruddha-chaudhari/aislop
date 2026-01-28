@@ -1,96 +1,26 @@
-import { Request, Response } from 'express';
+import type { HttpContext } from '../utils/http';
+import { jsonResponse } from '../utils/http';
+import type { HandlerResult } from '../utils/http';
 import fs from 'fs';
 import path from 'path';
 import { PrismaClient } from '../generated/prisma';
 import { generateVideoWithSubtitles as generateVideoService } from '../service/videoGenerator';
-import multer from 'multer';
-import { ImageEmbeddingService, ImageEmbeddingAnalyzer, AssFileProcessor, UserProvidedImage } from '../service/imageEmbedder';
-
-// Import cleanup function from audioController
+import { ImageEmbeddingService, ImageEmbeddingAnalyzer, UserProvidedImage } from '../service/imageEmbedder';
 import { cleanupOldUserImageFiles } from './audioController';
+// Redis removed - using file-based cache only
 
-// Initialize Prisma client
 const prisma = new PrismaClient();
 
-// ASS file cache configuration
-const ASS_CACHE_DIR = path.join(process.cwd(), 'temp', 'ass_cache');
-const ASS_CACHE_DURATION_HOURS = 24; // Keep ASS files for 24 hours
+const ASS_CACHE_DIR = path.join(process.cwd(), 'storage', 'temp', 'ass_cache');
+const ASS_CACHE_DURATION_HOURS = 24;
+// Centralised storage directories for generated media
+const VIDEO_OUTPUT_DIR = path.join(process.cwd(), 'storage', 'videos');
+const TEMP_DIR = path.join(process.cwd(), 'storage', 'temp');
 
-// Ensure ASS cache directory exists
 if (!fs.existsSync(ASS_CACHE_DIR)) {
   fs.mkdirSync(ASS_CACHE_DIR, { recursive: true });
   console.log(`📁 [INIT] Created ASS cache directory: ${ASS_CACHE_DIR}`);
 }
-
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    // Create temp directory if it doesn't exist
-    if (!fs.existsSync(TEMP_DIR)) {
-      fs.mkdirSync(TEMP_DIR, { recursive: true });
-    }
-    cb(null, TEMP_DIR);
-  },
-  filename: (req, file, cb) => {
-    // Generate unique filename with timestamp
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
-const upload = multer({
-  storage: storage,
-  limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB limit
-  },
-  fileFilter: (req, file, cb) => {
-    // Allow media files (video or image) for template uploads
-    if (file.fieldname === 'video') {
-      const allowedTypes = /mp4|mov|avi|mkv|webm|jpeg|jpg|png|gif|webp/;
-      const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-      const mimetype = allowedTypes.test(file.mimetype);
-
-      if (mimetype && extname) {
-        return cb(null, true);
-      } else {
-        cb(new Error('Only video or image files are allowed!'));
-      }
-    }
-
-    // Allow image files for image uploads
-    if (file.fieldname === 'image') {
-      const allowedTypes = /jpeg|jpg|png|gif|webp/;
-      const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-      const mimetype = allowedTypes.test(file.mimetype);
-
-      if (mimetype && extname) {
-        return cb(null, true);
-      } else {
-        cb(new Error('Only image files are allowed!'));
-      }
-    }
-
-    // Allow ASS files
-    if (file.fieldname === 'ass') {
-      if (path.extname(file.originalname).toLowerCase() === '.ass') {
-        return cb(null, true);
-      } else {
-        cb(new Error('Only .ass files are allowed!'));
-      }
-    }
-
-    cb(new Error('Invalid file type!'));
-  }
-});
-
-// Extend Request interface to include file property
-interface MulterRequest extends Request {
-  file?: Express.Multer.File;
-}
-
-// Video generation configuration
-const VIDEO_OUTPUT_DIR = path.join(process.cwd(), 'generated_videos');
-const TEMP_DIR = path.join(process.cwd(), 'temp');
 
 // ASS Cache Utility Functions
 const getAssCacheKey = (sessionId: string, dialogueHash: string): string => {
@@ -107,32 +37,48 @@ const generateDialogueHash = (dialogues: any[]): string => {
   return crypto.createHash('md5').update(dialogueString).digest('hex').substring(0, 8);
 };
 
-const checkAssCache = (sessionId: string, dialogueHash: string): string | null => {
-  const cacheKey = getAssCacheKey(sessionId, dialogueHash);
-  const cachePath = getAssCachePath(cacheKey);
+const checkAssCache = async (sessionId: string, dialogueHash: string): Promise<string | null> => {
+  console.log(`🔍 [ASS CACHE][DB] Checking for cached subtitle for session ${sessionId} and hash ${dialogueHash}`);
 
-  console.log(`🔍 [ASS CACHE] Checking for cached file: ${cacheKey}`);
-  console.log(`🔍 [ASS CACHE] Cache path: ${cachePath}`);
+  try {
+    // Redis removed - check database cache only
+    const cacheEntry = await prisma.subtitleCache.findFirst({
+      where: { sessionId, dialogueHash },
+      orderBy: { createdAt: 'desc' }
+    });
 
-  if (fs.existsSync(cachePath)) {
-    const stats = fs.statSync(cachePath);
-    const ageInHours = (Date.now() - stats.birthtime.getTime()) / (1000 * 60 * 60);
-
-    if (ageInHours <= ASS_CACHE_DURATION_HOURS) {
-      console.log(`✅ [ASS CACHE] Found valid cached ASS file: ${cacheKey} (${ageInHours.toFixed(2)}h old)`);
-      return cachePath;
-    } else {
-      console.log(`🗑️ [ASS CACHE] Cached ASS file expired: ${cacheKey} (${ageInHours.toFixed(2)}h old)`);
-      fs.unlinkSync(cachePath);
+    if (!cacheEntry) {
+      console.log('❌ [ASS CACHE] No cache entry found');
+      return null;
     }
-  } else {
-    console.log(`❌ [ASS CACHE] No cached file found: ${cacheKey}`);
-  }
 
-  return null;
+    const ageInHours = (Date.now() - cacheEntry.createdAt.getTime()) / (1000 * 60 * 60);
+
+    if (ageInHours > ASS_CACHE_DURATION_HOURS) {
+      console.log(`🗑️ [ASS CACHE] Cached DB entry expired (${ageInHours.toFixed(2)}h old), deleting`);
+      await prisma.subtitleCache.delete({ where: { id: cacheEntry.id } });
+      return null;
+    }
+
+    const cachePath = cacheEntry.assFilePath;
+    console.log(`🔍 [ASS CACHE] Found DB entry, verifying file exists at: ${cachePath}`);
+
+    if (fs.existsSync(cachePath)) {
+      console.log('✅ [ASS CACHE] Using cached ASS file from DB entry');
+      return cachePath;
+    }
+
+    console.log('⚠️ [ASS CACHE] DB entry found but file missing, cleaning up entry');
+    await prisma.subtitleCache.delete({ where: { id: cacheEntry.id } });
+    return null;
+  } catch (error) {
+    console.error('❌ [ASS CACHE] Error while checking cache:', error);
+    return null;
+  }
 };
 
-const saveAssToCache = (sessionId: string, dialogueHash: string, assContent: string): string => {
+const saveAssToCache = async (sessionId: string, dialogueHash: string, assContent: string): Promise<string> => {
+  // Redis removed - save to disk only
   const cacheKey = getAssCacheKey(sessionId, dialogueHash);
   const cachePath = getAssCachePath(cacheKey);
 
@@ -144,7 +90,31 @@ const saveAssToCache = (sessionId: string, dialogueHash: string, assContent: str
   }
 
   fs.writeFileSync(cachePath, assContent, 'utf8');
-  console.log(`💾 [ASS CACHE] Saved ASS file to cache: ${cacheKey}`);
+  console.log(`💾 [ASS CACHE] Saved ASS file to cache on disk: ${cacheKey}`);
+
+  try {
+    // Upsert database record pointing to this cache path (for backward compatibility)
+    await prisma.subtitleCache.upsert({
+      where: {
+        sessionId_dialogueHash: {
+          sessionId,
+          dialogueHash
+        }
+      },
+      update: {
+        assFilePath: cachePath
+      },
+      create: {
+        sessionId,
+        dialogueHash,
+        assFilePath: cachePath
+      }
+    });
+
+    console.log('💾 [ASS CACHE][DB] Stored ASS cache path in database');
+  } catch (error) {
+    console.error('❌ [ASS CACHE][DB] Failed to store ASS cache path in database:', error);
+  }
 
   return cachePath;
 };
@@ -171,7 +141,7 @@ const cleanupExpiredAssFiles = (): number => {
 
   return deletedCount;
 };
-const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'generated_images');
+const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
 
 // Ensure directories exist
 if (!fs.existsSync(VIDEO_OUTPUT_DIR)) {
@@ -190,7 +160,7 @@ if (!fs.existsSync(IMAGE_UPLOAD_DIR)) {
 }
 
 // Main video generation function with enhanced timing
-export const generateVideoWithSubtitles = async (req: Request, res: Response) => {
+export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<HandlerResult> => {
   const startTime = Date.now();
 
   try {
@@ -204,7 +174,7 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
       approvedUserImagePlacements,
       backgroundVideoSpeed = 1.10, // Default slight speed increase (10% faster)
       videoStyle = 'standard' // Video style preset (standard, reel_dynamic)
-    } = req.body;
+    } = (ctx.body as any);
 
     console.log('🎬 [CONTROLLER] Received video generation request for session:', sessionId);
     console.log('🎬 [CONTROLLER] Generate ASS only:', generateAssOnly);
@@ -231,9 +201,9 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
       );
 
       if (result.success) {
-        return res.status(200).json(result);
+        return jsonResponse(200,result);
       } else {
-        return res.status(500).json(result);
+        return jsonResponse(500,result);
       }
     }
 
@@ -256,14 +226,14 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
         });
 
         if (!session) {
-          return res.status(404).json({ success: false, error: 'Session not found' });
+          return jsonResponse(404,{ success: false, error: 'Session not found' });
         }
 
         // Generate dialogue hash for caching
         const dialogueHash = generateDialogueHash(session.dialogues);
 
-        // Check if WhisperX ASS file already exists in cache
-        const cachedAssPath = checkAssCache(sessionId, dialogueHash);
+        // Check if WhisperX ASS file already exists in cache (DB + disk)
+        const cachedAssPath = await checkAssCache(sessionId, dialogueHash);
 
         let assFilePath: string;
         if (cachedAssPath) {
@@ -329,8 +299,8 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
           // Read the generated ASS content
           const assContent = fs.readFileSync(tempAssPath, 'utf8');
 
-          // Save ASS file to cache
-          assFilePath = saveAssToCache(sessionId, dialogueHash, assContent);
+          // Save ASS file to cache (writes to disk and stores path in DB)
+          assFilePath = await saveAssToCache(sessionId, dialogueHash, assContent);
 
           // Clean up temporary ASS file
           if (fs.existsSync(tempAssPath)) {
@@ -406,13 +376,13 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
           );
 
           if (result.success) {
-            return res.status(200).json({
+            return jsonResponse(200,{
               ...result,
               approvedPlacements: approvedUserImagePlacements.length,
               message: `Video generated successfully with ${approvedUserImagePlacements.length} approved user images!`
             });
           } else {
-            return res.status(500).json(result);
+            return jsonResponse(500,result);
           }
         }
 
@@ -429,7 +399,7 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
           }));
 
         if (validDialogues.length === 0) {
-          return res.status(400).json({
+          return jsonResponse(400,{
             success: false,
             error: 'No dialogues with audio files found for image analysis'
           });
@@ -464,14 +434,14 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
               rejected: imagePlan.userImageDecisions?.filter(d => !d.useImage).length || 0
             }
           };
-          return res.status(200).json(enhancedResult);
+          return jsonResponse(200,enhancedResult);
         } else {
-          return res.status(500).json(result);
+          return jsonResponse(500,result);
         }
 
       } catch (error) {
         console.error('❌ [CONTROLLER] Error in user images video generation:', error);
-        return res.status(500).json({
+        return jsonResponse(500,{
           success: false,
           error: 'Failed to generate video with user images',
           details: error instanceof Error ? error.message : 'Unknown error'
@@ -498,18 +468,18 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
         });
 
         if (!session) {
-          return res.status(404).json({ success: false, error: 'Session not found' });
+          return jsonResponse(404,{ success: false, error: 'Session not found' });
         }
 
         // Generate dialogue hash for caching
         const dialogueHash = generateDialogueHash(session.dialogues);
 
-        // Check if WhisperX ASS file already exists in cache
-        const cachedAssPath = checkAssCache(sessionId, dialogueHash);
+        // Check if WhisperX ASS file already exists in cache (DB + disk)
+        const cachedAssPath = await checkAssCache(sessionId, dialogueHash);
 
         if (cachedAssPath) {
           console.log('✅ [CONTROLLER] Using cached WhisperX ASS file for analysis');
-          return res.status(200).json({
+          return jsonResponse(200,{
             success: true,
             message: 'ASS file retrieved from cache',
             assFilePath: cachedAssPath,
@@ -577,8 +547,8 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
         // Read the generated ASS content
         const assContent = fs.readFileSync(tempAssPath, 'utf8');
 
-        // Save ASS file to cache
-        const assFilePath = saveAssToCache(sessionId, dialogueHash, assContent);
+        // Save ASS file to cache (writes to disk and stores path in DB)
+        const assFilePath = await saveAssToCache(sessionId, dialogueHash, assContent);
 
         // Clean up temporary ASS file
         if (fs.existsSync(tempAssPath)) {
@@ -587,7 +557,7 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
 
         console.log('✅ [CONTROLLER] WhisperX ASS file generated and cached for analysis');
 
-        return res.status(200).json({
+        return jsonResponse(200,{
           success: true,
           message: 'ASS file generated with WhisperX API and cached successfully',
           assFilePath: assFilePath,
@@ -599,7 +569,7 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
 
       } catch (error) {
         console.error('❌ [CONTROLLER] Error generating ASS file with WhisperX:', error);
-        return res.status(500).json({
+        return jsonResponse(500,{
           success: false,
           error: 'Failed to generate ASS file with WhisperX API',
           details: error instanceof Error ? error.message : 'Unknown error'
@@ -639,16 +609,16 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
     );
 
     if (result.success) {
-      return res.status(200).json(result);
+      return jsonResponse(200,result);
     } else {
-      return res.status(500).json(result);
+      return jsonResponse(500,result);
     }
 
   } catch (error) {
     console.error('💥 [CONTROLLER] Video generation controller error:', error);
 
     const totalDuration = (Date.now() - startTime) / 1000;
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to generate video',
       details: error instanceof Error ? error.message : 'Unknown error',
@@ -658,39 +628,41 @@ export const generateVideoWithSubtitles = async (req: Request, res: Response) =>
 };
 
 // Keep your existing export functions (downloadVideo, getGeneratedVideos, deleteVideo, cleanupVideoFiles)
-export const downloadVideo = async (req: Request, res: Response) => {
+export const downloadVideo = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    const { filename } = req.params;
+    const { filename } = ctx.params;
 
     if (!filename) {
-      return res.status(400).json({ error: 'Filename is required' });
+      return jsonResponse(400,{ error: 'Filename is required' });
     }
 
     const filePath = path.join(VIDEO_OUTPUT_DIR, filename);
 
     if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'Video file not found' });
+      return jsonResponse(404,{ error: 'Video file not found' });
     }
 
-    res.setHeader('Content-Type', 'video/mp4');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-
-    const fileStream = fs.createReadStream(filePath);
-    fileStream.pipe(res);
-
+    const buf = await fs.promises.readFile(filePath);
+    return new Response(new Blob([buf]), {
+      status: 200,
+      headers: {
+        'Content-Type': 'video/mp4',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+      },
+    });
   } catch (error) {
     console.error('Error downloading video:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to download video file'
     });
   }
 };
 
-export const getGeneratedVideos = async (req: Request, res: Response) => {
+export const getGeneratedVideos = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
     if (!fs.existsSync(VIDEO_OUTPUT_DIR)) {
-      return res.status(200).json({ success: true, videos: [] });
+      return jsonResponse(200,{ success: true, videos: [] });
     }
 
     const videoFiles = fs.readdirSync(VIDEO_OUTPUT_DIR)
@@ -710,51 +682,51 @@ export const getGeneratedVideos = async (req: Request, res: Response) => {
       })
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
-    return res.status(200).json({ success: true, videos: videoFiles });
+    return jsonResponse(200,{ success: true, videos: videoFiles });
 
   } catch (error) {
     console.error('Error getting generated videos:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to get generated videos'
     });
   }
 };
 
-export const deleteVideo = async (req: Request, res: Response) => {
+export const deleteVideo = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    const { filename } = req.params;
+    const { filename } = ctx.params;
 
     if (!filename) {
-      return res.status(400).json({ error: 'Filename is required' });
+      return jsonResponse(400,{ error: 'Filename is required' });
     }
 
     const filePath = path.join(VIDEO_OUTPUT_DIR, filename);
 
     if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'Video file not found' });
+      return jsonResponse(404,{ error: 'Video file not found' });
     }
 
     fs.unlinkSync(filePath);
 
-    return res.status(200).json({
+    return jsonResponse(200,{
       success: true,
       message: `Video ${filename} deleted successfully`
     });
 
   } catch (error) {
     console.error('Error deleting video:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to delete video file'
     });
   }
 };
 
-export const cleanupVideoFiles = async (req: Request, res: Response) => {
+export const cleanupVideoFiles = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
     if (!fs.existsSync(VIDEO_OUTPUT_DIR)) {
-      return res.status(200).json({
+      return jsonResponse(200,{
         success: true,
         message: 'Video directory does not exist',
         deletedCount: 0
@@ -778,7 +750,7 @@ export const cleanupVideoFiles = async (req: Request, res: Response) => {
       }
     }
 
-    return res.status(200).json({
+    return jsonResponse(200,{
       success: true,
       message: `Cleaned up ${deletedCount} old video files`,
       deletedCount
@@ -786,19 +758,20 @@ export const cleanupVideoFiles = async (req: Request, res: Response) => {
 
   } catch (error) {
     console.error('Error cleaning up video files:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to clean up video files'
     });
   }
 };
 
-export const getTemplateVideos = async (req: Request, res: Response) => {
+export const getTemplateVideos = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    const TEMPLATE_DIR = path.join(process.cwd(), 'video_template');
+    // Store template videos under central storage directory
+    const TEMPLATE_DIR = path.join(process.cwd(), 'storage', 'video_templates');
 
     if (!fs.existsSync(TEMPLATE_DIR)) {
-      return res.status(200).json({ success: true, videos: [] });
+      return jsonResponse(200,{ success: true, videos: [] });
     }
 
     const videoFiles = fs.readdirSync(TEMPLATE_DIR)
@@ -817,25 +790,26 @@ export const getTemplateVideos = async (req: Request, res: Response) => {
       })
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
-    return res.status(200).json({ success: true, videos: videoFiles });
+    return jsonResponse(200,{ success: true, videos: videoFiles });
 
   } catch (error) {
     console.error('Error getting template videos:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to get template videos'
     });
   }
 };
 
-export const uploadTemplateVideo = async (req: Request, res: Response) => {
+export const uploadTemplateVideo = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    const file = (req as any).file;
+    const file = ctx.file;
     if (!file) {
-      return res.status(400).json({ error: 'No file uploaded' });
+      return jsonResponse(400,{ error: 'No file uploaded' });
     }
 
-    const TEMPLATE_DIR = path.join(process.cwd(), 'video_template');
+    // Store template videos under central storage directory
+    const TEMPLATE_DIR = path.join(process.cwd(), 'storage', 'video_templates');
 
     // Ensure directory exists
     if (!fs.existsSync(TEMPLATE_DIR)) {
@@ -861,7 +835,7 @@ export const uploadTemplateVideo = async (req: Request, res: Response) => {
 
     const stats = fs.statSync(finalPath);
 
-    return res.status(200).json({
+    return jsonResponse(200,{
       success: true,
       message: 'Video uploaded successfully',
       video: {
@@ -874,7 +848,7 @@ export const uploadTemplateVideo = async (req: Request, res: Response) => {
 
   } catch (error) {
     console.error('Error uploading template video:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to upload video'
     });
@@ -884,12 +858,12 @@ export const uploadTemplateVideo = async (req: Request, res: Response) => {
 // 🎯 IMAGE EMBEDDING ENDPOINTS
 
 // Analyze ASS file and generate image embedding plan
-export const analyzeAssForImages = async (req: Request, res: Response) => {
+export const analyzeAssForImages = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    const { sessionId, assFilePath, topic, forceFreshAss = false } = req.body;
+    const { sessionId, assFilePath, topic, forceFreshAss = false } = (ctx.body as any);
 
     if (!sessionId || !topic) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'Missing required parameters: sessionId, topic'
       });
@@ -914,7 +888,7 @@ export const analyzeAssForImages = async (req: Request, res: Response) => {
     });
 
     if (!session) {
-      return res.status(404).json({ success: false, error: 'Session not found' });
+      return jsonResponse(404,{ success: false, error: 'Session not found' });
     }
 
     console.log(`🎯 [CONTROLLER] Found ${session.dialogues.length} dialogues for clean timestamp analysis`);
@@ -929,7 +903,7 @@ export const analyzeAssForImages = async (req: Request, res: Response) => {
       }));
 
     if (validDialogues.length === 0) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'No dialogues with audio files found for analysis'
       });
@@ -949,7 +923,7 @@ export const analyzeAssForImages = async (req: Request, res: Response) => {
     // Format response for user
     const formattedPlan = ImageEmbeddingService.formatPlanForUser(imagePlan);
 
-    return res.status(200).json({
+    return jsonResponse(200,{
       success: true,
       message: 'Image embedding plan generated successfully using WhisperX clean timestamps for better accuracy',
       imagePlan,
@@ -964,7 +938,7 @@ export const analyzeAssForImages = async (req: Request, res: Response) => {
 
   } catch (error) {
     console.error('❌ [CONTROLLER] Error analyzing clean timestamps for image plan:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: `Failed to analyze clean timestamps: ${error instanceof Error ? error.message : String(error)}`
     });
@@ -972,12 +946,12 @@ export const analyzeAssForImages = async (req: Request, res: Response) => {
 };
 
 // Get current image plan status
-export const getImagePlanStatus = async (req: Request, res: Response) => {
+export const getImagePlanStatus = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    const { sessionId } = req.params;
+    const { sessionId } = ctx.params;
 
     if (!sessionId) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'Session ID is required'
       });
@@ -986,7 +960,7 @@ export const getImagePlanStatus = async (req: Request, res: Response) => {
     const planFilePath = path.join(TEMP_DIR, `${sessionId}_image_plan.json`);
 
     if (!fs.existsSync(planFilePath)) {
-      return res.status(404).json({
+      return jsonResponse(404,{
         success: false,
         error: 'Image plan not found. Please analyze ASS file first.'
       });
@@ -996,7 +970,7 @@ export const getImagePlanStatus = async (req: Request, res: Response) => {
     const progress = ImageEmbeddingAnalyzer.getUploadProgress(imagePlan);
     const formattedPlan = ImageEmbeddingService.formatPlanForUser(imagePlan);
 
-    return res.status(200).json({
+    return jsonResponse(200,{
       success: true,
       imagePlan,
       progress,
@@ -1006,7 +980,7 @@ export const getImagePlanStatus = async (req: Request, res: Response) => {
 
   } catch (error) {
     console.error('❌ [CONTROLLER] Error getting image plan status:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to get image plan status',
       details: error instanceof Error ? error.message : 'Unknown error'
@@ -1015,20 +989,20 @@ export const getImagePlanStatus = async (req: Request, res: Response) => {
 };
 
 // Upload image for specific requirement
-export const uploadImageForRequirement = async (req: MulterRequest, res: Response) => {
+export const uploadImageForRequirement = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    const { sessionId, imageId } = req.body;
-    const file = req.file;
+    const { sessionId, imageId } = (ctx.body as any);
+    const file = ctx.file;
 
     if (!sessionId || !imageId) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'Missing required parameters: sessionId, imageId'
       });
     }
 
     if (!file) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'No image file uploaded'
       });
@@ -1039,7 +1013,7 @@ export const uploadImageForRequirement = async (req: MulterRequest, res: Respons
     // Load current image plan
     const planFilePath = path.join(TEMP_DIR, `${sessionId}_image_plan.json`);
     if (!fs.existsSync(planFilePath)) {
-      return res.status(404).json({
+      return jsonResponse(404,{
         success: false,
         error: 'Image plan not found'
       });
@@ -1050,7 +1024,7 @@ export const uploadImageForRequirement = async (req: MulterRequest, res: Respons
     // Find the requirement
     const requirement = imagePlan.imageRequirements.find(req => req.id === imageId);
     if (!requirement) {
-      return res.status(404).json({
+      return jsonResponse(404,{
         success: false,
         error: 'Image requirement not found'
       });
@@ -1084,7 +1058,7 @@ export const uploadImageForRequirement = async (req: MulterRequest, res: Respons
 
     const progress = ImageEmbeddingAnalyzer.getUploadProgress(updatedPlan);
 
-    return res.status(200).json({
+    return jsonResponse(200,{
       success: true,
       message: 'Image uploaded successfully',
       imageId,
@@ -1098,7 +1072,7 @@ export const uploadImageForRequirement = async (req: MulterRequest, res: Respons
 
   } catch (error) {
     console.error('❌ [CONTROLLER] Error uploading image:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to upload image',
       details: error instanceof Error ? error.message : 'Unknown error'
@@ -1107,27 +1081,27 @@ export const uploadImageForRequirement = async (req: MulterRequest, res: Respons
 };
 
 // 🎯 USER-PROVIDED IMAGE UPLOAD ENDPOINT
-export const uploadUserProvidedImage = async (req: MulterRequest, res: Response) => {
+export const uploadUserProvidedImage = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    const { sessionId, label, description, preferredTimestamp, priority } = req.body;
-    const file = req.file;
+    const { sessionId, label, description, preferredTimestamp, priority } = (ctx.body as any);
+    const file = ctx.file;
 
     if (!sessionId) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'Session ID is required'
       });
     }
 
     if (!file) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'No image file uploaded'
       });
     }
 
     if (!label || !label.trim()) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'Image label is required'
       });
@@ -1179,7 +1153,7 @@ export const uploadUserProvidedImage = async (req: MulterRequest, res: Response)
 
     console.log('✅ [CONTROLLER] User-provided image uploaded and saved:', userImage.id);
 
-    return res.status(200).json({
+    return jsonResponse(200,{
       success: true,
       message: 'User-provided image uploaded successfully',
       userImage,
@@ -1188,7 +1162,7 @@ export const uploadUserProvidedImage = async (req: MulterRequest, res: Response)
 
   } catch (error) {
     console.error('❌ [CONTROLLER] Error uploading user-provided image:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to upload user-provided image',
       details: error instanceof Error ? error.message : 'Unknown error'
@@ -1197,12 +1171,12 @@ export const uploadUserProvidedImage = async (req: MulterRequest, res: Response)
 };
 
 // Get user-provided images for a session
-export const getUserProvidedImages = async (req: Request, res: Response) => {
+export const getUserProvidedImages = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    const { sessionId } = req.params;
+    const { sessionId } = ctx.params;
 
     if (!sessionId) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'Session ID is required'
       });
@@ -1211,7 +1185,7 @@ export const getUserProvidedImages = async (req: Request, res: Response) => {
     const userImagesFile = path.join(TEMP_DIR, `${sessionId}_user_images.json`);
 
     if (!fs.existsSync(userImagesFile)) {
-      return res.status(200).json({
+      return jsonResponse(200,{
         success: true,
         userImages: []
       });
@@ -1219,14 +1193,14 @@ export const getUserProvidedImages = async (req: Request, res: Response) => {
 
     const userImages: UserProvidedImage[] = JSON.parse(fs.readFileSync(userImagesFile, 'utf8'));
 
-    return res.status(200).json({
+    return jsonResponse(200,{
       success: true,
       userImages
     });
 
   } catch (error) {
     console.error('❌ [CONTROLLER] Error getting user-provided images:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to get user-provided images',
       details: error instanceof Error ? error.message : 'Unknown error'
@@ -1235,12 +1209,12 @@ export const getUserProvidedImages = async (req: Request, res: Response) => {
 };
 
 // Delete user-provided image
-export const deleteUserProvidedImage = async (req: Request, res: Response) => {
+export const deleteUserProvidedImage = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    const { sessionId, imageId } = req.params;
+    const { sessionId, imageId } = ctx.params;
 
     if (!sessionId || !imageId) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'Session ID and image ID are required'
       });
@@ -1249,7 +1223,7 @@ export const deleteUserProvidedImage = async (req: Request, res: Response) => {
     const userImagesFile = path.join(TEMP_DIR, `${sessionId}_user_images.json`);
 
     if (!fs.existsSync(userImagesFile)) {
-      return res.status(404).json({
+      return jsonResponse(404,{
         success: false,
         error: 'User images file not found'
       });
@@ -1259,7 +1233,7 @@ export const deleteUserProvidedImage = async (req: Request, res: Response) => {
     const imageToDelete = userImages.find(img => img.id === imageId);
 
     if (!imageToDelete) {
-      return res.status(404).json({
+      return jsonResponse(404,{
         success: false,
         error: 'User image not found'
       });
@@ -1274,7 +1248,7 @@ export const deleteUserProvidedImage = async (req: Request, res: Response) => {
     const updatedImages = userImages.filter(img => img.id !== imageId);
     fs.writeFileSync(userImagesFile, JSON.stringify(updatedImages, null, 2));
 
-    return res.status(200).json({
+    return jsonResponse(200,{
       success: true,
       message: 'User-provided image deleted successfully',
       imageId
@@ -1282,7 +1256,7 @@ export const deleteUserProvidedImage = async (req: Request, res: Response) => {
 
   } catch (error) {
     console.error('❌ [CONTROLLER] Error deleting user-provided image:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to delete user-provided image',
       details: error instanceof Error ? error.message : 'Unknown error'
@@ -1291,12 +1265,12 @@ export const deleteUserProvidedImage = async (req: Request, res: Response) => {
 };
 
 // Get list of uploaded images for a session
-export const getUploadedImages = async (req: Request, res: Response) => {
+export const getUploadedImages = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    const { sessionId } = req.params;
+    const { sessionId } = ctx.params;
 
     if (!sessionId) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'Session ID is required'
       });
@@ -1305,7 +1279,7 @@ export const getUploadedImages = async (req: Request, res: Response) => {
     const sessionImageDir = path.join(IMAGE_UPLOAD_DIR, sessionId);
 
     if (!fs.existsSync(sessionImageDir)) {
-      return res.status(200).json({
+      return jsonResponse(200,{
         success: true,
         images: []
       });
@@ -1326,14 +1300,14 @@ export const getUploadedImages = async (req: Request, res: Response) => {
       })
       .sort((a, b) => b.uploadedAt.getTime() - a.uploadedAt.getTime());
 
-    return res.status(200).json({
+    return jsonResponse(200,{
       success: true,
       images: imageFiles
     });
 
   } catch (error) {
     console.error('❌ [CONTROLLER] Error getting uploaded images:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to get uploaded images',
       details: error instanceof Error ? error.message : 'Unknown error'
@@ -1342,12 +1316,12 @@ export const getUploadedImages = async (req: Request, res: Response) => {
 };
 
 // Delete uploaded image
-export const deleteUploadedImage = async (req: Request, res: Response) => {
+export const deleteUploadedImage = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    const { sessionId, filename } = req.params;
+    const { sessionId, filename } = ctx.params;
 
     if (!sessionId || !filename) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'Session ID and filename are required'
       });
@@ -1356,7 +1330,7 @@ export const deleteUploadedImage = async (req: Request, res: Response) => {
     const imagePath = path.join(IMAGE_UPLOAD_DIR, sessionId, filename);
 
     if (!fs.existsSync(imagePath)) {
-      return res.status(404).json({
+      return jsonResponse(404,{
         success: false,
         error: 'Image file not found'
       });
@@ -1386,7 +1360,7 @@ export const deleteUploadedImage = async (req: Request, res: Response) => {
     // Delete the file
     fs.unlinkSync(imagePath);
 
-    return res.status(200).json({
+    return jsonResponse(200,{
       success: true,
       message: 'Image deleted successfully',
       filename
@@ -1394,7 +1368,7 @@ export const deleteUploadedImage = async (req: Request, res: Response) => {
 
   } catch (error) {
     console.error('❌ [CONTROLLER] Error deleting uploaded image:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to delete uploaded image',
       details: error instanceof Error ? error.message : 'Unknown error'
@@ -1403,20 +1377,20 @@ export const deleteUploadedImage = async (req: Request, res: Response) => {
 };
 
 // Upload ASS file for analysis (temporary storage)
-export const uploadAssFile = async (req: MulterRequest, res: Response) => {
+export const uploadAssFile = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    const { sessionId } = req.body;
-    const file = req.file;
+    const { sessionId } = (ctx.body as any);
+    const file = ctx.file;
 
     if (!sessionId) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'Session ID is required'
       });
     }
 
     if (!file) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'No ASS file uploaded'
       });
@@ -1424,7 +1398,7 @@ export const uploadAssFile = async (req: MulterRequest, res: Response) => {
 
     // Validate file extension
     if (!file.originalname.endsWith('.ass')) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'Only .ass files are allowed'
       });
@@ -1445,7 +1419,7 @@ export const uploadAssFile = async (req: MulterRequest, res: Response) => {
       // Clean up the uploaded temp file
       fs.unlinkSync(file.path);
 
-      return res.status(200).json({
+      return jsonResponse(200,{
         success: true,
         message: 'ASS file already exists in cache',
         filePath: cachePath,
@@ -1463,7 +1437,7 @@ export const uploadAssFile = async (req: MulterRequest, res: Response) => {
 
     console.log('💾 [ASS UPLOAD] Saved ASS file to cache:', cacheKey);
 
-    return res.status(200).json({
+    return jsonResponse(200,{
       success: true,
       message: 'ASS file uploaded and cached successfully',
       filePath: cachePath,
@@ -1474,7 +1448,7 @@ export const uploadAssFile = async (req: MulterRequest, res: Response) => {
 
   } catch (error) {
     console.error('❌ [CONTROLLER] Error uploading ASS file:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to upload ASS file',
       details: error instanceof Error ? error.message : 'Unknown error'
@@ -1483,13 +1457,13 @@ export const uploadAssFile = async (req: MulterRequest, res: Response) => {
 };
 
 // Update user-provided image metadata
-export const updateUserProvidedImage = async (req: Request, res: Response) => {
+export const updateUserProvidedImage = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    const { sessionId, imageId } = req.params;
-    const { label, description, priority, preferredTimestamp } = req.body;
+    const { sessionId, imageId } = ctx.params;
+    const { label, description, priority, preferredTimestamp } = (ctx.body as any);
 
     if (!sessionId || !imageId) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'Session ID and image ID are required'
       });
@@ -1498,7 +1472,7 @@ export const updateUserProvidedImage = async (req: Request, res: Response) => {
     const userImagesFile = path.join(TEMP_DIR, `${sessionId}_user_images.json`);
 
     if (!fs.existsSync(userImagesFile)) {
-      return res.status(404).json({
+      return jsonResponse(404,{
         success: false,
         error: 'User images file not found'
       });
@@ -1508,7 +1482,7 @@ export const updateUserProvidedImage = async (req: Request, res: Response) => {
     const imageIndex = userImages.findIndex(img => img.id === imageId);
 
     if (imageIndex === -1) {
-      return res.status(404).json({
+      return jsonResponse(404,{
         success: false,
         error: 'User image not found'
       });
@@ -1528,7 +1502,7 @@ export const updateUserProvidedImage = async (req: Request, res: Response) => {
 
     console.log(`✅ [CONTROLLER] Updated user image metadata: ${imageId}`);
 
-    return res.status(200).json({
+    return jsonResponse(200,{
       success: true,
       message: 'User image metadata updated successfully',
       userImage: userImages[imageIndex]
@@ -1536,7 +1510,7 @@ export const updateUserProvidedImage = async (req: Request, res: Response) => {
 
   } catch (error) {
     console.error('❌ [CONTROLLER] Error updating user-provided image:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to update user-provided image',
       details: error instanceof Error ? error.message : 'Unknown error'
@@ -1545,13 +1519,13 @@ export const updateUserProvidedImage = async (req: Request, res: Response) => {
 };
 
 // Get user image placement suggestions
-export const getUserImagePlacementSuggestions = async (req: Request, res: Response) => {
+export const getUserImagePlacementSuggestions = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    const { sessionId } = req.params;
-    const { topic } = req.body;
+    const { sessionId } = ctx.params;
+    const { topic } = (ctx.body as any);
 
     if (!sessionId) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'Session ID is required'
       });
@@ -1560,7 +1534,7 @@ export const getUserImagePlacementSuggestions = async (req: Request, res: Respon
     // Get user images
     const userImagesFile = path.join(TEMP_DIR, `${sessionId}_user_images.json`);
     if (!fs.existsSync(userImagesFile)) {
-      return res.status(200).json({
+      return jsonResponse(200,{
         success: true,
         suggestions: []
       });
@@ -1571,7 +1545,7 @@ export const getUserImagePlacementSuggestions = async (req: Request, res: Respon
     // Get ASS file for analysis
     const assFilePath = path.join(TEMP_DIR, `${sessionId}_subtitles.ass`);
     if (!fs.existsSync(assFilePath)) {
-      return res.status(404).json({
+      return jsonResponse(404,{
         success: false,
         error: 'ASS subtitle file not found. Please analyze ASS first.'
       });
@@ -1590,14 +1564,14 @@ export const getUserImagePlacementSuggestions = async (req: Request, res: Respon
 
     console.log(`✅ [CONTROLLER] Generated ${suggestions.length} user image placement suggestions`);
 
-    return res.status(200).json({
+    return jsonResponse(200,{
       success: true,
       suggestions
     });
 
   } catch (error) {
     console.error('❌ [CONTROLLER] Error getting user image placement suggestions:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to get user image placement suggestions',
       details: error instanceof Error ? error.message : 'Unknown error'
@@ -1606,12 +1580,12 @@ export const getUserImagePlacementSuggestions = async (req: Request, res: Respon
 };
 
 // 🎯 NEW: Analyze user images for relevance and suggest placements
-export const analyzeUserImages = async (req: Request, res: Response) => {
+export const analyzeUserImages = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    const { sessionId, topic = 'educational content' } = req.body;
+    const { sessionId, topic = 'educational content' } = (ctx.body as any);
 
     if (!sessionId) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'Session ID is required'
       });
@@ -1631,7 +1605,7 @@ export const analyzeUserImages = async (req: Request, res: Response) => {
     });
 
     if (!session) {
-      return res.status(404).json({
+      return jsonResponse(404,{
         success: false,
         error: 'Session not found'
       });
@@ -1642,7 +1616,7 @@ export const analyzeUserImages = async (req: Request, res: Response) => {
     
     if (!fs.existsSync(userImagesPath)) {
       console.log('❌ [CONTROLLER] User images file not found:', userImagesPath);
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'No user images found for this session'
       });
@@ -1659,7 +1633,7 @@ export const analyzeUserImages = async (req: Request, res: Response) => {
 
     if (!userImages || userImages.length === 0) {
       console.log('❌ [CONTROLLER] No user images to analyze');
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'No user images to analyze'
       });
@@ -1684,18 +1658,16 @@ export const analyzeUserImages = async (req: Request, res: Response) => {
       });
 
       if (!session) {
-        return res.status(404).json({ success: false, error: 'Session not found' });
+        return jsonResponse(404,{ success: false, error: 'Session not found' });
       }
 
       // Generate dialogue hash for caching
       const dialogueHash = generateDialogueHash(session.dialogues);
 
-      // Check if WhisperX ASS file already exists in cache
-      const cachedAssPath = checkAssCache(sessionId, dialogueHash);
+      const cachedAssPath = await checkAssCache(sessionId, dialogueHash);
 
       if (cachedAssPath) {
         console.log('✅ [CONTROLLER] Using cached WhisperX ASS file for analysis');
-        // Copy cached file to expected location
         fs.copyFileSync(cachedAssPath, tempAssPath);
       } else {
         console.log('🎯 [CONTROLLER] Generating accurate WhisperX ASS file for analysis');
@@ -1754,7 +1726,7 @@ export const analyzeUserImages = async (req: Request, res: Response) => {
 
         // Save to cache as well
         const assContent = fs.readFileSync(tempAssPath, 'utf8');
-        saveAssToCache(sessionId, dialogueHash, assContent);
+        await saveAssToCache(sessionId, dialogueHash, assContent);
 
         console.log('✅ [CONTROLLER] WhisperX ASS file generated for analysis');
       }
@@ -1825,7 +1797,7 @@ export const analyzeUserImages = async (req: Request, res: Response) => {
       console.log(`✅ [CONTROLLER] Updated ${updatedCount} user images with timestamps`);
     }
 
-    return res.status(200).json({
+    return jsonResponse(200,{
       success: true,
       message: 'User images analyzed successfully',
       analysis: {
@@ -1847,7 +1819,7 @@ export const analyzeUserImages = async (req: Request, res: Response) => {
 
   } catch (error) {
     console.error('💥 [CONTROLLER] Error analyzing user images:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to analyze user images',
       details: error instanceof Error ? error.message : 'Unknown error'
@@ -1856,12 +1828,12 @@ export const analyzeUserImages = async (req: Request, res: Response) => {
 };
 
 // 🎯 NEW: Get image analysis results
-export const getImageAnalysis = async (req: Request, res: Response) => {
+export const getImageAnalysis = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    const { sessionId } = req.params;
+    const { sessionId } = ctx.params;
 
     if (!sessionId) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'Session ID is required'
       });
@@ -1870,7 +1842,7 @@ export const getImageAnalysis = async (req: Request, res: Response) => {
     const analysisPath = path.join(TEMP_DIR, `${sessionId}_image_analysis.json`);
     
     if (!fs.existsSync(analysisPath)) {
-      return res.status(404).json({
+      return jsonResponse(404,{
         success: false,
         error: 'No image analysis found for this session'
       });
@@ -1878,14 +1850,14 @@ export const getImageAnalysis = async (req: Request, res: Response) => {
 
     const analysis = JSON.parse(fs.readFileSync(analysisPath, 'utf8'));
 
-    return res.status(200).json({
+    return jsonResponse(200,{
       success: true,
       analysis
     });
 
   } catch (error) {
     console.error('💥 [CONTROLLER] Error getting image analysis:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to get image analysis',
       details: error instanceof Error ? error.message : 'Unknown error'
@@ -1894,7 +1866,7 @@ export const getImageAnalysis = async (req: Request, res: Response) => {
 };
 
 // ASS Cache cleanup function
-export const cleanupAssCache = async (req: Request, res: Response) => {
+export const cleanupAssCache = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
     console.log('🧹 [ASS CACHE] Starting cleanup of expired ASS files');
 
@@ -1920,7 +1892,7 @@ export const cleanupAssCache = async (req: Request, res: Response) => {
       }
     }
 
-    return res.status(200).json({
+    return jsonResponse(200,{
       success: true,
       message: `Cleaned up ${deletedCount} expired cached ASS files and ${tempCleanupCount} old temp ASS files`,
       cacheDeleted: deletedCount,
@@ -1929,7 +1901,7 @@ export const cleanupAssCache = async (req: Request, res: Response) => {
 
   } catch (error) {
     console.error('❌ [ASS CACHE] Error during cleanup:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to cleanup ASS cache',
       details: error instanceof Error ? error.message : 'Unknown error'
@@ -1938,12 +1910,12 @@ export const cleanupAssCache = async (req: Request, res: Response) => {
 };
 
 // 🆕 NEW: Get ASS content for viewing/copying
-export const getAssContent = async (req: Request, res: Response) => {
+export const getAssContent = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    const { sessionId } = req.query;
+    const { sessionId } = ctx.query;
 
     if (!sessionId || typeof sessionId !== 'string') {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'Session ID is required'
       });
@@ -1963,7 +1935,7 @@ export const getAssContent = async (req: Request, res: Response) => {
     });
 
     if (!session) {
-      return res.status(404).json({
+      return jsonResponse(404,{
         success: false,
         error: 'Session not found'
       });
@@ -1973,9 +1945,8 @@ export const getAssContent = async (req: Request, res: Response) => {
     const dialogueHash = generateDialogueHash(session.dialogues);
     console.log('🔍 [ASS CONTENT] Generated dialogue hash:', dialogueHash);
 
-    // Check if ASS file exists in cache
     let assContent = '';
-    const cachedAssPath = checkAssCache(sessionId, dialogueHash);
+    const cachedAssPath = await checkAssCache(sessionId, dialogueHash);
 
     if (cachedAssPath) {
       console.log('✅ [ASS CONTENT] Using cached ASS file:', cachedAssPath);
@@ -2037,10 +2008,10 @@ export const getAssContent = async (req: Request, res: Response) => {
       }
 
       // Cache the content
-      saveAssToCache(sessionId, dialogueHash, assContent);
+      await saveAssToCache(sessionId, dialogueHash, assContent);
     }
 
-    return res.status(200).json({
+    return jsonResponse(200,{
       success: true,
       content: assContent,
       sessionId,
@@ -2052,7 +2023,7 @@ export const getAssContent = async (req: Request, res: Response) => {
 
   } catch (error) {
     console.error('❌ [ASS CONTENT] Error getting ASS content:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to get ASS content',
       details: error instanceof Error ? error.message : 'Unknown error'
@@ -2061,12 +2032,12 @@ export const getAssContent = async (req: Request, res: Response) => {
 };
 
 // 🆕 NEW: Upload custom suggestions via JSON (copy/paste approach)
-export const uploadCustomSuggestions = async (req: Request, res: Response) => {
+export const uploadCustomSuggestions = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    const { sessionId, customData } = req.body;
+    const { sessionId, customData } = (ctx.body as any);
 
     if (!sessionId || !customData) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'Session ID and custom data are required'
       });
@@ -2076,7 +2047,7 @@ export const uploadCustomSuggestions = async (req: Request, res: Response) => {
 
     // Validate the custom data structure
     if (!customData.suggestions || !Array.isArray(customData.suggestions)) {
-      return res.status(400).json({
+      return jsonResponse(400,{
         success: false,
         error: 'Invalid format: customData must contain a "suggestions" array'
       });
@@ -2088,7 +2059,7 @@ export const uploadCustomSuggestions = async (req: Request, res: Response) => {
     // You can add additional validation here for suggestion structure
     for (const suggestion of customData.suggestions) {
       if (!suggestion.userImageId || typeof suggestion.suggestedTimestamp !== 'number') {
-        return res.status(400).json({
+        return jsonResponse(400,{
           success: false,
           error: 'Each suggestion must have userImageId and suggestedTimestamp'
         });
@@ -2101,7 +2072,7 @@ export const uploadCustomSuggestions = async (req: Request, res: Response) => {
 
     console.log('✅ [CUSTOM SUGGESTIONS] Custom suggestions applied successfully');
 
-    return res.status(200).json({
+    return jsonResponse(200,{
       success: true,
       message: 'Custom suggestions applied successfully',
       customData,
@@ -2110,7 +2081,7 @@ export const uploadCustomSuggestions = async (req: Request, res: Response) => {
 
   } catch (error) {
     console.error('❌ [CUSTOM SUGGESTIONS] Error processing custom suggestions:', error);
-    return res.status(500).json({
+    return jsonResponse(500,{
       success: false,
       error: 'Failed to process custom suggestions',
       details: error instanceof Error ? error.message : 'Unknown error'

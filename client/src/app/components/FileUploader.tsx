@@ -103,13 +103,12 @@ export default function FileUploader({
   return (
     <div className="w-full">
       <div
-        className={`relative border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
-          dragActive
+        className={`relative border-2 border-dashed rounded-lg p-6 text-center transition-colors ${dragActive
             ? 'border-[#337EA9] bg-[#E7F3F8]'
             : disabled
-            ? 'border-[#787774]/30 bg-[#787774]/10 cursor-not-allowed'
-            : 'border-[#787774]/30 hover:border-[#337EA9]/50 cursor-pointer'
-        }`}
+              ? 'border-[#787774]/30 bg-[#787774]/10 cursor-not-allowed'
+              : 'border-[#787774]/30 hover:border-[#337EA9]/50 cursor-pointer'
+          }`}
         onDrop={handleDrop}
         onDragLeave={handleDragLeave}
         onDragOver={handleDragOver}

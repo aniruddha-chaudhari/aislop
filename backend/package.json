@@ -1,14 +1,16 @@
 {
   "name": "aislop",
   "version": "1.0.0",
-  "description": "AI-powered HTTP server with Express and TypeScript",
-  "main": "dist/server.js",
+  "description": "AI-powered HTTP server with Bun and TypeScript",
+  "main": "src/server.ts",
   "type": "commonjs",
   "scripts": {
-    "dev": "nodemon --exec tsx src/server.ts",
+    "dev": "bun --watch src/server.ts",
+    "dev:watch": "bun --watch src/server.ts",
+    "start": "bun run src/server.ts",
+    "start:dev": "bun --watch src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js",
-    "start:dev": "tsx watch src/server.ts",
+    "migrate": "prisma migrate dev",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -34,11 +36,9 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/express": "^5.0.3",
     "@types/fluent-ffmpeg": "^2.1.27",
     "@types/node": "^24.0.15",
-    "nodemon": "^3.1.10",
-    "tsx": "^4.20.3",
+    "bun-types": "latest",
     "typescript": "^5.8.3"
   }
 }

@@ -157,6 +157,15 @@ exports.Prisma.AudioFileScalarFieldEnum = {
   errorMessage: 'errorMessage'
 };
 
+exports.Prisma.SubtitleCacheScalarFieldEnum = {
+  id: 'id',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt',
+  sessionId: 'sessionId',
+  dialogueHash: 'dialogueHash',
+  assFilePath: 'assFilePath'
+};
+
 exports.Prisma.SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -171,7 +180,8 @@ exports.Prisma.NullsOrder = {
 exports.Prisma.ModelName = {
   Session: 'Session',
   Dialogue: 'Dialogue',
-  AudioFile: 'AudioFile'
+  AudioFile: 'AudioFile',
+  SubtitleCache: 'SubtitleCache'
 };
 
 /**

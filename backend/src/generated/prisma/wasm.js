@@ -129,6 +129,15 @@ exports.Prisma.AudioFileScalarFieldEnum = {
   errorMessage: 'errorMessage'
 };
 
+exports.Prisma.SubtitleCacheScalarFieldEnum = {
+  id: 'id',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt',
+  sessionId: 'sessionId',
+  dialogueHash: 'dialogueHash',
+  assFilePath: 'assFilePath'
+};
+
 exports.Prisma.SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -143,7 +152,8 @@ exports.Prisma.NullsOrder = {
 exports.Prisma.ModelName = {
   Session: 'Session',
   Dialogue: 'Dialogue',
-  AudioFile: 'AudioFile'
+  AudioFile: 'AudioFile',
+  SubtitleCache: 'SubtitleCache'
 };
 /**
  * Create the Client
@@ -156,7 +166,7 @@ const config = {
       "value": "prisma-client-js"
     },
     "output": {
-      "value": "F:\\Aniruddha\\code\\webdev\\PROJECTS\\aislop\\src\\generated\\prisma",
+      "value": "F:\\Aniruddha\\code\\webdev\\PROJECTS\\aislop\\backend1\\src\\generated\\prisma",
       "fromEnvVar": null
     },
     "config": {
@@ -170,11 +180,12 @@ const config = {
       }
     ],
     "previewFeatures": [],
-    "sourceFilePath": "F:\\Aniruddha\\code\\webdev\\PROJECTS\\aislop\\prisma\\schema.prisma",
+    "sourceFilePath": "F:\\Aniruddha\\code\\webdev\\PROJECTS\\aislop\\backend1\\prisma\\schema.prisma",
     "isCustomOutput": true
   },
   "relativeEnvPaths": {
-    "rootEnvPath": null
+    "rootEnvPath": null,
+    "schemaEnvPath": "../../../.env"
   },
   "relativePath": "../../../prisma",
   "clientVersion": "6.19.0",
@@ -192,13 +203,13 @@ const config = {
       }
     }
   },
-  "inlineSchema": "// This is your Prisma schema file,\n// learn more about it in the docs: https://pris.ly/d/prisma-schema\n\ngenerator client {\n  provider = \"prisma-client-js\"\n  output   = \"../src/generated/prisma\"\n}\n\ndatasource db {\n  provider = \"sqlite\"\n  url      = \"file:./dev.db\"\n}\n\nmodel Session {\n  id        String   @id @default(cuid())\n  createdAt DateTime @default(now())\n  updatedAt DateTime @updatedAt\n\n  // Session name based on conversation topic\n  name String?\n\n  // Audio generation parameters\n  exaggeration      Float\n  temperature       Float\n  seedNum           Int\n  cfgWeight         Float\n  minP              Float\n  topP              Float\n  repetitionPenalty Float\n\n  // Session metadata\n  totalDialogues      Int     @default(0)\n  audioFilesGenerated Int     @default(0)\n  allSuccessful       Boolean @default(false)\n\n  // Relations\n  dialogues  Dialogue[]\n  audioFiles AudioFile[]\n\n  @@map(\"sessions\")\n}\n\nmodel Dialogue {\n  id        String @id @default(cuid())\n  sessionId String\n\n  // Dialogue content\n  text      String\n  character String // \"Stewie\" or \"Peter\"\n  order     Int // Position in conversation (1-based)\n\n  // Timestamps\n  createdAt DateTime @default(now())\n\n  // Relations\n  session   Session    @relation(fields: [sessionId], references: [id], onDelete: Cascade)\n  audioFile AudioFile?\n\n  @@map(\"dialogues\")\n}\n\nmodel AudioFile {\n  id         String  @id @default(cuid())\n  sessionId  String\n  dialogueId String? @unique\n\n  // File information\n  filename String\n  filePath String @unique\n  fileSize Int?\n  duration Float? // in seconds\n\n  // Generation metadata\n  generatedAt  DateTime @default(now())\n  success      Boolean  @default(true)\n  errorMessage String?\n\n  // Relations\n  session  Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)\n  dialogue Dialogue? @relation(fields: [dialogueId], references: [id], onDelete: SetNull)\n\n  @@map(\"audio_files\")\n}\n",
-  "inlineSchemaHash": "dff671cc42951cf9552e98dd5dbbc7f1062db118c0c7ef2fb473c6ceb5d36364",
+  "inlineSchema": "// This is your Prisma schema file,\n// learn more about it in the docs: https://pris.ly/d/prisma-schema\n\ngenerator client {\n  provider = \"prisma-client-js\"\n  output   = \"../src/generated/prisma\"\n}\n\ndatasource db {\n  provider = \"sqlite\"\n  url      = \"file:./dev.db\"\n}\n\nmodel Session {\n  id        String   @id @default(cuid())\n  createdAt DateTime @default(now())\n  updatedAt DateTime @updatedAt\n\n  // Session name based on conversation topic\n  name String?\n\n  // Audio generation parameters\n  exaggeration      Float\n  temperature       Float\n  seedNum           Int\n  cfgWeight         Float\n  minP              Float\n  topP              Float\n  repetitionPenalty Float\n\n  // Session metadata\n  totalDialogues      Int     @default(0)\n  audioFilesGenerated Int     @default(0)\n  allSuccessful       Boolean @default(false)\n\n  // Relations\n  dialogues      Dialogue[]\n  audioFiles     AudioFile[]\n  subtitleCaches SubtitleCache[]\n\n  @@map(\"sessions\")\n}\n\nmodel Dialogue {\n  id        String @id @default(cuid())\n  sessionId String\n\n  // Dialogue content\n  text      String\n  character String // \"Stewie\" or \"Peter\"\n  order     Int // Position in conversation (1-based)\n\n  // Timestamps\n  createdAt DateTime @default(now())\n\n  // Relations\n  session   Session    @relation(fields: [sessionId], references: [id], onDelete: Cascade)\n  audioFile AudioFile?\n\n  @@map(\"dialogues\")\n}\n\nmodel AudioFile {\n  id         String  @id @default(cuid())\n  sessionId  String\n  dialogueId String? @unique\n\n  // File information\n  filename String\n  filePath String @unique\n  fileSize Int?\n  duration Float? // in seconds\n\n  // Generation metadata\n  generatedAt  DateTime @default(now())\n  success      Boolean  @default(true)\n  errorMessage String?\n\n  // Relations\n  session  Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)\n  dialogue Dialogue? @relation(fields: [dialogueId], references: [id], onDelete: SetNull)\n\n  @@map(\"audio_files\")\n}\n\nmodel SubtitleCache {\n  id        String   @id @default(cuid())\n  createdAt DateTime @default(now())\n  updatedAt DateTime @updatedAt\n\n  // Cache key components\n  sessionId    String\n  dialogueHash String\n\n  // Stored subtitle file path on disk\n  assFilePath String\n\n  // Relations\n  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)\n\n  @@unique([sessionId, dialogueHash])\n  @@map(\"subtitle_cache\")\n}\n",
+  "inlineSchemaHash": "e3d9af9f69579e0ffd43d7fbec950d5b1723f841c502688d82b68842297a3058",
   "copyEngine": true
 }
 config.dirname = '/'
 
-config.runtimeDataModel = JSON.parse("{\"models\":{\"Session\":{\"fields\":[{\"name\":\"id\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"createdAt\",\"kind\":\"scalar\",\"type\":\"DateTime\"},{\"name\":\"updatedAt\",\"kind\":\"scalar\",\"type\":\"DateTime\"},{\"name\":\"name\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"exaggeration\",\"kind\":\"scalar\",\"type\":\"Float\"},{\"name\":\"temperature\",\"kind\":\"scalar\",\"type\":\"Float\"},{\"name\":\"seedNum\",\"kind\":\"scalar\",\"type\":\"Int\"},{\"name\":\"cfgWeight\",\"kind\":\"scalar\",\"type\":\"Float\"},{\"name\":\"minP\",\"kind\":\"scalar\",\"type\":\"Float\"},{\"name\":\"topP\",\"kind\":\"scalar\",\"type\":\"Float\"},{\"name\":\"repetitionPenalty\",\"kind\":\"scalar\",\"type\":\"Float\"},{\"name\":\"totalDialogues\",\"kind\":\"scalar\",\"type\":\"Int\"},{\"name\":\"audioFilesGenerated\",\"kind\":\"scalar\",\"type\":\"Int\"},{\"name\":\"allSuccessful\",\"kind\":\"scalar\",\"type\":\"Boolean\"},{\"name\":\"dialogues\",\"kind\":\"object\",\"type\":\"Dialogue\",\"relationName\":\"DialogueToSession\"},{\"name\":\"audioFiles\",\"kind\":\"object\",\"type\":\"AudioFile\",\"relationName\":\"AudioFileToSession\"}],\"dbName\":\"sessions\"},\"Dialogue\":{\"fields\":[{\"name\":\"id\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"sessionId\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"text\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"character\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"order\",\"kind\":\"scalar\",\"type\":\"Int\"},{\"name\":\"createdAt\",\"kind\":\"scalar\",\"type\":\"DateTime\"},{\"name\":\"session\",\"kind\":\"object\",\"type\":\"Session\",\"relationName\":\"DialogueToSession\"},{\"name\":\"audioFile\",\"kind\":\"object\",\"type\":\"AudioFile\",\"relationName\":\"AudioFileToDialogue\"}],\"dbName\":\"dialogues\"},\"AudioFile\":{\"fields\":[{\"name\":\"id\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"sessionId\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"dialogueId\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"filename\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"filePath\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"fileSize\",\"kind\":\"scalar\",\"type\":\"Int\"},{\"name\":\"duration\",\"kind\":\"scalar\",\"type\":\"Float\"},{\"name\":\"generatedAt\",\"kind\":\"scalar\",\"type\":\"DateTime\"},{\"name\":\"success\",\"kind\":\"scalar\",\"type\":\"Boolean\"},{\"name\":\"errorMessage\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"session\",\"kind\":\"object\",\"type\":\"Session\",\"relationName\":\"AudioFileToSession\"},{\"name\":\"dialogue\",\"kind\":\"object\",\"type\":\"Dialogue\",\"relationName\":\"AudioFileToDialogue\"}],\"dbName\":\"audio_files\"}},\"enums\":{},\"types\":{}}")
+config.runtimeDataModel = JSON.parse("{\"models\":{\"Session\":{\"fields\":[{\"name\":\"id\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"createdAt\",\"kind\":\"scalar\",\"type\":\"DateTime\"},{\"name\":\"updatedAt\",\"kind\":\"scalar\",\"type\":\"DateTime\"},{\"name\":\"name\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"exaggeration\",\"kind\":\"scalar\",\"type\":\"Float\"},{\"name\":\"temperature\",\"kind\":\"scalar\",\"type\":\"Float\"},{\"name\":\"seedNum\",\"kind\":\"scalar\",\"type\":\"Int\"},{\"name\":\"cfgWeight\",\"kind\":\"scalar\",\"type\":\"Float\"},{\"name\":\"minP\",\"kind\":\"scalar\",\"type\":\"Float\"},{\"name\":\"topP\",\"kind\":\"scalar\",\"type\":\"Float\"},{\"name\":\"repetitionPenalty\",\"kind\":\"scalar\",\"type\":\"Float\"},{\"name\":\"totalDialogues\",\"kind\":\"scalar\",\"type\":\"Int\"},{\"name\":\"audioFilesGenerated\",\"kind\":\"scalar\",\"type\":\"Int\"},{\"name\":\"allSuccessful\",\"kind\":\"scalar\",\"type\":\"Boolean\"},{\"name\":\"dialogues\",\"kind\":\"object\",\"type\":\"Dialogue\",\"relationName\":\"DialogueToSession\"},{\"name\":\"audioFiles\",\"kind\":\"object\",\"type\":\"AudioFile\",\"relationName\":\"AudioFileToSession\"},{\"name\":\"subtitleCaches\",\"kind\":\"object\",\"type\":\"SubtitleCache\",\"relationName\":\"SessionToSubtitleCache\"}],\"dbName\":\"sessions\"},\"Dialogue\":{\"fields\":[{\"name\":\"id\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"sessionId\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"text\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"character\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"order\",\"kind\":\"scalar\",\"type\":\"Int\"},{\"name\":\"createdAt\",\"kind\":\"scalar\",\"type\":\"DateTime\"},{\"name\":\"session\",\"kind\":\"object\",\"type\":\"Session\",\"relationName\":\"DialogueToSession\"},{\"name\":\"audioFile\",\"kind\":\"object\",\"type\":\"AudioFile\",\"relationName\":\"AudioFileToDialogue\"}],\"dbName\":\"dialogues\"},\"AudioFile\":{\"fields\":[{\"name\":\"id\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"sessionId\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"dialogueId\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"filename\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"filePath\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"fileSize\",\"kind\":\"scalar\",\"type\":\"Int\"},{\"name\":\"duration\",\"kind\":\"scalar\",\"type\":\"Float\"},{\"name\":\"generatedAt\",\"kind\":\"scalar\",\"type\":\"DateTime\"},{\"name\":\"success\",\"kind\":\"scalar\",\"type\":\"Boolean\"},{\"name\":\"errorMessage\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"session\",\"kind\":\"object\",\"type\":\"Session\",\"relationName\":\"AudioFileToSession\"},{\"name\":\"dialogue\",\"kind\":\"object\",\"type\":\"Dialogue\",\"relationName\":\"AudioFileToDialogue\"}],\"dbName\":\"audio_files\"},\"SubtitleCache\":{\"fields\":[{\"name\":\"id\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"createdAt\",\"kind\":\"scalar\",\"type\":\"DateTime\"},{\"name\":\"updatedAt\",\"kind\":\"scalar\",\"type\":\"DateTime\"},{\"name\":\"sessionId\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"dialogueHash\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"assFilePath\",\"kind\":\"scalar\",\"type\":\"String\"},{\"name\":\"session\",\"kind\":\"object\",\"type\":\"Session\",\"relationName\":\"SessionToSubtitleCache\"}],\"dbName\":\"subtitle_cache\"}},\"enums\":{},\"types\":{}}")
 defineDmmfProperty(exports.Prisma, config.runtimeDataModel)
 config.engineWasm = {
   getRuntime: async () => require('./query_engine_bg.js'),

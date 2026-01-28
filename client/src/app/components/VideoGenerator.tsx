@@ -977,8 +977,8 @@ export default function VideoGenerator() {
                       <span className="text-lg"></span>
                       <h5 className="font-semibold text-[#F1F1EF]">{requirement.title}</h5>
                       <span className={`px-2 py-1 rounded-full text-xs font-medium ${requirement.priority === 'high' ? 'text-[#D44C47] bg-[#FDEBEC]' :
-                          requirement.priority === 'medium' ? 'text-[#CB912F] bg-[#FBF3DB]' :
-                            'text-[#448361] bg-[#EDF3EC]'
+                        requirement.priority === 'medium' ? 'text-[#CB912F] bg-[#FBF3DB]' :
+                          'text-[#448361] bg-[#EDF3EC]'
                         }`}>
                         {requirement.priority.toUpperCase()}
                       </span>
@@ -1025,10 +1025,10 @@ export default function VideoGenerator() {
                       <label
                         htmlFor={`upload-${requirement.id}`}
                         className={`px-4 py-2 rounded-md cursor-pointer inline-block transition-colors ${uploadingRequiredImages[requirement.id]
-                            ? 'bg-[#787774]/50 text-[#787774] cursor-not-allowed'
-                            : requirement.uploaded
-                              ? 'bg-[#448361] text-[#F1F1EF] hover:bg-[#448361]/80'
-                              : 'bg-[#337EA9] text-[#F1F1EF] hover:bg-[#337EA9]/80'
+                          ? 'bg-[#787774]/50 text-[#787774] cursor-not-allowed'
+                          : requirement.uploaded
+                            ? 'bg-[#448361] text-[#F1F1EF] hover:bg-[#448361]/80'
+                            : 'bg-[#337EA9] text-[#F1F1EF] hover:bg-[#337EA9]/80'
                           }`}
                       >
                         {uploadingRequiredImages[requirement.id] ? ' Uploading...' : requirement.uploaded ? ' Uploaded' : ' Upload'}

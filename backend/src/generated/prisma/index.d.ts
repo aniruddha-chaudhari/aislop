@@ -28,6 +28,11 @@ export type Dialogue = $Result.DefaultSelection<Prisma.$DialoguePayload>
  * 
  */
 export type AudioFile = $Result.DefaultSelection<Prisma.$AudioFilePayload>
+/**
+ * Model SubtitleCache
+ * 
+ */
+export type SubtitleCache = $Result.DefaultSelection<Prisma.$SubtitleCachePayload>
 
 /**
  * ##  Prisma Client ʲˢ
@@ -176,6 +181,16 @@ export class PrismaClient<
     * ```
     */
   get audioFile(): Prisma.AudioFileDelegate<ExtArgs, ClientOptions>;
+
+  /**
+   * `prisma.subtitleCache`: Exposes CRUD operations for the **SubtitleCache** model.
+    * Example usage:
+    * ```ts
+    * // Fetch zero or more SubtitleCaches
+    * const subtitleCaches = await prisma.subtitleCache.findMany()
+    * ```
+    */
+  get subtitleCache(): Prisma.SubtitleCacheDelegate<ExtArgs, ClientOptions>;
 }
 
 export namespace Prisma {
@@ -619,7 +634,8 @@ export namespace Prisma {
   export const ModelName: {
     Session: 'Session',
     Dialogue: 'Dialogue',
-    AudioFile: 'AudioFile'
+    AudioFile: 'AudioFile',
+    SubtitleCache: 'SubtitleCache'
   };
 
   export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -638,7 +654,7 @@ export namespace Prisma {
       omit: GlobalOmitOptions
     }
     meta: {
-      modelProps: "session" | "dialogue" | "audioFile"
+      modelProps: "session" | "dialogue" | "audioFile" | "subtitleCache"
       txIsolationLevel: Prisma.TransactionIsolationLevel
     }
     model: {
@@ -864,6 +880,80 @@ export namespace Prisma {
           }
         }
       }
+      SubtitleCache: {
+        payload: Prisma.$SubtitleCachePayload<ExtArgs>
+        fields: Prisma.SubtitleCacheFieldRefs
+        operations: {
+          findUnique: {
+            args: Prisma.SubtitleCacheFindUniqueArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$SubtitleCachePayload> | null
+          }
+          findUniqueOrThrow: {
+            args: Prisma.SubtitleCacheFindUniqueOrThrowArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$SubtitleCachePayload>
+          }
+          findFirst: {
+            args: Prisma.SubtitleCacheFindFirstArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$SubtitleCachePayload> | null
+          }
+          findFirstOrThrow: {
+            args: Prisma.SubtitleCacheFindFirstOrThrowArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$SubtitleCachePayload>
+          }
+          findMany: {
+            args: Prisma.SubtitleCacheFindManyArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$SubtitleCachePayload>[]
+          }
+          create: {
+            args: Prisma.SubtitleCacheCreateArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$SubtitleCachePayload>
+          }
+          createMany: {
+            args: Prisma.SubtitleCacheCreateManyArgs<ExtArgs>
+            result: BatchPayload
+          }
+          createManyAndReturn: {
+            args: Prisma.SubtitleCacheCreateManyAndReturnArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$SubtitleCachePayload>[]
+          }
+          delete: {
+            args: Prisma.SubtitleCacheDeleteArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$SubtitleCachePayload>
+          }
+          update: {
+            args: Prisma.SubtitleCacheUpdateArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$SubtitleCachePayload>
+          }
+          deleteMany: {
+            args: Prisma.SubtitleCacheDeleteManyArgs<ExtArgs>
+            result: BatchPayload
+          }
+          updateMany: {
+            args: Prisma.SubtitleCacheUpdateManyArgs<ExtArgs>
+            result: BatchPayload
+          }
+          updateManyAndReturn: {
+            args: Prisma.SubtitleCacheUpdateManyAndReturnArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$SubtitleCachePayload>[]
+          }
+          upsert: {
+            args: Prisma.SubtitleCacheUpsertArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$SubtitleCachePayload>
+          }
+          aggregate: {
+            args: Prisma.SubtitleCacheAggregateArgs<ExtArgs>
+            result: $Utils.Optional<AggregateSubtitleCache>
+          }
+          groupBy: {
+            args: Prisma.SubtitleCacheGroupByArgs<ExtArgs>
+            result: $Utils.Optional<SubtitleCacheGroupByOutputType>[]
+          }
+          count: {
+            args: Prisma.SubtitleCacheCountArgs<ExtArgs>
+            result: $Utils.Optional<SubtitleCacheCountAggregateOutputType> | number
+          }
+        }
+      }
     }
   } & {
     other: {
@@ -963,6 +1053,7 @@ export namespace Prisma {
     session?: SessionOmit
     dialogue?: DialogueOmit
     audioFile?: AudioFileOmit
+    subtitleCache?: SubtitleCacheOmit
   }
 
   /* Types for Logging */
@@ -1045,11 +1136,13 @@ export namespace Prisma {
   export type SessionCountOutputType = {
     dialogues: number
     audioFiles: number
+    subtitleCaches: number
   }
 
   export type SessionCountOutputTypeSelect<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
     dialogues?: boolean | SessionCountOutputTypeCountDialoguesArgs
     audioFiles?: boolean | SessionCountOutputTypeCountAudioFilesArgs
+    subtitleCaches?: boolean | SessionCountOutputTypeCountSubtitleCachesArgs
   }
 
   // Custom InputTypes
@@ -1075,6 +1168,13 @@ export namespace Prisma {
    */
   export type SessionCountOutputTypeCountAudioFilesArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
     where?: AudioFileWhereInput
+  }
+
+  /**
+   * SessionCountOutputType without action
+   */
+  export type SessionCountOutputTypeCountSubtitleCachesArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    where?: SubtitleCacheWhereInput
   }
 
 
@@ -1386,6 +1486,7 @@ export namespace Prisma {
     allSuccessful?: boolean
     dialogues?: boolean | Session$dialoguesArgs<ExtArgs>
     audioFiles?: boolean | Session$audioFilesArgs<ExtArgs>
+    subtitleCaches?: boolean | Session$subtitleCachesArgs<ExtArgs>
     _count?: boolean | SessionCountOutputTypeDefaultArgs<ExtArgs>
   }, ExtArgs["result"]["session"]>
 
@@ -1444,6 +1545,7 @@ export namespace Prisma {
   export type SessionInclude<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
     dialogues?: boolean | Session$dialoguesArgs<ExtArgs>
     audioFiles?: boolean | Session$audioFilesArgs<ExtArgs>
+    subtitleCaches?: boolean | Session$subtitleCachesArgs<ExtArgs>
     _count?: boolean | SessionCountOutputTypeDefaultArgs<ExtArgs>
   }
   export type SessionIncludeCreateManyAndReturn<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {}
@@ -1454,6 +1556,7 @@ export namespace Prisma {
     objects: {
       dialogues: Prisma.$DialoguePayload<ExtArgs>[]
       audioFiles: Prisma.$AudioFilePayload<ExtArgs>[]
+      subtitleCaches: Prisma.$SubtitleCachePayload<ExtArgs>[]
     }
     scalars: $Extensions.GetPayloadResult<{
       id: string
@@ -1866,6 +1969,7 @@ export namespace Prisma {
     readonly [Symbol.toStringTag]: "PrismaPromise"
     dialogues<T extends Session$dialoguesArgs<ExtArgs> = {}>(args?: Subset<T, Session$dialoguesArgs<ExtArgs>>): Prisma.PrismaPromise<$Result.GetResult<Prisma.$DialoguePayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
     audioFiles<T extends Session$audioFilesArgs<ExtArgs> = {}>(args?: Subset<T, Session$audioFilesArgs<ExtArgs>>): Prisma.PrismaPromise<$Result.GetResult<Prisma.$AudioFilePayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
+    subtitleCaches<T extends Session$subtitleCachesArgs<ExtArgs> = {}>(args?: Subset<T, Session$subtitleCachesArgs<ExtArgs>>): Prisma.PrismaPromise<$Result.GetResult<Prisma.$SubtitleCachePayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
     /**
      * Attaches callbacks for the resolution and/or rejection of the Promise.
      * @param onfulfilled The callback to execute when the Promise is resolved.
@@ -2340,6 +2444,30 @@ export namespace Prisma {
     take?: number
     skip?: number
     distinct?: AudioFileScalarFieldEnum | AudioFileScalarFieldEnum[]
+  }
+
+  /**
+   * Session.subtitleCaches
+   */
+  export type Session$subtitleCachesArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the SubtitleCache
+     */
+    select?: SubtitleCacheSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the SubtitleCache
+     */
+    omit?: SubtitleCacheOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: SubtitleCacheInclude<ExtArgs> | null
+    where?: SubtitleCacheWhereInput
+    orderBy?: SubtitleCacheOrderByWithRelationInput | SubtitleCacheOrderByWithRelationInput[]
+    cursor?: SubtitleCacheWhereUniqueInput
+    take?: number
+    skip?: number
+    distinct?: SubtitleCacheScalarFieldEnum | SubtitleCacheScalarFieldEnum[]
   }
 
   /**
@@ -4674,6 +4802,1075 @@ export namespace Prisma {
 
 
   /**
+   * Model SubtitleCache
+   */
+
+  export type AggregateSubtitleCache = {
+    _count: SubtitleCacheCountAggregateOutputType | null
+    _min: SubtitleCacheMinAggregateOutputType | null
+    _max: SubtitleCacheMaxAggregateOutputType | null
+  }
+
+  export type SubtitleCacheMinAggregateOutputType = {
+    id: string | null
+    createdAt: Date | null
+    updatedAt: Date | null
+    sessionId: string | null
+    dialogueHash: string | null
+    assFilePath: string | null
+  }
+
+  export type SubtitleCacheMaxAggregateOutputType = {
+    id: string | null
+    createdAt: Date | null
+    updatedAt: Date | null
+    sessionId: string | null
+    dialogueHash: string | null
+    assFilePath: string | null
+  }
+
+  export type SubtitleCacheCountAggregateOutputType = {
+    id: number
+    createdAt: number
+    updatedAt: number
+    sessionId: number
+    dialogueHash: number
+    assFilePath: number
+    _all: number
+  }
+
+
+  export type SubtitleCacheMinAggregateInputType = {
+    id?: true
+    createdAt?: true
+    updatedAt?: true
+    sessionId?: true
+    dialogueHash?: true
+    assFilePath?: true
+  }
+
+  export type SubtitleCacheMaxAggregateInputType = {
+    id?: true
+    createdAt?: true
+    updatedAt?: true
+    sessionId?: true
+    dialogueHash?: true
+    assFilePath?: true
+  }
+
+  export type SubtitleCacheCountAggregateInputType = {
+    id?: true
+    createdAt?: true
+    updatedAt?: true
+    sessionId?: true
+    dialogueHash?: true
+    assFilePath?: true
+    _all?: true
+  }
+
+  export type SubtitleCacheAggregateArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Filter which SubtitleCache to aggregate.
+     */
+    where?: SubtitleCacheWhereInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/sorting Sorting Docs}
+     * 
+     * Determine the order of SubtitleCaches to fetch.
+     */
+    orderBy?: SubtitleCacheOrderByWithRelationInput | SubtitleCacheOrderByWithRelationInput[]
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination#cursor-based-pagination Cursor Docs}
+     * 
+     * Sets the start position
+     */
+    cursor?: SubtitleCacheWhereUniqueInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Take `±n` SubtitleCaches from the position of the cursor.
+     */
+    take?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Skip the first `n` SubtitleCaches.
+     */
+    skip?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/aggregations Aggregation Docs}
+     * 
+     * Count returned SubtitleCaches
+    **/
+    _count?: true | SubtitleCacheCountAggregateInputType
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/aggregations Aggregation Docs}
+     * 
+     * Select which fields to find the minimum value
+    **/
+    _min?: SubtitleCacheMinAggregateInputType
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/aggregations Aggregation Docs}
+     * 
+     * Select which fields to find the maximum value
+    **/
+    _max?: SubtitleCacheMaxAggregateInputType
+  }
+
+  export type GetSubtitleCacheAggregateType<T extends SubtitleCacheAggregateArgs> = {
+        [P in keyof T & keyof AggregateSubtitleCache]: P extends '_count' | 'count'
+      ? T[P] extends true
+        ? number
+        : GetScalarType<T[P], AggregateSubtitleCache[P]>
+      : GetScalarType<T[P], AggregateSubtitleCache[P]>
+  }
+
+
+
+
+  export type SubtitleCacheGroupByArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    where?: SubtitleCacheWhereInput
+    orderBy?: SubtitleCacheOrderByWithAggregationInput | SubtitleCacheOrderByWithAggregationInput[]
+    by: SubtitleCacheScalarFieldEnum[] | SubtitleCacheScalarFieldEnum
+    having?: SubtitleCacheScalarWhereWithAggregatesInput
+    take?: number
+    skip?: number
+    _count?: SubtitleCacheCountAggregateInputType | true
+    _min?: SubtitleCacheMinAggregateInputType
+    _max?: SubtitleCacheMaxAggregateInputType
+  }
+
+  export type SubtitleCacheGroupByOutputType = {
+    id: string
+    createdAt: Date
+    updatedAt: Date
+    sessionId: string
+    dialogueHash: string
+    assFilePath: string
+    _count: SubtitleCacheCountAggregateOutputType | null
+    _min: SubtitleCacheMinAggregateOutputType | null
+    _max: SubtitleCacheMaxAggregateOutputType | null
+  }
+
+  type GetSubtitleCacheGroupByPayload<T extends SubtitleCacheGroupByArgs> = Prisma.PrismaPromise<
+    Array<
+      PickEnumerable<SubtitleCacheGroupByOutputType, T['by']> &
+        {
+          [P in ((keyof T) & (keyof SubtitleCacheGroupByOutputType))]: P extends '_count'
+            ? T[P] extends boolean
+              ? number
+              : GetScalarType<T[P], SubtitleCacheGroupByOutputType[P]>
+            : GetScalarType<T[P], SubtitleCacheGroupByOutputType[P]>
+        }
+      >
+    >
+
+
+  export type SubtitleCacheSelect<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetSelect<{
+    id?: boolean
+    createdAt?: boolean
+    updatedAt?: boolean
+    sessionId?: boolean
+    dialogueHash?: boolean
+    assFilePath?: boolean
+    session?: boolean | SessionDefaultArgs<ExtArgs>
+  }, ExtArgs["result"]["subtitleCache"]>
+
+  export type SubtitleCacheSelectCreateManyAndReturn<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetSelect<{
+    id?: boolean
+    createdAt?: boolean
+    updatedAt?: boolean
+    sessionId?: boolean
+    dialogueHash?: boolean
+    assFilePath?: boolean
+    session?: boolean | SessionDefaultArgs<ExtArgs>
+  }, ExtArgs["result"]["subtitleCache"]>
+
+  export type SubtitleCacheSelectUpdateManyAndReturn<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetSelect<{
+    id?: boolean
+    createdAt?: boolean
+    updatedAt?: boolean
+    sessionId?: boolean
+    dialogueHash?: boolean
+    assFilePath?: boolean
+    session?: boolean | SessionDefaultArgs<ExtArgs>
+  }, ExtArgs["result"]["subtitleCache"]>
+
+  export type SubtitleCacheSelectScalar = {
+    id?: boolean
+    createdAt?: boolean
+    updatedAt?: boolean
+    sessionId?: boolean
+    dialogueHash?: boolean
+    assFilePath?: boolean
+  }
+
+  export type SubtitleCacheOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "createdAt" | "updatedAt" | "sessionId" | "dialogueHash" | "assFilePath", ExtArgs["result"]["subtitleCache"]>
+  export type SubtitleCacheInclude<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    session?: boolean | SessionDefaultArgs<ExtArgs>
+  }
+  export type SubtitleCacheIncludeCreateManyAndReturn<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    session?: boolean | SessionDefaultArgs<ExtArgs>
+  }
+  export type SubtitleCacheIncludeUpdateManyAndReturn<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    session?: boolean | SessionDefaultArgs<ExtArgs>
+  }
+
+  export type $SubtitleCachePayload<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    name: "SubtitleCache"
+    objects: {
+      session: Prisma.$SessionPayload<ExtArgs>
+    }
+    scalars: $Extensions.GetPayloadResult<{
+      id: string
+      createdAt: Date
+      updatedAt: Date
+      sessionId: string
+      dialogueHash: string
+      assFilePath: string
+    }, ExtArgs["result"]["subtitleCache"]>
+    composites: {}
+  }
+
+  type SubtitleCacheGetPayload<S extends boolean | null | undefined | SubtitleCacheDefaultArgs> = $Result.GetResult<Prisma.$SubtitleCachePayload, S>
+
+  type SubtitleCacheCountArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> =
+    Omit<SubtitleCacheFindManyArgs, 'select' | 'include' | 'distinct' | 'omit'> & {
+      select?: SubtitleCacheCountAggregateInputType | true
+    }
+
+  export interface SubtitleCacheDelegate<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs, GlobalOmitOptions = {}> {
+    [K: symbol]: { types: Prisma.TypeMap<ExtArgs>['model']['SubtitleCache'], meta: { name: 'SubtitleCache' } }
+    /**
+     * Find zero or one SubtitleCache that matches the filter.
+     * @param {SubtitleCacheFindUniqueArgs} args - Arguments to find a SubtitleCache
+     * @example
+     * // Get one SubtitleCache
+     * const subtitleCache = await prisma.subtitleCache.findUnique({
+     *   where: {
+     *     // ... provide filter here
+     *   }
+     * })
+     */
+    findUnique<T extends SubtitleCacheFindUniqueArgs>(args: SelectSubset<T, SubtitleCacheFindUniqueArgs<ExtArgs>>): Prisma__SubtitleCacheClient<$Result.GetResult<Prisma.$SubtitleCachePayload<ExtArgs>, T, "findUnique", GlobalOmitOptions> | null, null, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Find one SubtitleCache that matches the filter or throw an error with `error.code='P2025'`
+     * if no matches were found.
+     * @param {SubtitleCacheFindUniqueOrThrowArgs} args - Arguments to find a SubtitleCache
+     * @example
+     * // Get one SubtitleCache
+     * const subtitleCache = await prisma.subtitleCache.findUniqueOrThrow({
+     *   where: {
+     *     // ... provide filter here
+     *   }
+     * })
+     */
+    findUniqueOrThrow<T extends SubtitleCacheFindUniqueOrThrowArgs>(args: SelectSubset<T, SubtitleCacheFindUniqueOrThrowArgs<ExtArgs>>): Prisma__SubtitleCacheClient<$Result.GetResult<Prisma.$SubtitleCachePayload<ExtArgs>, T, "findUniqueOrThrow", GlobalOmitOptions>, never, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Find the first SubtitleCache that matches the filter.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {SubtitleCacheFindFirstArgs} args - Arguments to find a SubtitleCache
+     * @example
+     * // Get one SubtitleCache
+     * const subtitleCache = await prisma.subtitleCache.findFirst({
+     *   where: {
+     *     // ... provide filter here
+     *   }
+     * })
+     */
+    findFirst<T extends SubtitleCacheFindFirstArgs>(args?: SelectSubset<T, SubtitleCacheFindFirstArgs<ExtArgs>>): Prisma__SubtitleCacheClient<$Result.GetResult<Prisma.$SubtitleCachePayload<ExtArgs>, T, "findFirst", GlobalOmitOptions> | null, null, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Find the first SubtitleCache that matches the filter or
+     * throw `PrismaKnownClientError` with `P2025` code if no matches were found.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {SubtitleCacheFindFirstOrThrowArgs} args - Arguments to find a SubtitleCache
+     * @example
+     * // Get one SubtitleCache
+     * const subtitleCache = await prisma.subtitleCache.findFirstOrThrow({
+     *   where: {
+     *     // ... provide filter here
+     *   }
+     * })
+     */
+    findFirstOrThrow<T extends SubtitleCacheFindFirstOrThrowArgs>(args?: SelectSubset<T, SubtitleCacheFindFirstOrThrowArgs<ExtArgs>>): Prisma__SubtitleCacheClient<$Result.GetResult<Prisma.$SubtitleCachePayload<ExtArgs>, T, "findFirstOrThrow", GlobalOmitOptions>, never, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Find zero or more SubtitleCaches that matches the filter.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {SubtitleCacheFindManyArgs} args - Arguments to filter and select certain fields only.
+     * @example
+     * // Get all SubtitleCaches
+     * const subtitleCaches = await prisma.subtitleCache.findMany()
+     * 
+     * // Get first 10 SubtitleCaches
+     * const subtitleCaches = await prisma.subtitleCache.findMany({ take: 10 })
+     * 
+     * // Only select the `id`
+     * const subtitleCacheWithIdOnly = await prisma.subtitleCache.findMany({ select: { id: true } })
+     * 
+     */
+    findMany<T extends SubtitleCacheFindManyArgs>(args?: SelectSubset<T, SubtitleCacheFindManyArgs<ExtArgs>>): Prisma.PrismaPromise<$Result.GetResult<Prisma.$SubtitleCachePayload<ExtArgs>, T, "findMany", GlobalOmitOptions>>
+
+    /**
+     * Create a SubtitleCache.
+     * @param {SubtitleCacheCreateArgs} args - Arguments to create a SubtitleCache.
+     * @example
+     * // Create one SubtitleCache
+     * const SubtitleCache = await prisma.subtitleCache.create({
+     *   data: {
+     *     // ... data to create a SubtitleCache
+     *   }
+     * })
+     * 
+     */
+    create<T extends SubtitleCacheCreateArgs>(args: SelectSubset<T, SubtitleCacheCreateArgs<ExtArgs>>): Prisma__SubtitleCacheClient<$Result.GetResult<Prisma.$SubtitleCachePayload<ExtArgs>, T, "create", GlobalOmitOptions>, never, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Create many SubtitleCaches.
+     * @param {SubtitleCacheCreateManyArgs} args - Arguments to create many SubtitleCaches.
+     * @example
+     * // Create many SubtitleCaches
+     * const subtitleCache = await prisma.subtitleCache.createMany({
+     *   data: [
+     *     // ... provide data here
+     *   ]
+     * })
+     *     
+     */
+    createMany<T extends SubtitleCacheCreateManyArgs>(args?: SelectSubset<T, SubtitleCacheCreateManyArgs<ExtArgs>>): Prisma.PrismaPromise<BatchPayload>
+
+    /**
+     * Create many SubtitleCaches and returns the data saved in the database.
+     * @param {SubtitleCacheCreateManyAndReturnArgs} args - Arguments to create many SubtitleCaches.
+     * @example
+     * // Create many SubtitleCaches
+     * const subtitleCache = await prisma.subtitleCache.createManyAndReturn({
+     *   data: [
+     *     // ... provide data here
+     *   ]
+     * })
+     * 
+     * // Create many SubtitleCaches and only return the `id`
+     * const subtitleCacheWithIdOnly = await prisma.subtitleCache.createManyAndReturn({
+     *   select: { id: true },
+     *   data: [
+     *     // ... provide data here
+     *   ]
+     * })
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * 
+     */
+    createManyAndReturn<T extends SubtitleCacheCreateManyAndReturnArgs>(args?: SelectSubset<T, SubtitleCacheCreateManyAndReturnArgs<ExtArgs>>): Prisma.PrismaPromise<$Result.GetResult<Prisma.$SubtitleCachePayload<ExtArgs>, T, "createManyAndReturn", GlobalOmitOptions>>
+
+    /**
+     * Delete a SubtitleCache.
+     * @param {SubtitleCacheDeleteArgs} args - Arguments to delete one SubtitleCache.
+     * @example
+     * // Delete one SubtitleCache
+     * const SubtitleCache = await prisma.subtitleCache.delete({
+     *   where: {
+     *     // ... filter to delete one SubtitleCache
+     *   }
+     * })
+     * 
+     */
+    delete<T extends SubtitleCacheDeleteArgs>(args: SelectSubset<T, SubtitleCacheDeleteArgs<ExtArgs>>): Prisma__SubtitleCacheClient<$Result.GetResult<Prisma.$SubtitleCachePayload<ExtArgs>, T, "delete", GlobalOmitOptions>, never, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Update one SubtitleCache.
+     * @param {SubtitleCacheUpdateArgs} args - Arguments to update one SubtitleCache.
+     * @example
+     * // Update one SubtitleCache
+     * const subtitleCache = await prisma.subtitleCache.update({
+     *   where: {
+     *     // ... provide filter here
+     *   },
+     *   data: {
+     *     // ... provide data here
+     *   }
+     * })
+     * 
+     */
+    update<T extends SubtitleCacheUpdateArgs>(args: SelectSubset<T, SubtitleCacheUpdateArgs<ExtArgs>>): Prisma__SubtitleCacheClient<$Result.GetResult<Prisma.$SubtitleCachePayload<ExtArgs>, T, "update", GlobalOmitOptions>, never, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Delete zero or more SubtitleCaches.
+     * @param {SubtitleCacheDeleteManyArgs} args - Arguments to filter SubtitleCaches to delete.
+     * @example
+     * // Delete a few SubtitleCaches
+     * const { count } = await prisma.subtitleCache.deleteMany({
+     *   where: {
+     *     // ... provide filter here
+     *   }
+     * })
+     * 
+     */
+    deleteMany<T extends SubtitleCacheDeleteManyArgs>(args?: SelectSubset<T, SubtitleCacheDeleteManyArgs<ExtArgs>>): Prisma.PrismaPromise<BatchPayload>
+
+    /**
+     * Update zero or more SubtitleCaches.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {SubtitleCacheUpdateManyArgs} args - Arguments to update one or more rows.
+     * @example
+     * // Update many SubtitleCaches
+     * const subtitleCache = await prisma.subtitleCache.updateMany({
+     *   where: {
+     *     // ... provide filter here
+     *   },
+     *   data: {
+     *     // ... provide data here
+     *   }
+     * })
+     * 
+     */
+    updateMany<T extends SubtitleCacheUpdateManyArgs>(args: SelectSubset<T, SubtitleCacheUpdateManyArgs<ExtArgs>>): Prisma.PrismaPromise<BatchPayload>
+
+    /**
+     * Update zero or more SubtitleCaches and returns the data updated in the database.
+     * @param {SubtitleCacheUpdateManyAndReturnArgs} args - Arguments to update many SubtitleCaches.
+     * @example
+     * // Update many SubtitleCaches
+     * const subtitleCache = await prisma.subtitleCache.updateManyAndReturn({
+     *   where: {
+     *     // ... provide filter here
+     *   },
+     *   data: [
+     *     // ... provide data here
+     *   ]
+     * })
+     * 
+     * // Update zero or more SubtitleCaches and only return the `id`
+     * const subtitleCacheWithIdOnly = await prisma.subtitleCache.updateManyAndReturn({
+     *   select: { id: true },
+     *   where: {
+     *     // ... provide filter here
+     *   },
+     *   data: [
+     *     // ... provide data here
+     *   ]
+     * })
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * 
+     */
+    updateManyAndReturn<T extends SubtitleCacheUpdateManyAndReturnArgs>(args: SelectSubset<T, SubtitleCacheUpdateManyAndReturnArgs<ExtArgs>>): Prisma.PrismaPromise<$Result.GetResult<Prisma.$SubtitleCachePayload<ExtArgs>, T, "updateManyAndReturn", GlobalOmitOptions>>
+
+    /**
+     * Create or update one SubtitleCache.
+     * @param {SubtitleCacheUpsertArgs} args - Arguments to update or create a SubtitleCache.
+     * @example
+     * // Update or create a SubtitleCache
+     * const subtitleCache = await prisma.subtitleCache.upsert({
+     *   create: {
+     *     // ... data to create a SubtitleCache
+     *   },
+     *   update: {
+     *     // ... in case it already exists, update
+     *   },
+     *   where: {
+     *     // ... the filter for the SubtitleCache we want to update
+     *   }
+     * })
+     */
+    upsert<T extends SubtitleCacheUpsertArgs>(args: SelectSubset<T, SubtitleCacheUpsertArgs<ExtArgs>>): Prisma__SubtitleCacheClient<$Result.GetResult<Prisma.$SubtitleCachePayload<ExtArgs>, T, "upsert", GlobalOmitOptions>, never, ExtArgs, GlobalOmitOptions>
+
+
+    /**
+     * Count the number of SubtitleCaches.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {SubtitleCacheCountArgs} args - Arguments to filter SubtitleCaches to count.
+     * @example
+     * // Count the number of SubtitleCaches
+     * const count = await prisma.subtitleCache.count({
+     *   where: {
+     *     // ... the filter for the SubtitleCaches we want to count
+     *   }
+     * })
+    **/
+    count<T extends SubtitleCacheCountArgs>(
+      args?: Subset<T, SubtitleCacheCountArgs>,
+    ): Prisma.PrismaPromise<
+      T extends $Utils.Record<'select', any>
+        ? T['select'] extends true
+          ? number
+          : GetScalarType<T['select'], SubtitleCacheCountAggregateOutputType>
+        : number
+    >
+
+    /**
+     * Allows you to perform aggregations operations on a SubtitleCache.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {SubtitleCacheAggregateArgs} args - Select which aggregations you would like to apply and on what fields.
+     * @example
+     * // Ordered by age ascending
+     * // Where email contains prisma.io
+     * // Limited to the 10 users
+     * const aggregations = await prisma.user.aggregate({
+     *   _avg: {
+     *     age: true,
+     *   },
+     *   where: {
+     *     email: {
+     *       contains: "prisma.io",
+     *     },
+     *   },
+     *   orderBy: {
+     *     age: "asc",
+     *   },
+     *   take: 10,
+     * })
+    **/
+    aggregate<T extends SubtitleCacheAggregateArgs>(args: Subset<T, SubtitleCacheAggregateArgs>): Prisma.PrismaPromise<GetSubtitleCacheAggregateType<T>>
+
+    /**
+     * Group by SubtitleCache.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {SubtitleCacheGroupByArgs} args - Group by arguments.
+     * @example
+     * // Group by city, order by createdAt, get count
+     * const result = await prisma.user.groupBy({
+     *   by: ['city', 'createdAt'],
+     *   orderBy: {
+     *     createdAt: true
+     *   },
+     *   _count: {
+     *     _all: true
+     *   },
+     * })
+     * 
+    **/
+    groupBy<
+      T extends SubtitleCacheGroupByArgs,
+      HasSelectOrTake extends Or<
+        Extends<'skip', Keys<T>>,
+        Extends<'take', Keys<T>>
+      >,
+      OrderByArg extends True extends HasSelectOrTake
+        ? { orderBy: SubtitleCacheGroupByArgs['orderBy'] }
+        : { orderBy?: SubtitleCacheGroupByArgs['orderBy'] },
+      OrderFields extends ExcludeUnderscoreKeys<Keys<MaybeTupleToUnion<T['orderBy']>>>,
+      ByFields extends MaybeTupleToUnion<T['by']>,
+      ByValid extends Has<ByFields, OrderFields>,
+      HavingFields extends GetHavingFields<T['having']>,
+      HavingValid extends Has<ByFields, HavingFields>,
+      ByEmpty extends T['by'] extends never[] ? True : False,
+      InputErrors extends ByEmpty extends True
+      ? `Error: "by" must not be empty.`
+      : HavingValid extends False
+      ? {
+          [P in HavingFields]: P extends ByFields
+            ? never
+            : P extends string
+            ? `Error: Field "${P}" used in "having" needs to be provided in "by".`
+            : [
+                Error,
+                'Field ',
+                P,
+                ` in "having" needs to be provided in "by"`,
+              ]
+        }[HavingFields]
+      : 'take' extends Keys<T>
+      ? 'orderBy' extends Keys<T>
+        ? ByValid extends True
+          ? {}
+          : {
+              [P in OrderFields]: P extends ByFields
+                ? never
+                : `Error: Field "${P}" in "orderBy" needs to be provided in "by"`
+            }[OrderFields]
+        : 'Error: If you provide "take", you also need to provide "orderBy"'
+      : 'skip' extends Keys<T>
+      ? 'orderBy' extends Keys<T>
+        ? ByValid extends True
+          ? {}
+          : {
+              [P in OrderFields]: P extends ByFields
+                ? never
+                : `Error: Field "${P}" in "orderBy" needs to be provided in "by"`
+            }[OrderFields]
+        : 'Error: If you provide "skip", you also need to provide "orderBy"'
+      : ByValid extends True
+      ? {}
+      : {
+          [P in OrderFields]: P extends ByFields
+            ? never
+            : `Error: Field "${P}" in "orderBy" needs to be provided in "by"`
+        }[OrderFields]
+    >(args: SubsetIntersection<T, SubtitleCacheGroupByArgs, OrderByArg> & InputErrors): {} extends InputErrors ? GetSubtitleCacheGroupByPayload<T> : Prisma.PrismaPromise<InputErrors>
+  /**
+   * Fields of the SubtitleCache model
+   */
+  readonly fields: SubtitleCacheFieldRefs;
+  }
+
+  /**
+   * The delegate class that acts as a "Promise-like" for SubtitleCache.
+   * Why is this prefixed with `Prisma__`?
+   * Because we want to prevent naming conflicts as mentioned in
+   * https://github.com/prisma/prisma-client-js/issues/707
+   */
+  export interface Prisma__SubtitleCacheClient<T, Null = never, ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs, GlobalOmitOptions = {}> extends Prisma.PrismaPromise<T> {
+    readonly [Symbol.toStringTag]: "PrismaPromise"
+    session<T extends SessionDefaultArgs<ExtArgs> = {}>(args?: Subset<T, SessionDefaultArgs<ExtArgs>>): Prisma__SessionClient<$Result.GetResult<Prisma.$SessionPayload<ExtArgs>, T, "findUniqueOrThrow", GlobalOmitOptions> | Null, Null, ExtArgs, GlobalOmitOptions>
+    /**
+     * Attaches callbacks for the resolution and/or rejection of the Promise.
+     * @param onfulfilled The callback to execute when the Promise is resolved.
+     * @param onrejected The callback to execute when the Promise is rejected.
+     * @returns A Promise for the completion of which ever callback is executed.
+     */
+    then<TResult1 = T, TResult2 = never>(onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | undefined | null, onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | undefined | null): $Utils.JsPromise<TResult1 | TResult2>
+    /**
+     * Attaches a callback for only the rejection of the Promise.
+     * @param onrejected The callback to execute when the Promise is rejected.
+     * @returns A Promise for the completion of the callback.
+     */
+    catch<TResult = never>(onrejected?: ((reason: any) => TResult | PromiseLike<TResult>) | undefined | null): $Utils.JsPromise<T | TResult>
+    /**
+     * Attaches a callback that is invoked when the Promise is settled (fulfilled or rejected). The
+     * resolved value cannot be modified from the callback.
+     * @param onfinally The callback to execute when the Promise is settled (fulfilled or rejected).
+     * @returns A Promise for the completion of the callback.
+     */
+    finally(onfinally?: (() => void) | undefined | null): $Utils.JsPromise<T>
+  }
+
+
+
+
+  /**
+   * Fields of the SubtitleCache model
+   */
+  interface SubtitleCacheFieldRefs {
+    readonly id: FieldRef<"SubtitleCache", 'String'>
+    readonly createdAt: FieldRef<"SubtitleCache", 'DateTime'>
+    readonly updatedAt: FieldRef<"SubtitleCache", 'DateTime'>
+    readonly sessionId: FieldRef<"SubtitleCache", 'String'>
+    readonly dialogueHash: FieldRef<"SubtitleCache", 'String'>
+    readonly assFilePath: FieldRef<"SubtitleCache", 'String'>
+  }
+    
+
+  // Custom InputTypes
+  /**
+   * SubtitleCache findUnique
+   */
+  export type SubtitleCacheFindUniqueArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the SubtitleCache
+     */
+    select?: SubtitleCacheSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the SubtitleCache
+     */
+    omit?: SubtitleCacheOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: SubtitleCacheInclude<ExtArgs> | null
+    /**
+     * Filter, which SubtitleCache to fetch.
+     */
+    where: SubtitleCacheWhereUniqueInput
+  }
+
+  /**
+   * SubtitleCache findUniqueOrThrow
+   */
+  export type SubtitleCacheFindUniqueOrThrowArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the SubtitleCache
+     */
+    select?: SubtitleCacheSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the SubtitleCache
+     */
+    omit?: SubtitleCacheOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: SubtitleCacheInclude<ExtArgs> | null
+    /**
+     * Filter, which SubtitleCache to fetch.
+     */
+    where: SubtitleCacheWhereUniqueInput
+  }
+
+  /**
+   * SubtitleCache findFirst
+   */
+  export type SubtitleCacheFindFirstArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the SubtitleCache
+     */
+    select?: SubtitleCacheSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the SubtitleCache
+     */
+    omit?: SubtitleCacheOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: SubtitleCacheInclude<ExtArgs> | null
+    /**
+     * Filter, which SubtitleCache to fetch.
+     */
+    where?: SubtitleCacheWhereInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/sorting Sorting Docs}
+     * 
+     * Determine the order of SubtitleCaches to fetch.
+     */
+    orderBy?: SubtitleCacheOrderByWithRelationInput | SubtitleCacheOrderByWithRelationInput[]
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination#cursor-based-pagination Cursor Docs}
+     * 
+     * Sets the position for searching for SubtitleCaches.
+     */
+    cursor?: SubtitleCacheWhereUniqueInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Take `±n` SubtitleCaches from the position of the cursor.
+     */
+    take?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Skip the first `n` SubtitleCaches.
+     */
+    skip?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/distinct Distinct Docs}
+     * 
+     * Filter by unique combinations of SubtitleCaches.
+     */
+    distinct?: SubtitleCacheScalarFieldEnum | SubtitleCacheScalarFieldEnum[]
+  }
+
+  /**
+   * SubtitleCache findFirstOrThrow
+   */
+  export type SubtitleCacheFindFirstOrThrowArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the SubtitleCache
+     */
+    select?: SubtitleCacheSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the SubtitleCache
+     */
+    omit?: SubtitleCacheOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: SubtitleCacheInclude<ExtArgs> | null
+    /**
+     * Filter, which SubtitleCache to fetch.
+     */
+    where?: SubtitleCacheWhereInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/sorting Sorting Docs}
+     * 
+     * Determine the order of SubtitleCaches to fetch.
+     */
+    orderBy?: SubtitleCacheOrderByWithRelationInput | SubtitleCacheOrderByWithRelationInput[]
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination#cursor-based-pagination Cursor Docs}
+     * 
+     * Sets the position for searching for SubtitleCaches.
+     */
+    cursor?: SubtitleCacheWhereUniqueInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Take `±n` SubtitleCaches from the position of the cursor.
+     */
+    take?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Skip the first `n` SubtitleCaches.
+     */
+    skip?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/distinct Distinct Docs}
+     * 
+     * Filter by unique combinations of SubtitleCaches.
+     */
+    distinct?: SubtitleCacheScalarFieldEnum | SubtitleCacheScalarFieldEnum[]
+  }
+
+  /**
+   * SubtitleCache findMany
+   */
+  export type SubtitleCacheFindManyArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the SubtitleCache
+     */
+    select?: SubtitleCacheSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the SubtitleCache
+     */
+    omit?: SubtitleCacheOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: SubtitleCacheInclude<ExtArgs> | null
+    /**
+     * Filter, which SubtitleCaches to fetch.
+     */
+    where?: SubtitleCacheWhereInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/sorting Sorting Docs}
+     * 
+     * Determine the order of SubtitleCaches to fetch.
+     */
+    orderBy?: SubtitleCacheOrderByWithRelationInput | SubtitleCacheOrderByWithRelationInput[]
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination#cursor-based-pagination Cursor Docs}
+     * 
+     * Sets the position for listing SubtitleCaches.
+     */
+    cursor?: SubtitleCacheWhereUniqueInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Take `±n` SubtitleCaches from the position of the cursor.
+     */
+    take?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Skip the first `n` SubtitleCaches.
+     */
+    skip?: number
+    distinct?: SubtitleCacheScalarFieldEnum | SubtitleCacheScalarFieldEnum[]
+  }
+
+  /**
+   * SubtitleCache create
+   */
+  export type SubtitleCacheCreateArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the SubtitleCache
+     */
+    select?: SubtitleCacheSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the SubtitleCache
+     */
+    omit?: SubtitleCacheOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: SubtitleCacheInclude<ExtArgs> | null
+    /**
+     * The data needed to create a SubtitleCache.
+     */
+    data: XOR<SubtitleCacheCreateInput, SubtitleCacheUncheckedCreateInput>
+  }
+
+  /**
+   * SubtitleCache createMany
+   */
+  export type SubtitleCacheCreateManyArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * The data used to create many SubtitleCaches.
+     */
+    data: SubtitleCacheCreateManyInput | SubtitleCacheCreateManyInput[]
+  }
+
+  /**
+   * SubtitleCache createManyAndReturn
+   */
+  export type SubtitleCacheCreateManyAndReturnArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the SubtitleCache
+     */
+    select?: SubtitleCacheSelectCreateManyAndReturn<ExtArgs> | null
+    /**
+     * Omit specific fields from the SubtitleCache
+     */
+    omit?: SubtitleCacheOmit<ExtArgs> | null
+    /**
+     * The data used to create many SubtitleCaches.
+     */
+    data: SubtitleCacheCreateManyInput | SubtitleCacheCreateManyInput[]
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: SubtitleCacheIncludeCreateManyAndReturn<ExtArgs> | null
+  }
+
+  /**
+   * SubtitleCache update
+   */
+  export type SubtitleCacheUpdateArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the SubtitleCache
+     */
+    select?: SubtitleCacheSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the SubtitleCache
+     */
+    omit?: SubtitleCacheOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: SubtitleCacheInclude<ExtArgs> | null
+    /**
+     * The data needed to update a SubtitleCache.
+     */
+    data: XOR<SubtitleCacheUpdateInput, SubtitleCacheUncheckedUpdateInput>
+    /**
+     * Choose, which SubtitleCache to update.
+     */
+    where: SubtitleCacheWhereUniqueInput
+  }
+
+  /**
+   * SubtitleCache updateMany
+   */
+  export type SubtitleCacheUpdateManyArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * The data used to update SubtitleCaches.
+     */
+    data: XOR<SubtitleCacheUpdateManyMutationInput, SubtitleCacheUncheckedUpdateManyInput>
+    /**
+     * Filter which SubtitleCaches to update
+     */
+    where?: SubtitleCacheWhereInput
+    /**
+     * Limit how many SubtitleCaches to update.
+     */
+    limit?: number
+  }
+
+  /**
+   * SubtitleCache updateManyAndReturn
+   */
+  export type SubtitleCacheUpdateManyAndReturnArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the SubtitleCache
+     */
+    select?: SubtitleCacheSelectUpdateManyAndReturn<ExtArgs> | null
+    /**
+     * Omit specific fields from the SubtitleCache
+     */
+    omit?: SubtitleCacheOmit<ExtArgs> | null
+    /**
+     * The data used to update SubtitleCaches.
+     */
+    data: XOR<SubtitleCacheUpdateManyMutationInput, SubtitleCacheUncheckedUpdateManyInput>
+    /**
+     * Filter which SubtitleCaches to update
+     */
+    where?: SubtitleCacheWhereInput
+    /**
+     * Limit how many SubtitleCaches to update.
+     */
+    limit?: number
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: SubtitleCacheIncludeUpdateManyAndReturn<ExtArgs> | null
+  }
+
+  /**
+   * SubtitleCache upsert
+   */
+  export type SubtitleCacheUpsertArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the SubtitleCache
+     */
+    select?: SubtitleCacheSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the SubtitleCache
+     */
+    omit?: SubtitleCacheOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: SubtitleCacheInclude<ExtArgs> | null
+    /**
+     * The filter to search for the SubtitleCache to update in case it exists.
+     */
+    where: SubtitleCacheWhereUniqueInput
+    /**
+     * In case the SubtitleCache found by the `where` argument doesn't exist, create a new SubtitleCache with this data.
+     */
+    create: XOR<SubtitleCacheCreateInput, SubtitleCacheUncheckedCreateInput>
+    /**
+     * In case the SubtitleCache was found with the provided `where` argument, update it with this data.
+     */
+    update: XOR<SubtitleCacheUpdateInput, SubtitleCacheUncheckedUpdateInput>
+  }
+
+  /**
+   * SubtitleCache delete
+   */
+  export type SubtitleCacheDeleteArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the SubtitleCache
+     */
+    select?: SubtitleCacheSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the SubtitleCache
+     */
+    omit?: SubtitleCacheOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: SubtitleCacheInclude<ExtArgs> | null
+    /**
+     * Filter which SubtitleCache to delete.
+     */
+    where: SubtitleCacheWhereUniqueInput
+  }
+
+  /**
+   * SubtitleCache deleteMany
+   */
+  export type SubtitleCacheDeleteManyArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Filter which SubtitleCaches to delete
+     */
+    where?: SubtitleCacheWhereInput
+    /**
+     * Limit how many SubtitleCaches to delete.
+     */
+    limit?: number
+  }
+
+  /**
+   * SubtitleCache without action
+   */
+  export type SubtitleCacheDefaultArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the SubtitleCache
+     */
+    select?: SubtitleCacheSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the SubtitleCache
+     */
+    omit?: SubtitleCacheOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: SubtitleCacheInclude<ExtArgs> | null
+  }
+
+
+  /**
    * Enums
    */
 
@@ -4730,6 +5927,18 @@ export namespace Prisma {
   };
 
   export type AudioFileScalarFieldEnum = (typeof AudioFileScalarFieldEnum)[keyof typeof AudioFileScalarFieldEnum]
+
+
+  export const SubtitleCacheScalarFieldEnum: {
+    id: 'id',
+    createdAt: 'createdAt',
+    updatedAt: 'updatedAt',
+    sessionId: 'sessionId',
+    dialogueHash: 'dialogueHash',
+    assFilePath: 'assFilePath'
+  };
+
+  export type SubtitleCacheScalarFieldEnum = (typeof SubtitleCacheScalarFieldEnum)[keyof typeof SubtitleCacheScalarFieldEnum]
 
 
   export const SortOrder: {
@@ -4811,6 +6020,7 @@ export namespace Prisma {
     allSuccessful?: BoolFilter<"Session"> | boolean
     dialogues?: DialogueListRelationFilter
     audioFiles?: AudioFileListRelationFilter
+    subtitleCaches?: SubtitleCacheListRelationFilter
   }
 
   export type SessionOrderByWithRelationInput = {
@@ -4830,6 +6040,7 @@ export namespace Prisma {
     allSuccessful?: SortOrder
     dialogues?: DialogueOrderByRelationAggregateInput
     audioFiles?: AudioFileOrderByRelationAggregateInput
+    subtitleCaches?: SubtitleCacheOrderByRelationAggregateInput
   }
 
   export type SessionWhereUniqueInput = Prisma.AtLeast<{
@@ -4852,6 +6063,7 @@ export namespace Prisma {
     allSuccessful?: BoolFilter<"Session"> | boolean
     dialogues?: DialogueListRelationFilter
     audioFiles?: AudioFileListRelationFilter
+    subtitleCaches?: SubtitleCacheListRelationFilter
   }, "id">
 
   export type SessionOrderByWithAggregationInput = {
@@ -5046,6 +6258,67 @@ export namespace Prisma {
     errorMessage?: StringNullableWithAggregatesFilter<"AudioFile"> | string | null
   }
 
+  export type SubtitleCacheWhereInput = {
+    AND?: SubtitleCacheWhereInput | SubtitleCacheWhereInput[]
+    OR?: SubtitleCacheWhereInput[]
+    NOT?: SubtitleCacheWhereInput | SubtitleCacheWhereInput[]
+    id?: StringFilter<"SubtitleCache"> | string
+    createdAt?: DateTimeFilter<"SubtitleCache"> | Date | string
+    updatedAt?: DateTimeFilter<"SubtitleCache"> | Date | string
+    sessionId?: StringFilter<"SubtitleCache"> | string
+    dialogueHash?: StringFilter<"SubtitleCache"> | string
+    assFilePath?: StringFilter<"SubtitleCache"> | string
+    session?: XOR<SessionScalarRelationFilter, SessionWhereInput>
+  }
+
+  export type SubtitleCacheOrderByWithRelationInput = {
+    id?: SortOrder
+    createdAt?: SortOrder
+    updatedAt?: SortOrder
+    sessionId?: SortOrder
+    dialogueHash?: SortOrder
+    assFilePath?: SortOrder
+    session?: SessionOrderByWithRelationInput
+  }
+
+  export type SubtitleCacheWhereUniqueInput = Prisma.AtLeast<{
+    id?: string
+    sessionId_dialogueHash?: SubtitleCacheSessionIdDialogueHashCompoundUniqueInput
+    AND?: SubtitleCacheWhereInput | SubtitleCacheWhereInput[]
+    OR?: SubtitleCacheWhereInput[]
+    NOT?: SubtitleCacheWhereInput | SubtitleCacheWhereInput[]
+    createdAt?: DateTimeFilter<"SubtitleCache"> | Date | string
+    updatedAt?: DateTimeFilter<"SubtitleCache"> | Date | string
+    sessionId?: StringFilter<"SubtitleCache"> | string
+    dialogueHash?: StringFilter<"SubtitleCache"> | string
+    assFilePath?: StringFilter<"SubtitleCache"> | string
+    session?: XOR<SessionScalarRelationFilter, SessionWhereInput>
+  }, "id" | "sessionId_dialogueHash">
+
+  export type SubtitleCacheOrderByWithAggregationInput = {
+    id?: SortOrder
+    createdAt?: SortOrder
+    updatedAt?: SortOrder
+    sessionId?: SortOrder
+    dialogueHash?: SortOrder
+    assFilePath?: SortOrder
+    _count?: SubtitleCacheCountOrderByAggregateInput
+    _max?: SubtitleCacheMaxOrderByAggregateInput
+    _min?: SubtitleCacheMinOrderByAggregateInput
+  }
+
+  export type SubtitleCacheScalarWhereWithAggregatesInput = {
+    AND?: SubtitleCacheScalarWhereWithAggregatesInput | SubtitleCacheScalarWhereWithAggregatesInput[]
+    OR?: SubtitleCacheScalarWhereWithAggregatesInput[]
+    NOT?: SubtitleCacheScalarWhereWithAggregatesInput | SubtitleCacheScalarWhereWithAggregatesInput[]
+    id?: StringWithAggregatesFilter<"SubtitleCache"> | string
+    createdAt?: DateTimeWithAggregatesFilter<"SubtitleCache"> | Date | string
+    updatedAt?: DateTimeWithAggregatesFilter<"SubtitleCache"> | Date | string
+    sessionId?: StringWithAggregatesFilter<"SubtitleCache"> | string
+    dialogueHash?: StringWithAggregatesFilter<"SubtitleCache"> | string
+    assFilePath?: StringWithAggregatesFilter<"SubtitleCache"> | string
+  }
+
   export type SessionCreateInput = {
     id?: string
     createdAt?: Date | string
@@ -5063,6 +6336,7 @@ export namespace Prisma {
     allSuccessful?: boolean
     dialogues?: DialogueCreateNestedManyWithoutSessionInput
     audioFiles?: AudioFileCreateNestedManyWithoutSessionInput
+    subtitleCaches?: SubtitleCacheCreateNestedManyWithoutSessionInput
   }
 
   export type SessionUncheckedCreateInput = {
@@ -5082,6 +6356,7 @@ export namespace Prisma {
     allSuccessful?: boolean
     dialogues?: DialogueUncheckedCreateNestedManyWithoutSessionInput
     audioFiles?: AudioFileUncheckedCreateNestedManyWithoutSessionInput
+    subtitleCaches?: SubtitleCacheUncheckedCreateNestedManyWithoutSessionInput
   }
 
   export type SessionUpdateInput = {
@@ -5101,6 +6376,7 @@ export namespace Prisma {
     allSuccessful?: BoolFieldUpdateOperationsInput | boolean
     dialogues?: DialogueUpdateManyWithoutSessionNestedInput
     audioFiles?: AudioFileUpdateManyWithoutSessionNestedInput
+    subtitleCaches?: SubtitleCacheUpdateManyWithoutSessionNestedInput
   }
 
   export type SessionUncheckedUpdateInput = {
@@ -5120,6 +6396,7 @@ export namespace Prisma {
     allSuccessful?: BoolFieldUpdateOperationsInput | boolean
     dialogues?: DialogueUncheckedUpdateManyWithoutSessionNestedInput
     audioFiles?: AudioFileUncheckedUpdateManyWithoutSessionNestedInput
+    subtitleCaches?: SubtitleCacheUncheckedUpdateManyWithoutSessionNestedInput
   }
 
   export type SessionCreateManyInput = {
@@ -5328,6 +6605,68 @@ export namespace Prisma {
     errorMessage?: NullableStringFieldUpdateOperationsInput | string | null
   }
 
+  export type SubtitleCacheCreateInput = {
+    id?: string
+    createdAt?: Date | string
+    updatedAt?: Date | string
+    dialogueHash: string
+    assFilePath: string
+    session: SessionCreateNestedOneWithoutSubtitleCachesInput
+  }
+
+  export type SubtitleCacheUncheckedCreateInput = {
+    id?: string
+    createdAt?: Date | string
+    updatedAt?: Date | string
+    sessionId: string
+    dialogueHash: string
+    assFilePath: string
+  }
+
+  export type SubtitleCacheUpdateInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    dialogueHash?: StringFieldUpdateOperationsInput | string
+    assFilePath?: StringFieldUpdateOperationsInput | string
+    session?: SessionUpdateOneRequiredWithoutSubtitleCachesNestedInput
+  }
+
+  export type SubtitleCacheUncheckedUpdateInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    sessionId?: StringFieldUpdateOperationsInput | string
+    dialogueHash?: StringFieldUpdateOperationsInput | string
+    assFilePath?: StringFieldUpdateOperationsInput | string
+  }
+
+  export type SubtitleCacheCreateManyInput = {
+    id?: string
+    createdAt?: Date | string
+    updatedAt?: Date | string
+    sessionId: string
+    dialogueHash: string
+    assFilePath: string
+  }
+
+  export type SubtitleCacheUpdateManyMutationInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    dialogueHash?: StringFieldUpdateOperationsInput | string
+    assFilePath?: StringFieldUpdateOperationsInput | string
+  }
+
+  export type SubtitleCacheUncheckedUpdateManyInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    sessionId?: StringFieldUpdateOperationsInput | string
+    dialogueHash?: StringFieldUpdateOperationsInput | string
+    assFilePath?: StringFieldUpdateOperationsInput | string
+  }
+
   export type StringFilter<$PrismaModel = never> = {
     equals?: string | StringFieldRefInput<$PrismaModel>
     in?: string[]
@@ -5406,6 +6745,12 @@ export namespace Prisma {
     none?: AudioFileWhereInput
   }
 
+  export type SubtitleCacheListRelationFilter = {
+    every?: SubtitleCacheWhereInput
+    some?: SubtitleCacheWhereInput
+    none?: SubtitleCacheWhereInput
+  }
+
   export type SortOrderInput = {
     sort: SortOrder
     nulls?: NullsOrder
@@ -5416,6 +6761,10 @@ export namespace Prisma {
   }
 
   export type AudioFileOrderByRelationAggregateInput = {
+    _count?: SortOrder
+  }
+
+  export type SubtitleCacheOrderByRelationAggregateInput = {
     _count?: SortOrder
   }
 
@@ -5735,6 +7084,38 @@ export namespace Prisma {
     _max?: NestedFloatNullableFilter<$PrismaModel>
   }
 
+  export type SubtitleCacheSessionIdDialogueHashCompoundUniqueInput = {
+    sessionId: string
+    dialogueHash: string
+  }
+
+  export type SubtitleCacheCountOrderByAggregateInput = {
+    id?: SortOrder
+    createdAt?: SortOrder
+    updatedAt?: SortOrder
+    sessionId?: SortOrder
+    dialogueHash?: SortOrder
+    assFilePath?: SortOrder
+  }
+
+  export type SubtitleCacheMaxOrderByAggregateInput = {
+    id?: SortOrder
+    createdAt?: SortOrder
+    updatedAt?: SortOrder
+    sessionId?: SortOrder
+    dialogueHash?: SortOrder
+    assFilePath?: SortOrder
+  }
+
+  export type SubtitleCacheMinOrderByAggregateInput = {
+    id?: SortOrder
+    createdAt?: SortOrder
+    updatedAt?: SortOrder
+    sessionId?: SortOrder
+    dialogueHash?: SortOrder
+    assFilePath?: SortOrder
+  }
+
   export type DialogueCreateNestedManyWithoutSessionInput = {
     create?: XOR<DialogueCreateWithoutSessionInput, DialogueUncheckedCreateWithoutSessionInput> | DialogueCreateWithoutSessionInput[] | DialogueUncheckedCreateWithoutSessionInput[]
     connectOrCreate?: DialogueCreateOrConnectWithoutSessionInput | DialogueCreateOrConnectWithoutSessionInput[]
@@ -5749,6 +7130,13 @@ export namespace Prisma {
     connect?: AudioFileWhereUniqueInput | AudioFileWhereUniqueInput[]
   }
 
+  export type SubtitleCacheCreateNestedManyWithoutSessionInput = {
+    create?: XOR<SubtitleCacheCreateWithoutSessionInput, SubtitleCacheUncheckedCreateWithoutSessionInput> | SubtitleCacheCreateWithoutSessionInput[] | SubtitleCacheUncheckedCreateWithoutSessionInput[]
+    connectOrCreate?: SubtitleCacheCreateOrConnectWithoutSessionInput | SubtitleCacheCreateOrConnectWithoutSessionInput[]
+    createMany?: SubtitleCacheCreateManySessionInputEnvelope
+    connect?: SubtitleCacheWhereUniqueInput | SubtitleCacheWhereUniqueInput[]
+  }
+
   export type DialogueUncheckedCreateNestedManyWithoutSessionInput = {
     create?: XOR<DialogueCreateWithoutSessionInput, DialogueUncheckedCreateWithoutSessionInput> | DialogueCreateWithoutSessionInput[] | DialogueUncheckedCreateWithoutSessionInput[]
     connectOrCreate?: DialogueCreateOrConnectWithoutSessionInput | DialogueCreateOrConnectWithoutSessionInput[]
@@ -5761,6 +7149,13 @@ export namespace Prisma {
     connectOrCreate?: AudioFileCreateOrConnectWithoutSessionInput | AudioFileCreateOrConnectWithoutSessionInput[]
     createMany?: AudioFileCreateManySessionInputEnvelope
     connect?: AudioFileWhereUniqueInput | AudioFileWhereUniqueInput[]
+  }
+
+  export type SubtitleCacheUncheckedCreateNestedManyWithoutSessionInput = {
+    create?: XOR<SubtitleCacheCreateWithoutSessionInput, SubtitleCacheUncheckedCreateWithoutSessionInput> | SubtitleCacheCreateWithoutSessionInput[] | SubtitleCacheUncheckedCreateWithoutSessionInput[]
+    connectOrCreate?: SubtitleCacheCreateOrConnectWithoutSessionInput | SubtitleCacheCreateOrConnectWithoutSessionInput[]
+    createMany?: SubtitleCacheCreateManySessionInputEnvelope
+    connect?: SubtitleCacheWhereUniqueInput | SubtitleCacheWhereUniqueInput[]
   }
 
   export type StringFieldUpdateOperationsInput = {
@@ -5823,6 +7218,20 @@ export namespace Prisma {
     deleteMany?: AudioFileScalarWhereInput | AudioFileScalarWhereInput[]
   }
 
+  export type SubtitleCacheUpdateManyWithoutSessionNestedInput = {
+    create?: XOR<SubtitleCacheCreateWithoutSessionInput, SubtitleCacheUncheckedCreateWithoutSessionInput> | SubtitleCacheCreateWithoutSessionInput[] | SubtitleCacheUncheckedCreateWithoutSessionInput[]
+    connectOrCreate?: SubtitleCacheCreateOrConnectWithoutSessionInput | SubtitleCacheCreateOrConnectWithoutSessionInput[]
+    upsert?: SubtitleCacheUpsertWithWhereUniqueWithoutSessionInput | SubtitleCacheUpsertWithWhereUniqueWithoutSessionInput[]
+    createMany?: SubtitleCacheCreateManySessionInputEnvelope
+    set?: SubtitleCacheWhereUniqueInput | SubtitleCacheWhereUniqueInput[]
+    disconnect?: SubtitleCacheWhereUniqueInput | SubtitleCacheWhereUniqueInput[]
+    delete?: SubtitleCacheWhereUniqueInput | SubtitleCacheWhereUniqueInput[]
+    connect?: SubtitleCacheWhereUniqueInput | SubtitleCacheWhereUniqueInput[]
+    update?: SubtitleCacheUpdateWithWhereUniqueWithoutSessionInput | SubtitleCacheUpdateWithWhereUniqueWithoutSessionInput[]
+    updateMany?: SubtitleCacheUpdateManyWithWhereWithoutSessionInput | SubtitleCacheUpdateManyWithWhereWithoutSessionInput[]
+    deleteMany?: SubtitleCacheScalarWhereInput | SubtitleCacheScalarWhereInput[]
+  }
+
   export type DialogueUncheckedUpdateManyWithoutSessionNestedInput = {
     create?: XOR<DialogueCreateWithoutSessionInput, DialogueUncheckedCreateWithoutSessionInput> | DialogueCreateWithoutSessionInput[] | DialogueUncheckedCreateWithoutSessionInput[]
     connectOrCreate?: DialogueCreateOrConnectWithoutSessionInput | DialogueCreateOrConnectWithoutSessionInput[]
@@ -5849,6 +7258,20 @@ export namespace Prisma {
     update?: AudioFileUpdateWithWhereUniqueWithoutSessionInput | AudioFileUpdateWithWhereUniqueWithoutSessionInput[]
     updateMany?: AudioFileUpdateManyWithWhereWithoutSessionInput | AudioFileUpdateManyWithWhereWithoutSessionInput[]
     deleteMany?: AudioFileScalarWhereInput | AudioFileScalarWhereInput[]
+  }
+
+  export type SubtitleCacheUncheckedUpdateManyWithoutSessionNestedInput = {
+    create?: XOR<SubtitleCacheCreateWithoutSessionInput, SubtitleCacheUncheckedCreateWithoutSessionInput> | SubtitleCacheCreateWithoutSessionInput[] | SubtitleCacheUncheckedCreateWithoutSessionInput[]
+    connectOrCreate?: SubtitleCacheCreateOrConnectWithoutSessionInput | SubtitleCacheCreateOrConnectWithoutSessionInput[]
+    upsert?: SubtitleCacheUpsertWithWhereUniqueWithoutSessionInput | SubtitleCacheUpsertWithWhereUniqueWithoutSessionInput[]
+    createMany?: SubtitleCacheCreateManySessionInputEnvelope
+    set?: SubtitleCacheWhereUniqueInput | SubtitleCacheWhereUniqueInput[]
+    disconnect?: SubtitleCacheWhereUniqueInput | SubtitleCacheWhereUniqueInput[]
+    delete?: SubtitleCacheWhereUniqueInput | SubtitleCacheWhereUniqueInput[]
+    connect?: SubtitleCacheWhereUniqueInput | SubtitleCacheWhereUniqueInput[]
+    update?: SubtitleCacheUpdateWithWhereUniqueWithoutSessionInput | SubtitleCacheUpdateWithWhereUniqueWithoutSessionInput[]
+    updateMany?: SubtitleCacheUpdateManyWithWhereWithoutSessionInput | SubtitleCacheUpdateManyWithWhereWithoutSessionInput[]
+    deleteMany?: SubtitleCacheScalarWhereInput | SubtitleCacheScalarWhereInput[]
   }
 
   export type SessionCreateNestedOneWithoutDialoguesInput = {
@@ -5941,6 +7364,20 @@ export namespace Prisma {
     delete?: DialogueWhereInput | boolean
     connect?: DialogueWhereUniqueInput
     update?: XOR<XOR<DialogueUpdateToOneWithWhereWithoutAudioFileInput, DialogueUpdateWithoutAudioFileInput>, DialogueUncheckedUpdateWithoutAudioFileInput>
+  }
+
+  export type SessionCreateNestedOneWithoutSubtitleCachesInput = {
+    create?: XOR<SessionCreateWithoutSubtitleCachesInput, SessionUncheckedCreateWithoutSubtitleCachesInput>
+    connectOrCreate?: SessionCreateOrConnectWithoutSubtitleCachesInput
+    connect?: SessionWhereUniqueInput
+  }
+
+  export type SessionUpdateOneRequiredWithoutSubtitleCachesNestedInput = {
+    create?: XOR<SessionCreateWithoutSubtitleCachesInput, SessionUncheckedCreateWithoutSubtitleCachesInput>
+    connectOrCreate?: SessionCreateOrConnectWithoutSubtitleCachesInput
+    upsert?: SessionUpsertWithoutSubtitleCachesInput
+    connect?: SessionWhereUniqueInput
+    update?: XOR<XOR<SessionUpdateToOneWithWhereWithoutSubtitleCachesInput, SessionUpdateWithoutSubtitleCachesInput>, SessionUncheckedUpdateWithoutSubtitleCachesInput>
   }
 
   export type NestedStringFilter<$PrismaModel = never> = {
@@ -6211,6 +7648,31 @@ export namespace Prisma {
     data: AudioFileCreateManySessionInput | AudioFileCreateManySessionInput[]
   }
 
+  export type SubtitleCacheCreateWithoutSessionInput = {
+    id?: string
+    createdAt?: Date | string
+    updatedAt?: Date | string
+    dialogueHash: string
+    assFilePath: string
+  }
+
+  export type SubtitleCacheUncheckedCreateWithoutSessionInput = {
+    id?: string
+    createdAt?: Date | string
+    updatedAt?: Date | string
+    dialogueHash: string
+    assFilePath: string
+  }
+
+  export type SubtitleCacheCreateOrConnectWithoutSessionInput = {
+    where: SubtitleCacheWhereUniqueInput
+    create: XOR<SubtitleCacheCreateWithoutSessionInput, SubtitleCacheUncheckedCreateWithoutSessionInput>
+  }
+
+  export type SubtitleCacheCreateManySessionInputEnvelope = {
+    data: SubtitleCacheCreateManySessionInput | SubtitleCacheCreateManySessionInput[]
+  }
+
   export type DialogueUpsertWithWhereUniqueWithoutSessionInput = {
     where: DialogueWhereUniqueInput
     update: XOR<DialogueUpdateWithoutSessionInput, DialogueUncheckedUpdateWithoutSessionInput>
@@ -6271,6 +7733,34 @@ export namespace Prisma {
     errorMessage?: StringNullableFilter<"AudioFile"> | string | null
   }
 
+  export type SubtitleCacheUpsertWithWhereUniqueWithoutSessionInput = {
+    where: SubtitleCacheWhereUniqueInput
+    update: XOR<SubtitleCacheUpdateWithoutSessionInput, SubtitleCacheUncheckedUpdateWithoutSessionInput>
+    create: XOR<SubtitleCacheCreateWithoutSessionInput, SubtitleCacheUncheckedCreateWithoutSessionInput>
+  }
+
+  export type SubtitleCacheUpdateWithWhereUniqueWithoutSessionInput = {
+    where: SubtitleCacheWhereUniqueInput
+    data: XOR<SubtitleCacheUpdateWithoutSessionInput, SubtitleCacheUncheckedUpdateWithoutSessionInput>
+  }
+
+  export type SubtitleCacheUpdateManyWithWhereWithoutSessionInput = {
+    where: SubtitleCacheScalarWhereInput
+    data: XOR<SubtitleCacheUpdateManyMutationInput, SubtitleCacheUncheckedUpdateManyWithoutSessionInput>
+  }
+
+  export type SubtitleCacheScalarWhereInput = {
+    AND?: SubtitleCacheScalarWhereInput | SubtitleCacheScalarWhereInput[]
+    OR?: SubtitleCacheScalarWhereInput[]
+    NOT?: SubtitleCacheScalarWhereInput | SubtitleCacheScalarWhereInput[]
+    id?: StringFilter<"SubtitleCache"> | string
+    createdAt?: DateTimeFilter<"SubtitleCache"> | Date | string
+    updatedAt?: DateTimeFilter<"SubtitleCache"> | Date | string
+    sessionId?: StringFilter<"SubtitleCache"> | string
+    dialogueHash?: StringFilter<"SubtitleCache"> | string
+    assFilePath?: StringFilter<"SubtitleCache"> | string
+  }
+
   export type SessionCreateWithoutDialoguesInput = {
     id?: string
     createdAt?: Date | string
@@ -6287,6 +7777,7 @@ export namespace Prisma {
     audioFilesGenerated?: number
     allSuccessful?: boolean
     audioFiles?: AudioFileCreateNestedManyWithoutSessionInput
+    subtitleCaches?: SubtitleCacheCreateNestedManyWithoutSessionInput
   }
 
   export type SessionUncheckedCreateWithoutDialoguesInput = {
@@ -6305,6 +7796,7 @@ export namespace Prisma {
     audioFilesGenerated?: number
     allSuccessful?: boolean
     audioFiles?: AudioFileUncheckedCreateNestedManyWithoutSessionInput
+    subtitleCaches?: SubtitleCacheUncheckedCreateNestedManyWithoutSessionInput
   }
 
   export type SessionCreateOrConnectWithoutDialoguesInput = {
@@ -6368,6 +7860,7 @@ export namespace Prisma {
     audioFilesGenerated?: IntFieldUpdateOperationsInput | number
     allSuccessful?: BoolFieldUpdateOperationsInput | boolean
     audioFiles?: AudioFileUpdateManyWithoutSessionNestedInput
+    subtitleCaches?: SubtitleCacheUpdateManyWithoutSessionNestedInput
   }
 
   export type SessionUncheckedUpdateWithoutDialoguesInput = {
@@ -6386,6 +7879,7 @@ export namespace Prisma {
     audioFilesGenerated?: IntFieldUpdateOperationsInput | number
     allSuccessful?: BoolFieldUpdateOperationsInput | boolean
     audioFiles?: AudioFileUncheckedUpdateManyWithoutSessionNestedInput
+    subtitleCaches?: SubtitleCacheUncheckedUpdateManyWithoutSessionNestedInput
   }
 
   export type AudioFileUpsertWithoutDialogueInput = {
@@ -6439,6 +7933,7 @@ export namespace Prisma {
     audioFilesGenerated?: number
     allSuccessful?: boolean
     dialogues?: DialogueCreateNestedManyWithoutSessionInput
+    subtitleCaches?: SubtitleCacheCreateNestedManyWithoutSessionInput
   }
 
   export type SessionUncheckedCreateWithoutAudioFilesInput = {
@@ -6457,6 +7952,7 @@ export namespace Prisma {
     audioFilesGenerated?: number
     allSuccessful?: boolean
     dialogues?: DialogueUncheckedCreateNestedManyWithoutSessionInput
+    subtitleCaches?: SubtitleCacheUncheckedCreateNestedManyWithoutSessionInput
   }
 
   export type SessionCreateOrConnectWithoutAudioFilesInput = {
@@ -6514,6 +8010,7 @@ export namespace Prisma {
     audioFilesGenerated?: IntFieldUpdateOperationsInput | number
     allSuccessful?: BoolFieldUpdateOperationsInput | boolean
     dialogues?: DialogueUpdateManyWithoutSessionNestedInput
+    subtitleCaches?: SubtitleCacheUpdateManyWithoutSessionNestedInput
   }
 
   export type SessionUncheckedUpdateWithoutAudioFilesInput = {
@@ -6532,6 +8029,7 @@ export namespace Prisma {
     audioFilesGenerated?: IntFieldUpdateOperationsInput | number
     allSuccessful?: BoolFieldUpdateOperationsInput | boolean
     dialogues?: DialogueUncheckedUpdateManyWithoutSessionNestedInput
+    subtitleCaches?: SubtitleCacheUncheckedUpdateManyWithoutSessionNestedInput
   }
 
   export type DialogueUpsertWithoutAudioFileInput = {
@@ -6563,6 +8061,98 @@ export namespace Prisma {
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
   }
 
+  export type SessionCreateWithoutSubtitleCachesInput = {
+    id?: string
+    createdAt?: Date | string
+    updatedAt?: Date | string
+    name?: string | null
+    exaggeration: number
+    temperature: number
+    seedNum: number
+    cfgWeight: number
+    minP: number
+    topP: number
+    repetitionPenalty: number
+    totalDialogues?: number
+    audioFilesGenerated?: number
+    allSuccessful?: boolean
+    dialogues?: DialogueCreateNestedManyWithoutSessionInput
+    audioFiles?: AudioFileCreateNestedManyWithoutSessionInput
+  }
+
+  export type SessionUncheckedCreateWithoutSubtitleCachesInput = {
+    id?: string
+    createdAt?: Date | string
+    updatedAt?: Date | string
+    name?: string | null
+    exaggeration: number
+    temperature: number
+    seedNum: number
+    cfgWeight: number
+    minP: number
+    topP: number
+    repetitionPenalty: number
+    totalDialogues?: number
+    audioFilesGenerated?: number
+    allSuccessful?: boolean
+    dialogues?: DialogueUncheckedCreateNestedManyWithoutSessionInput
+    audioFiles?: AudioFileUncheckedCreateNestedManyWithoutSessionInput
+  }
+
+  export type SessionCreateOrConnectWithoutSubtitleCachesInput = {
+    where: SessionWhereUniqueInput
+    create: XOR<SessionCreateWithoutSubtitleCachesInput, SessionUncheckedCreateWithoutSubtitleCachesInput>
+  }
+
+  export type SessionUpsertWithoutSubtitleCachesInput = {
+    update: XOR<SessionUpdateWithoutSubtitleCachesInput, SessionUncheckedUpdateWithoutSubtitleCachesInput>
+    create: XOR<SessionCreateWithoutSubtitleCachesInput, SessionUncheckedCreateWithoutSubtitleCachesInput>
+    where?: SessionWhereInput
+  }
+
+  export type SessionUpdateToOneWithWhereWithoutSubtitleCachesInput = {
+    where?: SessionWhereInput
+    data: XOR<SessionUpdateWithoutSubtitleCachesInput, SessionUncheckedUpdateWithoutSubtitleCachesInput>
+  }
+
+  export type SessionUpdateWithoutSubtitleCachesInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    name?: NullableStringFieldUpdateOperationsInput | string | null
+    exaggeration?: FloatFieldUpdateOperationsInput | number
+    temperature?: FloatFieldUpdateOperationsInput | number
+    seedNum?: IntFieldUpdateOperationsInput | number
+    cfgWeight?: FloatFieldUpdateOperationsInput | number
+    minP?: FloatFieldUpdateOperationsInput | number
+    topP?: FloatFieldUpdateOperationsInput | number
+    repetitionPenalty?: FloatFieldUpdateOperationsInput | number
+    totalDialogues?: IntFieldUpdateOperationsInput | number
+    audioFilesGenerated?: IntFieldUpdateOperationsInput | number
+    allSuccessful?: BoolFieldUpdateOperationsInput | boolean
+    dialogues?: DialogueUpdateManyWithoutSessionNestedInput
+    audioFiles?: AudioFileUpdateManyWithoutSessionNestedInput
+  }
+
+  export type SessionUncheckedUpdateWithoutSubtitleCachesInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    name?: NullableStringFieldUpdateOperationsInput | string | null
+    exaggeration?: FloatFieldUpdateOperationsInput | number
+    temperature?: FloatFieldUpdateOperationsInput | number
+    seedNum?: IntFieldUpdateOperationsInput | number
+    cfgWeight?: FloatFieldUpdateOperationsInput | number
+    minP?: FloatFieldUpdateOperationsInput | number
+    topP?: FloatFieldUpdateOperationsInput | number
+    repetitionPenalty?: FloatFieldUpdateOperationsInput | number
+    totalDialogues?: IntFieldUpdateOperationsInput | number
+    audioFilesGenerated?: IntFieldUpdateOperationsInput | number
+    allSuccessful?: BoolFieldUpdateOperationsInput | boolean
+    dialogues?: DialogueUncheckedUpdateManyWithoutSessionNestedInput
+    audioFiles?: AudioFileUncheckedUpdateManyWithoutSessionNestedInput
+  }
+
   export type DialogueCreateManySessionInput = {
     id?: string
     text: string
@@ -6581,6 +8171,14 @@ export namespace Prisma {
     generatedAt?: Date | string
     success?: boolean
     errorMessage?: string | null
+  }
+
+  export type SubtitleCacheCreateManySessionInput = {
+    id?: string
+    createdAt?: Date | string
+    updatedAt?: Date | string
+    dialogueHash: string
+    assFilePath: string
   }
 
   export type DialogueUpdateWithoutSessionInput = {
@@ -6643,6 +8241,30 @@ export namespace Prisma {
     generatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     success?: BoolFieldUpdateOperationsInput | boolean
     errorMessage?: NullableStringFieldUpdateOperationsInput | string | null
+  }
+
+  export type SubtitleCacheUpdateWithoutSessionInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    dialogueHash?: StringFieldUpdateOperationsInput | string
+    assFilePath?: StringFieldUpdateOperationsInput | string
+  }
+
+  export type SubtitleCacheUncheckedUpdateWithoutSessionInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    dialogueHash?: StringFieldUpdateOperationsInput | string
+    assFilePath?: StringFieldUpdateOperationsInput | string
+  }
+
+  export type SubtitleCacheUncheckedUpdateManyWithoutSessionInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    dialogueHash?: StringFieldUpdateOperationsInput | string
+    assFilePath?: StringFieldUpdateOperationsInput | string
   }
 
 

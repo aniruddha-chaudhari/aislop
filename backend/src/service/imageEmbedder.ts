@@ -1,5 +1,5 @@
 import { generateObject, generateText } from "ai";
-import { google } from "@ai-sdk/google";
+import { google, createGoogleGenerativeAI } from "@ai-sdk/google";
 import { z } from "zod";
 import * as fs from 'fs';
 import * as path from 'path';
@@ -69,6 +69,50 @@ const myImage = UserImageManager.createUserImage(
 
 The AI will evaluate your images and decide if they're valuable for the video!
     `;
+  }
+}
+
+// GEMINI API KEY FALLBACK
+const PRIMARY_GEMINI_KEY = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+const SECONDARY_GEMINI_KEY = process.env.GOOGLE_GENERATIVE_AI_API_KEY_SECONDARY;
+
+const googlePrimary = createGoogleGenerativeAI({
+  apiKey: PRIMARY_GEMINI_KEY,
+});
+
+const googleSecondary = SECONDARY_GEMINI_KEY
+  ? createGoogleGenerativeAI({ apiKey: SECONDARY_GEMINI_KEY })
+  : null;
+
+function isGeminiQuotaError(error: unknown): boolean {
+  const err = error as any;
+  const msg: string | undefined = err?.message;
+  const statusCode: number | undefined = err?.statusCode ?? err?.status;
+  const body: string | undefined = err?.responseBody ?? err?.body;
+  const quotaRegex = /quota|RESOURCE_EXHAUSTED/i;
+  return (
+    statusCode === 429 ||
+    (typeof msg === 'string' && quotaRegex.test(msg)) ||
+    (typeof body === 'string' && quotaRegex.test(body))
+  );
+}
+
+async function withGeminiFallback<T>(
+  modelName: string,
+  runWithModel: (model: any) => Promise<T>
+): Promise<T> {
+  const primaryModel = googlePrimary(modelName);
+
+  try {
+    return await runWithModel(primaryModel);
+  } catch (error) {
+    if (!googleSecondary || !isGeminiQuotaError(error)) {
+      throw error;
+    }
+
+    console.warn('[GEMINI] Primary key quota exceeded, retrying with secondary key (imageEmbedder)');
+    const secondaryModel = googleSecondary(modelName);
+    return await runWithModel(secondaryModel);
   }
 }
 
@@ -661,13 +705,15 @@ Focus on identifying:
 
 Provide specific diagram concepts that would work well in educational video content about this particular technology. Focus on diagrams that help explain how the technology actually works and its core concepts.`;
 
-      const researchResult = await generateText({
-        model: google('models/gemini-2.5-flash'),
-        prompt: researchPrompt,
-        tools: {
-          google_search: google.tools.googleSearch({}),
-        }
-      });
+      const researchResult = await withGeminiFallback('models/gemini-3-flash-preview', (model) =>
+        generateText({
+          model,
+          prompt: researchPrompt,
+          tools: {
+            google_search: google.tools.googleSearch({}),
+          }
+        })
+      );
 
       const visualResearch = researchResult.text;
       console.log('✅ [SEARCH] Technical research completed');
@@ -759,7 +805,7 @@ Provide specific diagram concepts that would work well in educational video cont
       });
 
       const result = await generateObject({
-        model: google('models/gemini-2.5-flash'),
+        model: google('models/gemini-3-flash-preview'),
         schema: schema as any,
         prompt: enhancedPrompt
       });
@@ -1014,7 +1060,7 @@ Provide specific diagram concepts that would work well in educational video cont
 
       console.log('🔍 [AI] Matching existing images to requirements...');
       
-      const sessionImageDir = path.join(process.cwd(), 'generated_images', sessionId);
+      const sessionImageDir = path.join(process.cwd(), 'storage', 'images', sessionId);
       if (fs.existsSync(sessionImageDir)) {
         const existingImages = fs.readdirSync(sessionImageDir)
           .filter(file => file.endsWith('.jpg') || file.endsWith('.png') || file.endsWith('.jpeg') || file.endsWith('.gif'))
@@ -1574,7 +1620,7 @@ export class ImageEmbeddingService {
       // (to avoid double-loading approved user images)
       let userProvidedImages: UserProvidedImage[] = [];
       try {
-        const userImagesFile = path.join(process.cwd(), 'temp', `${sessionId}_user_images.json`);
+        const userImagesFile = path.join(process.cwd(), 'storage', 'temp', `${sessionId}_user_images.json`);
         if (fs.existsSync(userImagesFile)) {
           const allUserImages = UserImageManager.loadUserImages(userImagesFile);
           
@@ -1628,14 +1674,14 @@ export class ImageEmbeddingService {
       }
 
       // Check if we have an existing ASS file from analysis that we can reuse
-      const existingAssPath = path.join(process.cwd(), 'temp', `${sessionId}_subtitles.ass`);
+      const existingAssPath = path.join(process.cwd(), 'storage', 'temp', `${sessionId}_subtitles.ass`);
 
       if (fs.existsSync(existingAssPath)) {
         console.log('🎯 [SERVICE] Found existing ASS file from analysis, will reuse for video generation');
         console.log('🎯 [SERVICE] Existing ASS path:', existingAssPath);
 
         // Copy the existing ASS file to the expected location for video generation
-        const videoAssPath = path.join(process.cwd(), 'generated_videos', `${sessionId}_styled_subtitles.ass`);
+        const videoAssPath = path.join(process.cwd(), 'storage', 'videos', `${sessionId}_styled_subtitles.ass`);
         fs.copyFileSync(existingAssPath, videoAssPath);
         console.log('✅ [SERVICE] Reused existing ASS file for video generation');
       } else {
@@ -1833,7 +1879,7 @@ export class ImageEmbeddingService {
       ffmpeg.setFfmpegPath(ffmpegPath);
 
       // Output path for final video
-      const outputVideoPath = path.join(process.cwd(), 'generated_videos', `${sessionId}_with_images.mp4`);
+      const outputVideoPath = path.join(process.cwd(), 'storage', 'videos', `${sessionId}_with_images.mp4`);
 
       // Build FFmpeg command with image overlays
       let ffmpegCommand = ffmpeg().input(baseVideoPath);
@@ -2133,7 +2179,7 @@ Return your analysis focusing on how well THIS SPECIFIC user-labeled image match
 
         try {
           const analysis = await generateObject({
-            model: google('models/gemini-2.5-flash'),
+            model: google('models/gemini-3-flash-preview'),
             prompt: analysisPrompt,
             schema: analysisSchema as any,
           });

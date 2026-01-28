@@ -82,14 +82,14 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
-  
+
   // Conversation viewer state
   const [showConversation, setShowConversation] = useState(false);
   const [sessionData, setSessionData] = useState<AudioSession | null>(null);
   const [loadingConversation, setLoadingConversation] = useState(false);
   const [conversationError, setConversationError] = useState('');
   const [dialogueOffsets, setDialogueOffsets] = useState<Record<string, number>>({});
-  
+
   // Text selection state
   const [selectedText, setSelectedText] = useState('');
   const [uploadingSelected, setUploadingSelected] = useState(false);
@@ -98,29 +98,29 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
   // Fetch session conversation data
   const fetchSessionConversation = async () => {
     if (!sessionId) return;
-    
+
     setLoadingConversation(true);
     setConversationError('');
-    
+
     try {
       const response = await fetch(API_ENDPOINTS.audio);
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-      
+
       const data = await response.json();
       if (data.success) {
         const session = data.sessions.find((s: AudioSession) => s.sessionId === sessionId);
         if (session) {
           setSessionData(session);
-          
+
           // Calculate actual cumulative timestamps (same logic as AudioBrowser)
           const dialoguesWithAudio = session.dialogues.filter((d: Dialogue) => !!d.audioFile);
-          
+
           // Determine per-dialogue durations (using backend first)
           const durations: number[] = new Array(dialoguesWithAudio.length).fill(0);
           const pending: { index: number; promise: Promise<number> }[] = [];
-          
+
           dialoguesWithAudio.forEach((d: Dialogue, idx: number) => {
             const backendDuration = typeof d.audioFile!.duration === 'number' ? d.audioFile!.duration : 0;
             if (backendDuration && isFinite(backendDuration)) {
@@ -130,7 +130,7 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
               pending.push({ index: idx, promise: getAudioDuration(url) });
             }
           });
-          
+
           if (pending.length > 0) {
             const results = await Promise.all(pending.map(p => p.promise));
             results.forEach((value, i) => {
@@ -138,7 +138,7 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
               durations[idx] = Math.max(0, isFinite(value) ? value : 0);
             });
           }
-          
+
           // Compute cumulative offsets per dialogue id
           let cumulative = 0;
           const offsetsForSession: Record<string, number> = {};
@@ -146,7 +146,7 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
             offsetsForSession[d.id] = Math.floor(cumulative);
             cumulative += durations[idx];
           });
-          
+
           setDialogueOffsets(offsetsForSession);
         } else {
           setConversationError('Session not found');
@@ -174,7 +174,7 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
       // If no files selected (user cancelled), don't hide the button immediately
       return;
     }
-    
+
     if (!selectedText) return;
 
     setUploadingSelected(true);
@@ -253,7 +253,7 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
     }
 
     setUploadingSelected(false);
-    
+
     // Clear the file input
     if (selectedFileInputRef.current) {
       selectedFileInputRef.current.value = '';
@@ -468,9 +468,8 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
           />
           <label
             htmlFor="image-upload"
-            className={`px-4 py-2 bg-[#337EA9] hover:bg-[#337EA9]/80 disabled:bg-[#787774]/50 text-[#F1F1EF] font-medium rounded-md transition-colors cursor-pointer ${
-              disabled || uploading ? 'cursor-not-allowed' : ''
-            }`}
+            className={`px-4 py-2 bg-[#337EA9] hover:bg-[#337EA9]/80 disabled:bg-[#787774]/50 text-[#F1F1EF] font-medium rounded-md transition-colors cursor-pointer ${disabled || uploading ? 'cursor-not-allowed' : ''
+              }`}
           >
             {uploading ? 'Uploading...' : 'Choose Images'}
           </label>
@@ -499,7 +498,7 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
               {showConversation ? '▼' : '▶'}
             </span>
           </button>
-          
+
           {showConversation && (
             <div className="mt-4 pt-4 border-t border-[#787774]/30">
               {loadingConversation && (
@@ -508,25 +507,24 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
                   <p className="text-[#787774]">Loading conversation...</p>
                 </div>
               )}
-              
+
               {conversationError && (
                 <div className="p-3 bg-[#FDEBEC] border border-[#D44C47]/20 rounded-md">
                   <p className="text-[#D44C47] text-sm">{conversationError}</p>
                 </div>
               )}
-              
+
               {sessionData && (
                 <div className="space-y-3 max-h-96 overflow-y-auto">
                   {sessionData.dialogues.map((dialogue) => (
                     <div
                       key={dialogue.id}
-                      className={`conversation-dialogue p-3 rounded-lg border-l-4 ${
-                        dialogue.character === 'Stewie'
+                      className={`conversation-dialogue p-3 rounded-lg border-l-4 ${dialogue.character === 'Stewie'
                           ? 'bg-purple-900/20 border-purple-400'
                           : dialogue.character === 'Peter'
-                          ? 'bg-green-900/20 border-green-400'
-                          : 'bg-gray-700 border-gray-400'
-                      }`}
+                            ? 'bg-green-900/20 border-green-400'
+                            : 'bg-gray-700 border-gray-400'
+                        }`}
                     >
                       <div className="flex items-start space-x-3 mb-2">
                         <span className="text-lg flex-shrink-0">
@@ -534,20 +532,19 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
                         </span>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between">
-                            <p className={`font-semibold text-sm ${
-                              dialogue.character === 'Stewie'
+                            <p className={`font-semibold text-sm ${dialogue.character === 'Stewie'
                                 ? 'text-purple-300'
                                 : dialogue.character === 'Peter'
-                                ? 'text-green-300'
-                                : 'text-gray-300'
-                            }`}>
+                                  ? 'text-green-300'
+                                  : 'text-gray-300'
+                              }`}>
                               {dialogue.character} - Line {dialogue.order}
                             </p>
                             <span className="text-xs text-[#787774] flex-shrink-0 ml-2">
                               ⏱️ {formatDurationLabel(dialogueOffsets[dialogue.id] || 0)}
                             </span>
                           </div>
-                          <p 
+                          <p
                             className="text-[#F1F1EF] italic text-sm mt-1 break-words select-text cursor-text user-select-all"
                             style={{ userSelect: 'text', WebkitUserSelect: 'text', MozUserSelect: 'text' }}
                           >
@@ -562,7 +559,7 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
                   ))}
                 </div>
               )}
-              
+
               {/* Manual Upload Button for Selected Text */}
               <div className="mt-4 p-3 bg-[#2A2B2A] rounded-lg border border-[#444444]">
                 <div className="flex items-center gap-2 mb-2">
@@ -572,7 +569,7 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
                 <p className="text-xs text-[#787774] mb-3">
                   First select any text from the dialogue above, then click the button below to upload an image for that text.
                 </p>
-                
+
                 {/* Hidden file input for direct upload */}
                 <input
                   ref={selectedFileInputRef}
@@ -583,7 +580,7 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
                   disabled={disabled || uploadingSelected}
                   className="hidden"
                 />
-                
+
                 <button
                   onClick={() => {
                     const selection = window.getSelection();
@@ -598,9 +595,8 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
                     }
                   }}
                   disabled={disabled || uploadingSelected}
-                  className={`w-full px-4 py-2 bg-[#337EA9] hover:bg-[#2A6B94] text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
-                    disabled || uploadingSelected ? 'cursor-not-allowed opacity-50' : ''
-                  }`}
+                  className={`w-full px-4 py-2 bg-[#337EA9] hover:bg-[#2A6B94] text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${disabled || uploadingSelected ? 'cursor-not-allowed opacity-50' : ''
+                    }`}
                 >
                   {uploadingSelected ? (
                     <>

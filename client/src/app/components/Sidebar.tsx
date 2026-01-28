@@ -23,7 +23,7 @@ export default function Sidebar({ className = '', onToggle }: SidebarProps) {
 
     checkMobile();
     window.addEventListener('resize', checkMobile);
-    
+
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
@@ -78,22 +78,20 @@ export default function Sidebar({ className = '', onToggle }: SidebarProps) {
         </button>
       )}
 
-      <div className={`${
-        isMobile && !mobileMenuOpen 
-          ? 'w-0 overflow-hidden' 
+      <div className={`${isMobile && !mobileMenuOpen
+          ? 'w-0 overflow-hidden'
           : isMobile && mobileMenuOpen
-          ? 'w-80 bg-[#373C3F] border-r border-[#787774]/30'
-          : isCollapsed 
-          ? 'w-16 bg-[#373C3F] border-r border-[#787774]/30 flex-shrink-0'
-          : 'w-80 bg-[#373C3F] border-r border-[#787774]/30 flex-shrink-0'
-      } transition-all duration-300 relative ${className}`}>
+            ? 'w-80 bg-[#373C3F] border-r border-[#787774]/30'
+            : isCollapsed
+              ? 'w-16 bg-[#373C3F] border-r border-[#787774]/30 flex-shrink-0'
+              : 'w-80 bg-[#373C3F] border-r border-[#787774]/30 flex-shrink-0'
+        } transition-all duration-300 relative ${className}`}>
         {/* Desktop toggle button - inside sidebar */}
         {!isMobile && (
           <button
             onClick={toggleSidebar}
-            className={`absolute top-4 z-[60] p-2 bg-[#2F3438] hover:bg-[#3F4448] rounded-md transition-all duration-300 shadow-lg border border-[#787774]/30 ${
-              isCollapsed ? 'right-2' : 'right-4'
-            }`}
+            className={`absolute top-4 z-[60] p-2 bg-[#2F3438] hover:bg-[#3F4448] rounded-md transition-all duration-300 shadow-lg border border-[#787774]/30 ${isCollapsed ? 'right-2' : 'right-4'
+              }`}
             title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
             <svg
@@ -153,13 +151,11 @@ export default function Sidebar({ className = '', onToggle }: SidebarProps) {
                   <Link
                     key={item.href}
                     href={item.href}
-                    className={`block p-3 rounded-lg transition-colors ${
-                      isCollapsed ? 'p-2 text-center' : ''
-                    } ${
-                      isActive
+                    className={`block p-3 rounded-lg transition-colors ${isCollapsed ? 'p-2 text-center' : ''
+                      } ${isActive
                         ? 'bg-[#337EA9]/20 border-l-4 border-[#337EA9] text-[#337EA9]'
                         : 'hover:bg-[#3F4448] text-[#F1F1EF]'
-                    }`}
+                      }`}
                     title={isCollapsed ? item.name : undefined}
                     onClick={() => {
                       if (isMobile) {

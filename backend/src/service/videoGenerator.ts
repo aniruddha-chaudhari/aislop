@@ -77,8 +77,9 @@ if (ffmpegPath) {
 }
 
 // Video generation configuration
-const VIDEO_OUTPUT_DIR = path.join(process.cwd(), 'generated_videos');
-const TEMP_DIR = path.join(process.cwd(), 'temp_alignment');
+// Generated videos are stored under central storage; alignment files under storage/temp/alignment
+const VIDEO_OUTPUT_DIR = path.join(process.cwd(), 'storage', 'videos');
+const TEMP_DIR = path.join(process.cwd(), 'storage', 'temp', 'alignment');
 
 // Ensure directories exist
 [VIDEO_OUTPUT_DIR, TEMP_DIR].forEach(dir => {
@@ -88,13 +89,38 @@ const TEMP_DIR = path.join(process.cwd(), 'temp_alignment');
   }
 });
 
+// Character overlay images.
+// Bun can execute TS from a "virtual" path, so __dirname may not point at your repo.
+// We detect the correct directory at runtime.
+const CHARACTER_IMAGE_DIR_CANDIDATES = [
+  // most reliable when you start backend1 via start.ps1 (cd backend1)
+  path.join(process.cwd(), 'src', 'character_images'),
+  // fallback: relative to this file location
+  path.resolve(__dirname, '..', '..', 'character_images'),
+];
+
+function resolveCharacterImageDir(): string {
+  for (const dir of CHARACTER_IMAGE_DIR_CANDIDATES) {
+    const stewie = path.join(dir, 'Stewie_Griffin.png');
+    const peter = path.join(dir, 'peter.png');
+    if (fs.existsSync(stewie) && fs.existsSync(peter)) return dir;
+  }
+  // If not found, return the first candidate (so logs show where it looked)
+  return CHARACTER_IMAGE_DIR_CANDIDATES[0];
+}
+
+const CHARACTER_IMAGE_DIR = resolveCharacterImageDir();
 const CHARACTER_IMAGES = {
-  Stewie: 'F:\\Aniruddha\\code\\webdev\\PROJECTS\\aislop\\src\\character_images\\Stewie_Griffin.png',
-  Peter: 'F:\\Aniruddha\\code\\webdev\\PROJECTS\\aislop\\src\\character_images\\peter.png'
+  Stewie: path.join(CHARACTER_IMAGE_DIR, 'Stewie_Griffin.png'),
+  Peter: path.join(CHARACTER_IMAGE_DIR, 'peter.png'),
 };
 
+console.log(
+  `🧍 [CHAR_IMG] dir=${CHARACTER_IMAGE_DIR} | cwd=${process.cwd()} | stewieExists=${bool01(fs.existsSync(CHARACTER_IMAGES.Stewie))} | peterExists=${bool01(fs.existsSync(CHARACTER_IMAGES.Peter))}`
+);
+
 // Pre-scaled character image cache for better performance
-const PRESCALED_CHARACTER_CACHE_DIR = path.join(process.cwd(), 'src', 'character_images', 'prescaled');
+const PRESCALED_CHARACTER_CACHE_DIR = path.join(CHARACTER_IMAGE_DIR, 'prescaled');
 
 // Ensure prescaled cache directory exists
 if (!fs.existsSync(PRESCALED_CHARACTER_CACHE_DIR)) {
@@ -103,10 +129,12 @@ if (!fs.existsSync(PRESCALED_CHARACTER_CACHE_DIR)) {
 }
 
 // Function to get or create prescaled character images
-async function getOrCreatePrescaledCharacterImage(characterName: string, width: number, height: number): Promise<string> {
+// Returns null if character image is not found (graceful degradation)
+async function getOrCreatePrescaledCharacterImage(characterName: string, width: number, height: number): Promise<string | null> {
   const originalPath = CHARACTER_IMAGES[characterName as keyof typeof CHARACTER_IMAGES];
   if (!originalPath || !fs.existsSync(originalPath)) {
-    throw new Error(`Character image not found: ${characterName}`);
+    console.log(`🧍 [CHAR_IMG] original missing | name=${characterName} | path=${originalPath ?? '(undefined path)'}`);
+    return null;
   }
 
   const prescaledFilename = `${characterName}_${width}x${height}.png`;
@@ -118,13 +146,13 @@ async function getOrCreatePrescaledCharacterImage(characterName: string, width: 
     const prescaledStats = fs.statSync(prescaledPath);
     
     if (prescaledStats.mtime > originalStats.mtime) {
-      console.log(`🖼️ [CACHE] Using cached prescaled image: ${prescaledFilename}`);
+      console.log(`🧍 [CHAR_IMG] using cached prescaled | name=${characterName} | path=${prescaledPath}`);
       return prescaledPath;
     }
   }
 
   // Create prescaled version
-  console.log(`🔄 [PRESCALE] Creating prescaled ${characterName} image: ${width}x${height}`);
+  console.log(`🧍 [CHAR_IMG] prescaling | name=${characterName} | from=${originalPath} | to=${prescaledPath} | size=${width}x${height}`);
   
   await new Promise<void>((resolve, reject) => {
     ffmpeg(originalPath)
@@ -133,12 +161,9 @@ async function getOrCreatePrescaledCharacterImage(characterName: string, width: 
         '-y' // Overwrite existing files
       ])
       .output(prescaledPath)
-      .on('end', () => {
-        console.log(`✅ [PRESCALE] Created prescaled image: ${prescaledFilename}`);
-        resolve();
-      })
+      .on('end', () => resolve())
       .on('error', (err: any) => {
-        console.error(`❌ [PRESCALE] Failed to create prescaled image for ${characterName}:`, err);
+        console.log(`❌ [CHAR_IMG] prescale failed | name=${characterName} | err=${String(err?.message ?? err)}`);
         reject(err);
       })
       .run();
@@ -186,6 +211,33 @@ export interface DialogueTimestamp {
   words: WordTimestamp[];
   totalStart: number;
   totalEnd: number;
+}
+
+function normalizeCharacterName(input: unknown): string {
+  const raw = String(input ?? '').trim();
+  if (!raw) return '';
+
+  // Common cleanup: "Stewie:", " STEWIE ", "Stewie Griffin"
+  const cleaned = raw
+    .replace(/[:\-–—]+$/g, '') // trailing punctuation like ":" or "-"
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+  if (cleaned === 'stewie' || cleaned.startsWith('stewie ')) return 'Stewie';
+  if (cleaned === 'peter' || cleaned.startsWith('peter ')) return 'Peter';
+
+  // Fallback: keep original trimmed value
+  return raw;
+}
+
+function ffmpegTime(t: number): string {
+  // Avoid rounding to 0.00 which can disable overlays for short segments
+  return Number.isFinite(t) ? t.toFixed(3) : '0';
+}
+
+function bool01(v: unknown): '1' | '0' {
+  return v ? '1' : '0';
 }
 
 // WhisperX alignment function using FastAPI
@@ -752,13 +804,11 @@ export async function generateVideoWithSubtitles(
       throw new Error('Background video speed must be between 0.1 and 2.0');
     }
 
-    console.log('🎬 [GENERATOR] Starting enhanced video generation with burned-in subtitles using device:', device);
-    console.log('🚀 [GENERATOR] Background video speed:', backgroundVideoSpeed);
-    console.log('🎨 [GENERATOR] Video style:', videoStyle);
+    // (noisy) general generator logs removed; keep CHAR_IMG logs + errors only
 
     // Get video style preset
     const stylePreset = getVideoStylePreset(videoStyle);
-    console.log(`🎨 [GENERATOR] Using style preset: ${stylePreset.name} (${stylePreset.aspectRatio.ratio}, ${stylePreset.fps}fps)`);
+    // (noisy) removed
 
     // Validation
     if (!sessionId) {
@@ -790,13 +840,17 @@ export async function generateVideoWithSubtitles(
       throw new Error('No successful audio files found');
     }
 
-    console.log(`📝 [GENERATOR] Processing ${successfulDialogues.length} dialogues with enhanced timing`);
-
     // Pre-create scaled character images for better performance
-    console.log('🔄 [PRESCALE] Pre-scaling character images for optimal performance...');
+    console.log(`🧍 [CHAR_IMG] Preparing overlays for ${successfulDialogues.length} dialogues...`);
     const prescaledStewieImage = await getOrCreatePrescaledCharacterImage('Stewie', 500, 600);
     const prescaledPeterImage = await getOrCreatePrescaledCharacterImage('Peter', 550, 800);
-    console.log('✅ [PRESCALE] Character images pre-scaled successfully');
+    
+    const hasStewieImage = prescaledStewieImage !== null;
+    const hasPeterImage = prescaledPeterImage !== null;
+
+    console.log(
+      `🧍 [CHAR_IMG] ready | stewie=${hasStewieImage ? prescaledStewieImage : 'missing'} | peter=${hasPeterImage ? prescaledPeterImage : 'missing'}`
+    );
 
     // Generate word-level timestamps using WhisperX
     const dialogueTimestamps: DialogueTimestamp[] = [];
@@ -826,7 +880,7 @@ export async function generateVideoWithSubtitles(
         }));
 
         dialogueTimestamps.push({
-          character: dialogue.character,
+          character: normalizeCharacterName(dialogue.character),
           text: dialogue.text,
           audioPath: dialogue.audioFile.filePath,
           words: adjustedWords,
@@ -912,8 +966,7 @@ export async function generateVideoWithSubtitles(
       });
     });
 
-    console.log(`🎬 [GENERATOR] Audio duration: ${cumulativeTime.toFixed(2)}s`);
-    console.log(`🎬 [GENERATOR] Background video duration: ${backgroundDuration.toFixed(2)}s`);
+    // (noisy) removed
 
     // Handle background video looping if needed
     let finalVideoInput = backgroundMediaPath;
@@ -950,14 +1003,13 @@ export async function generateVideoWithSubtitles(
     // Generate final video with burned-in subtitles
     const outputVideoPath = path.join(VIDEO_OUTPUT_DIR, `${sessionId}_with_burned_subtitles.mp4`);
 
-    console.log('🔥 [GENERATOR] Starting video generation with burned-in styled subtitles...');
+    // (noisy) removed
 
     // Create the video with burned-in subtitles using optimized filterchain
     let useActualHardwareAccel = device === 'cuda';
     
     // Check if NVIDIA hardware encoding is available (BEFORE Promise)
     if (useActualHardwareAccel) {
-      console.log('🔍 [GPU] Checking NVIDIA hardware encoding availability...');
       try {
         // Test if h264_nvenc encoder is available
         const encoderCheck = await new Promise<boolean>((resolve) => {
@@ -969,10 +1021,6 @@ export async function generateVideoWithSubtitles(
               return;
             }
             const hasNvenc = stdout.includes('h264_nvenc');
-            console.log(hasNvenc ? '✅ [GPU] h264_nvenc encoder is available' : '❌ [GPU] h264_nvenc encoder NOT available');
-            if (!hasNvenc) {
-              console.log('💡 [GPU] FFmpeg may not be compiled with NVIDIA support or drivers are missing');
-            }
             resolve(hasNvenc);
           });
         });
@@ -1007,44 +1055,81 @@ export async function generateVideoWithSubtitles(
         // Escape the subtitle path for Windows
         const escapedAssPath = assSubtitlePath.replace(/\\/g, '/').replace(/:/g, '\\:');
 
-        // Build FFmpeg command
+        // Build FFmpeg command - conditionally add character image inputs
         let ffmpegCommand = ffmpeg()
-          .input(finalVideoInput) // Background video
-          .input(tempAudioPath)   // Audio
-          .input(prescaledStewieImage) // Pre-scaled Stewie image
-          .input(prescaledPeterImage); // Pre-scaled Peter image
+          .input(finalVideoInput) // Background video (input 0)
+          .input(tempAudioPath);   // Audio (input 1)
+        
+        let inputIndex = 2; // Start character images at index 2
+        let stewieInputIndex = -1;
+        let peterInputIndex = -1;
+        
+        if (hasStewieImage && prescaledStewieImage) {
+          ffmpegCommand = ffmpegCommand.input(prescaledStewieImage);
+          stewieInputIndex = inputIndex++;
+        }
+        
+        if (hasPeterImage && prescaledPeterImage) {
+          ffmpegCommand = ffmpegCommand.input(prescaledPeterImage);
+          peterInputIndex = inputIndex++;
+        }
+        
+        console.log(
+          `🧍 [CHAR_IMG] ffmpeg inputs | stewieIdx=${stewieInputIndex} | peterIdx=${peterInputIndex} | hasStewie=${bool01(hasStewieImage)} | hasPeter=${bool01(hasPeterImage)}`
+        );
 
         // Build character overlay enable expressions (optimized)
         const stewieRanges: string[] = [];
         const peterRanges: string[] = [];
         
+        const ENABLE_PAD_SECONDS = 0.15; // small pad so overlays are visible even with tight timings
         dialogueTimestamps.forEach(dialogue => {
-          const start = dialogue.totalStart.toFixed(2);
-          const end = dialogue.totalEnd.toFixed(2);
-          if (dialogue.character === 'Stewie') {
+          const startNum = dialogue.totalStart;
+          const endNum = Math.max(dialogue.totalEnd, dialogue.totalStart + 0.05) + ENABLE_PAD_SECONDS;
+          const start = ffmpegTime(startNum);
+          const end = ffmpegTime(endNum);
+          const character = normalizeCharacterName(dialogue.character);
+          if (character === 'Stewie') {
             stewieRanges.push(`between(t,${start},${end})`);
-          } else if (dialogue.character === 'Peter') {
+          } else if (character === 'Peter') {
             peterRanges.push(`between(t,${start},${end})`);
           }
         });
-        
+
         // Ensure enable expressions are never empty (use '0' to always disable if no ranges)
-        const stewieEnable = stewieRanges.length > 0 ? stewieRanges.join('+') : '0';
-        const peterEnable = peterRanges.length > 0 ? peterRanges.join('+') : '0';
+        const stewieEnable = stewieRanges.length > 0 && hasStewieImage ? stewieRanges.join('+') : '0';
+        const peterEnable = peterRanges.length > 0 && hasPeterImage ? peterRanges.join('+') : '0';
+
+        console.log(
+          `🧍 [CHAR_IMG] overlay windows | stewie=${stewieRanges.length} | peter=${peterRanges.length} | stewieEnable=${stewieEnable === '0' ? '0' : '1'} | peterEnable=${peterEnable === '0' ? '0' : '1'}`
+        );
 
         // OPTIMIZED FILTER CHAIN - Using pre-scaled images eliminates scaling in filterchain
-        // Single pass: speed adjustment, scale background, overlay pre-scaled characters, add subtitles
+        // Single pass: speed adjustment, scale background, overlay pre-scaled characters (if available), add subtitles
         let filterChain = `[0:v]setpts=PTS/${backgroundVideoSpeed},scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p[bg]`;
         
-        // Use pre-scaled images directly - no scaling needed in filterchain!
-        // Combine overlays in single operation with optimized blending
-        filterChain += `;[bg][2:v]overlay=300:1350:enable='${stewieEnable}'[temp]`;
-        filterChain += `;[temp][3:v]overlay=300:1250:enable='${peterEnable}',format=yuv420p[with_characters]`;
+        let currentLabel = 'bg';
+        
+        // Add Stewie overlay if image is available
+        if (hasStewieImage && stewieInputIndex >= 0) {
+          filterChain += `;[${currentLabel}][${stewieInputIndex}:v]overlay=300:1350:enable='${stewieEnable}'[temp${stewieInputIndex}]`;
+          currentLabel = `temp${stewieInputIndex}`;
+        }
+        
+        // Add Peter overlay if image is available
+        if (hasPeterImage && peterInputIndex >= 0) {
+          filterChain += `;[${currentLabel}][${peterInputIndex}:v]overlay=300:1250:enable='${peterEnable}'[with_characters]`;
+          currentLabel = 'with_characters';
+        } else if (!hasStewieImage && !hasPeterImage) {
+          // No character images, rename bg to with_characters for consistency
+          filterChain += `;[${currentLabel}]copy[with_characters]`;
+          currentLabel = 'with_characters';
+        }
         
         // Add subtitles as final step and ensure explicit format for encoder
-        filterChain += `;[with_characters]subtitles='${escapedAssPath}':force_style='${forceStyleOptions}',format=yuv420p,setsar=1[final]`;
+        filterChain += `;[${currentLabel}]subtitles='${escapedAssPath}':force_style='${forceStyleOptions}',format=yuv420p,setsar=1[final]`;
 
-        console.log('🚀 [OPTIMIZED] Ultra-optimized filter chain using pre-scaled images:', filterChain);
+        // (noisy) filter chain log removed
 
         // Detect if NVIDIA GPU is available for hardware acceleration
         const outputOptions = [
@@ -1055,7 +1140,6 @@ export async function generateVideoWithSubtitles(
         ];
 
         if (useActualHardwareAccel) {
-          console.log('🎮 [GPU] Using NVIDIA hardware acceleration');
           outputOptions.push(
             '-c:v', 'h264_nvenc',
             '-b:v', '2500k', // Higher bitrate for better quality with GPU
@@ -1068,7 +1152,6 @@ export async function generateVideoWithSubtitles(
             '-r', '30' // Frame rate
           );
         } else {
-          console.log('🖥️ [CPU] Using optimized CPU encoding');
           outputOptions.push(
             '-c:v', 'libx264',
             '-b:v', '2000k', // Maintain good quality
@@ -1098,34 +1181,13 @@ export async function generateVideoWithSubtitles(
 
         ffmpegCommand
           .output(outputVideoPath)
-          .on('start', (commandLine: any) => {
-            const accelType = useActualHardwareAccel ? 'GPU-accelerated' : 'CPU-optimized';
-            console.log(`🎬 [OPTIMIZED] Starting ${accelType} FFmpeg video generation with optimized filterchain`);
-            console.log('🔍 [DEBUG] Full FFmpeg command:', commandLine);
-          })
-          .on('stderr', (stderrLine: string) => {
-            // Log ALL stderr output for debugging encoder issues
-            console.log('🎬 [FFmpeg stderr]:', stderrLine);
-          })
-          .on('progress', (progress: any) => {
-            if (progress.percent) {
-              const percent = Math.round(progress.percent);
-              if (percent % 20 === 0 && percent > 0) {
-                console.log(`🔢 [OPTIMIZED] Processing progress: ${percent}% (${progress.currentFps || 'N/A'} fps)`);
-              }
-            }
-          })
           .on('end', () => {
             clearTimeout(timeout);
-            const accelType = useActualHardwareAccel ? 'GPU-accelerated' : 'CPU-optimized';
-            console.log(`✅ [OPTIMIZED] ${accelType} video generation completed successfully`);
             resolve();
           })
-          .on('error', (err: any, stdout: any, stderr: any) => {
+          .on('error', (err: any) => {
             clearTimeout(timeout);
-            console.error('❌ [OPTIMIZED] Video generation failed:', err);
-            console.error('❌ [DEBUG] FFmpeg stderr output:', stderr);
-            console.error('❌ [DEBUG] FFmpeg stdout output:', stdout);
+            console.log(`❌ [FFMPEG] video generation failed: ${String(err?.message ?? err)}`);
             reject(err);
           })
           .run();
@@ -1163,34 +1225,61 @@ export async function generateVideoWithSubtitles(
             const stewieRanges: string[] = [];
             const peterRanges: string[] = [];
             
+            const ENABLE_PAD_SECONDS = 0.15; // small pad so overlays are visible even with tight timings
             dialogueTimestamps.forEach(dialogue => {
-              const start = dialogue.totalStart.toFixed(2);
-              const end = dialogue.totalEnd.toFixed(2);
-              if (dialogue.character === 'Stewie') {
+              const startNum = dialogue.totalStart;
+              const endNum = Math.max(dialogue.totalEnd, dialogue.totalStart + 0.05) + ENABLE_PAD_SECONDS;
+              const start = ffmpegTime(startNum);
+              const end = ffmpegTime(endNum);
+              const character = normalizeCharacterName(dialogue.character);
+              if (character === 'Stewie') {
                 stewieRanges.push(`between(t,${start},${end})`);
-              } else if (dialogue.character === 'Peter') {
+              } else if (character === 'Peter') {
                 peterRanges.push(`between(t,${start},${end})`);
               }
             });
-            
+
             // Ensure enable expressions are never empty (use '0' to always disable if no ranges)
-            const stewieEnable = stewieRanges.length > 0 ? stewieRanges.join('+') : '0';
-            const peterEnable = peterRanges.length > 0 ? peterRanges.join('+') : '0';
+            const stewieEnable = stewieRanges.length > 0 && hasStewieImage ? stewieRanges.join('+') : '0';
+            const peterEnable = peterRanges.length > 0 && hasPeterImage ? peterRanges.join('+') : '0';
+
+            console.log(
+              `🧍 [CHAR_IMG][CPU] overlay windows | stewie=${stewieRanges.length} | peter=${peterRanges.length} | stewieEnable=${stewieEnable === '0' ? '0' : '1'} | peterEnable=${peterEnable === '0' ? '0' : '1'}`
+            );
 
             // CPU filter chain that's the same but uses CPU encoding
             let filterChain = `[0:v]setpts=PTS/${backgroundVideoSpeed},scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p[bg]`;
-            filterChain += `;[bg][2:v]overlay=300:1350:enable='${stewieEnable}'[temp]`;
-            filterChain += `;[temp][3:v]overlay=300:1250:enable='${peterEnable}',format=yuv420p[with_characters]`;
-            filterChain += `;[with_characters]subtitles='${escapedAssPath}':force_style='${forceStyleOptions}'[final]`;
+            
+            let currentLabel = 'bg';
+            let cpuInputIndex = 2; // Character images start at index 2
+            
+            // Build FFmpeg command with CPU encoding - conditionally add character image inputs
+            let cpuFfmpegCommand = ffmpeg()
+              .input(finalVideoInput) // Background video (input 0)
+              .input(tempAudioPath);   // Audio (input 1)
+            
+            // Add Stewie overlay if image is available
+            if (hasStewieImage && prescaledStewieImage) {
+              cpuFfmpegCommand = cpuFfmpegCommand.input(prescaledStewieImage);
+              filterChain += `;[${currentLabel}][${cpuInputIndex}:v]overlay=300:1350:enable='${stewieEnable}'[temp${cpuInputIndex}]`;
+              currentLabel = `temp${cpuInputIndex}`;
+              cpuInputIndex++;
+            }
+            
+            // Add Peter overlay if image is available
+            if (hasPeterImage && prescaledPeterImage) {
+              cpuFfmpegCommand = cpuFfmpegCommand.input(prescaledPeterImage);
+              filterChain += `;[${currentLabel}][${cpuInputIndex}:v]overlay=300:1250:enable='${peterEnable}',format=yuv420p[with_characters]`;
+              currentLabel = 'with_characters';
+            } else if (!hasStewieImage && !hasPeterImage) {
+              // No character images, rename bg to with_characters for consistency
+              filterChain += `;[${currentLabel}]copy[with_characters]`;
+              currentLabel = 'with_characters';
+            }
+            
+            filterChain += `;[${currentLabel}]subtitles='${escapedAssPath}':force_style='${forceStyleOptions}'[final]`;
 
-            console.log('🚀 [CPU FALLBACK] Ultra-optimized filter chain using CPU:', filterChain);
-
-            // Build FFmpeg command with CPU encoding
-            const cpuFfmpegCommand = ffmpeg()
-              .input(finalVideoInput) // Background video
-              .input(tempAudioPath)   // Audio
-              .input(prescaledStewieImage) // Pre-scaled Stewie image
-              .input(prescaledPeterImage); // Pre-scaled Peter image
+            // (noisy) filter chain log removed
 
             const outputOptions = [
               '-t', cumulativeTime.toString(),
@@ -1221,31 +1310,13 @@ export async function generateVideoWithSubtitles(
 
             cpuFfmpegCommand
               .output(outputVideoPath)
-              .on('start', (commandLine: any) => {
-                console.log(`🎬 [CPU FALLBACK] Starting CPU-optimized FFmpeg video generation`);
-              })
-              .on('stderr', (stderrLine: string) => {
-                if (stderrLine.includes('error') || stderrLine.includes('Error') || 
-                    stderrLine.includes('failed') || stderrLine.includes('fps=')) {
-                  console.log('🎬 [CPU FFmpeg]:', stderrLine);
-                }
-              })
-              .on('progress', (progress: any) => {
-                if (progress.percent) {
-                  const percent = Math.round(progress.percent);
-                  if (percent % 20 === 0 && percent > 0) {
-                    console.log(`🔢 [CPU FALLBACK] Processing progress: ${percent}% (${progress.currentFps || 'N/A'} fps)`);
-                  }
-                }
-              })
               .on('end', () => {
                 clearTimeout(timeout);
-                console.log(`✅ [CPU FALLBACK] CPU-optimized video generation completed successfully`);
                 resolve();
               })
               .on('error', (err: any) => {
                 clearTimeout(timeout);
-                console.error('❌ [CPU FALLBACK] CPU video generation failed:', err);
+                console.log(`❌ [FFMPEG][CPU] video generation failed: ${String(err?.message ?? err)}`);
                 reject(err);
               })
               .run();
@@ -1272,7 +1343,7 @@ export async function generateVideoWithSubtitles(
       }
 
       // Only cleanup ASS file if it's not in the cache directory
-      const assCacheDir = path.join(process.cwd(), 'temp', 'ass_cache');
+      const assCacheDir = path.join(process.cwd(), 'storage', 'temp', 'ass_cache');
       if (assSubtitlePath && !assSubtitlePath.startsWith(assCacheDir)) {
         filesToCleanup.push(assSubtitlePath);
       } else if (assSubtitlePath) {
@@ -1282,7 +1353,7 @@ export async function generateVideoWithSubtitles(
       filesToCleanup.forEach(file => {
         if (fs.existsSync(file)) fs.unlinkSync(file);
       });
-      console.log('🧹 [GENERATOR] Temporary files cleaned up (cached ASS files preserved)');
+      // (noisy) removed
     } catch (err) {
       console.warn('⚠️ [GENERATOR] Warning: Could not clean up some temporary files:', err);
     }
@@ -1323,7 +1394,7 @@ export async function generateVideoWithSubtitles(
       }
     };
 
-    console.log('📤 [OPTIMIZED] Sending optimized video generation success response');
+    // (noisy) removed
     console.log(`🚀 [OPTIMIZED] Used ${device === 'cuda' ? 'GPU acceleration' : 'CPU optimization'} with combined filterchain for faster processing`);
     return response;
 
