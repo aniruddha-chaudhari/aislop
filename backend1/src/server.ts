@@ -11,17 +11,20 @@ if (fs.existsSync('.env.local')) {
 }
 
 import './routes/register';
-import { handleRequest } from './router';
+import { handleRequest, type BunServer } from './router';
+// Redis removed - using in-memory event emitter for SSE
 
 const port = Number(process.env.PORT) || 5000;
 const ASS_CACHE_DIR = path.join(process.cwd(), 'temp', 'ass_cache');
 const ASS_CACHE_DURATION_HOURS = 24;
 const CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
+// @ts-expect-error Bun global is provided by Bun runtime (bun-types may not resolve in all environments)
 const server = Bun.serve({
   port,
   hostname: '0.0.0.0',
-  async fetch(request, srv) {
+  idleTimeout: 255, // Maximum allowed: 255 seconds (~4.25 minutes) for SSE connections
+  async fetch(request: Request, srv: BunServer): Promise<Response> {
     return handleRequest(request, srv);
   },
 });
@@ -32,6 +35,8 @@ console.log(`Backend API available at http://localhost:${port}/api/assistant`);
 console.log(
   `CORS enabled for origins: http://localhost:5376, http://127.0.0.1:5376, http://localhost:3000, http://127.0.0.1:3000, http://192.168.56.1:5376, http://192.168.56.1:3000, and all localhost/127.0.0.1/192.168.x.x origins`
 );
+console.log(`📡 SSE streaming endpoint: http://localhost:${port}/api/stream/:sessionId/files`);
+console.log(`ℹ️  Using in-memory event emitter for real-time updates (no Redis required)`);
 
 setInterval(() => {
   try {
@@ -43,7 +48,7 @@ setInterval(() => {
       if (!file.endsWith('.ass')) continue;
       const filePath = path.join(ASS_CACHE_DIR, file);
       const stats = fs.statSync(filePath);
-      const ageInHours = (Date.now() - stats.birthtime.getTime()) / (1000 * 60 * 60);
+      const ageInHours = (Date.now() - stats.mtimeMs) / (1000 * 60 * 60);
       if (ageInHours > ASS_CACHE_DURATION_HOURS) {
         fs.unlinkSync(filePath);
         deletedCount++;

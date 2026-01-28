@@ -1,11 +1,14 @@
-import { Request, Response } from 'express';
+import type { HttpContext } from '../utils/http';
+import { jsonResponse } from '../utils/http';
+import type { HandlerResult } from '../utils/http';
 import { generateConversation } from '../service/assistants';
-import { CharacterName } from '../config/tts-config';
+import type { CharacterName } from '../config/tts-config';
 import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 import FormData from 'form-data';
 import { PrismaClient } from '../generated/prisma';
+import { publishFileUpdate } from '../service/eventEmitter';
 
 // Initialize Prisma client - schema.prisma has hardcoded database path
 const prisma = new PrismaClient();
@@ -39,6 +42,40 @@ const REFERENCE_AUDIO_PATHS = {
 const CHATTERBOX_TTS_API = 'http://localhost:8000';
 const AUDIO_OUTPUT_DIR = path.join(process.cwd(), 'generated_audio');
 const TEMP_DIR = path.join(process.cwd(), 'temp');
+
+// Concurrency control for TTS API - limit concurrent requests to prevent overwhelming the server
+// Adjust MAX_CONCURRENT_TTS_REQUESTS based on your server's capacity (GPU memory, CPU, etc.)
+const MAX_CONCURRENT_TTS_REQUESTS = 2; // Start with 2, increase if server can handle more
+
+// Semaphore for controlling concurrent TTS requests
+class TTSConcurrencyLimiter {
+  private running = 0;
+  private queue: Array<() => void> = [];
+
+  async acquire(): Promise<void> {
+    if (this.running < MAX_CONCURRENT_TTS_REQUESTS) {
+      this.running++;
+      return;
+    }
+
+    return new Promise((resolve) => {
+      this.queue.push(resolve);
+    });
+  }
+
+  release(): void {
+    this.running--;
+    if (this.queue.length > 0) {
+      const next = this.queue.shift();
+      if (next) {
+        this.running++;
+        next();
+      }
+    }
+  }
+}
+
+const ttsLimiter = new TTSConcurrencyLimiter();
 
 // Ensure audio output directory exists
 if (!fs.existsSync(AUDIO_OUTPUT_DIR)) {
@@ -373,213 +410,91 @@ async function generateAudioWithChatterbox(
   }
 }
 
-export const generateConversationWithAudio = async (req: Request, res: Response) => {
+export async function generateConversationWithAudio(ctx: HttpContext): Promise<HandlerResult> {
   try {
-    const {
-      text,
-      exaggeration = 0.6,
-      temperature = 1.5,
-      seedNum = 0,
-      cfgWeight = 0.3,
-      minP = 0.05,
-      topP = 1.0,
-      repetitionPenalty = 1.2,
-      character
-    } = req.body;
+    const b = ctx.body as Record<string, unknown>;
+    const text = b?.text;
+    const exaggeration = (b?.exaggeration as number) ?? 0.6;
+    const temperature = (b?.temperature as number) ?? 1.5;
+    const seedNum = (b?.seedNum as number) ?? 0;
+    const cfgWeight = (b?.cfgWeight as number) ?? 0.3;
+    const minP = (b?.minP as number) ?? 0.05;
+    const topP = (b?.topP as number) ?? 1.0;
+    const repetitionPenalty = (b?.repetitionPenalty as number) ?? 1.2;
 
-    console.log('🚀 Starting conversation generation with parameters:', {
-      textLength: text?.length,
-      exaggeration,
-      temperature,
-      seedNum,
-      cfgWeight,
-      minP,
-      topP,
-      repetitionPenalty
-    });
+    console.log('🚀 Starting conversation generation with parameters:', { textLength: (text as string)?.length, exaggeration, temperature, seedNum, cfgWeight, minP, topP, repetitionPenalty });
 
-    // Validate text
-    if (!text || typeof text !== 'string' || text.trim() === '') {
-      return res.status(400).json({
-        error: 'Text is required and must be a non-empty string'
-      });
+    if (!text || typeof text !== 'string' || (text as string).trim() === '') {
+      return jsonResponse(400, { error: 'Text is required and must be a non-empty string' });
     }
-
-    // Validate text length
-    if (text.length > 1000) {
-      return res.status(400).json({
-        error: 'Text must be 300 characters or less'
-      });
+    if ((text as string).length > 1000) {
+      return jsonResponse(400, { error: 'Text must be 300 characters or less' });
     }
+    if (exaggeration < 0.25 || exaggeration > 2.0) return jsonResponse(400, { error: 'Exaggeration must be between 0.25 and 2.0' });
+    if (temperature < 0.05 || temperature > 5.0) return jsonResponse(400, { error: 'Temperature must be between 0.05 and 5.0' });
+    if (cfgWeight < 0.0 || cfgWeight > 1.0) return jsonResponse(400, { error: 'CFG weight must be between 0.0 and 1.0' });
+    if (minP < 0.0 || minP > 1.0) return jsonResponse(400, { error: 'min_p must be between 0.0 and 1.0' });
+    if (topP < 0.0 || topP > 1.0) return jsonResponse(400, { error: 'top_p must be between 0.0 and 1.0' });
+    if (repetitionPenalty < 1.0 || repetitionPenalty > 2.0) return jsonResponse(400, { error: 'Repetition penalty must be between 1.0 and 2.0' });
 
-    // Validate parameters to match FastAPI constraints exactly
-    if (exaggeration < 0.25 || exaggeration > 2.0) {
-      return res.status(400).json({
-        error: 'Exaggeration must be between 0.25 and 2.0'
-      });
-    }
-
-    if (temperature < 0.05 || temperature > 5.0) {
-      return res.status(400).json({
-        error: 'Temperature must be between 0.05 and 5.0'
-      });
-    }
-
-    if (cfgWeight < 0.0 || cfgWeight > 1.0) {
-      return res.status(400).json({
-        error: 'CFG weight must be between 0.0 and 1.0'
-      });
-    }
-
-    if (minP < 0.0 || minP > 1.0) {
-      return res.status(400).json({
-        error: 'min_p must be between 0.0 and 1.0'
-      });
-    }
-
-    if (topP < 0.0 || topP > 1.0) {
-      return res.status(400).json({
-        error: 'top_p must be between 0.0 and 1.0'
-      });
-    }
-
-    if (repetitionPenalty < 1.0 || repetitionPenalty > 2.0) {
-      return res.status(400).json({
-        error: 'Repetition penalty must be between 1.0 and 2.0'
-      });
-    }
-
-    // Generate conversation using AI assistant
     console.log('🤖 Generating conversation script...');
-    const result = await generateConversation(text);
-    const conversation = result;
-
-    if (!conversation || !conversation.conversation || conversation.conversation.length === 0) {
-      return res.status(500).json({
-        success: false,
-        error: 'Failed to generate conversation script'
-      });
+    const conversation = await generateConversation(text as string);
+    if (!conversation?.conversation?.length) {
+      return jsonResponse(500, { success: false, error: 'Failed to generate conversation script' });
     }
-
     console.log(`✅ Generated conversation with ${conversation.conversation.length} dialogue items`);
 
-    return res.status(200).json({
+    return jsonResponse(200, {
       success: true,
       message: 'Conversation script generated successfully',
       data: conversation,
-      parameters: {
-        exaggeration,
-        temperature,
-        seedNum,
-        cfgWeight,
-        minP,
-        topP,
-        repetitionPenalty
-      }
+      parameters: { exaggeration, temperature, seedNum, cfgWeight, minP, topP, repetitionPenalty },
     });
-
   } catch (error) {
     console.error('💥 Error in generateScript controller:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error occurred while generating conversation script',
-      details: error instanceof Error ? error.message : 'Unknown error'
-    });
+    return jsonResponse(500, { success: false, error: 'Internal server error occurred while generating conversation script', details: error instanceof Error ? error.message : 'Unknown error' });
   }
-};
+}
 
-export const generateAudioFromScript = async (req: Request, res: Response) => {
+export async function generateAudioFromScript(ctx: HttpContext): Promise<HandlerResult> {
   try {
-    const {
-      conversation,
-      exaggeration = 0.6,
-      temperature = 1.5,
-      seedNum = 0,
-      cfgWeight = 0.3,
-      minP = 0.05,
-      topP = 1.0,
-      repetitionPenalty = 1.2
-    } = req.body;
+    const b = ctx.body as Record<string, unknown>;
+    const conversation = b?.conversation as { conversation: unknown[]; topic?: string } | undefined;
+    const exaggeration = (b?.exaggeration as number) ?? 0.6;
+    const temperature = (b?.temperature as number) ?? 1.5;
+    const seedNum = (b?.seedNum as number) ?? 0;
+    const cfgWeight = (b?.cfgWeight as number) ?? 0.3;
+    const minP = (b?.minP as number) ?? 0.05;
+    const topP = (b?.topP as number) ?? 1.0;
+    const repetitionPenalty = (b?.repetitionPenalty as number) ?? 1.2;
 
-    console.log('🎵 Starting audio generation from script with parameters:', {
-      dialogueCount: conversation?.conversation?.length,
-      exaggeration,
-      temperature,
-      seedNum,
-      cfgWeight,
-      minP,
-      topP,
-      repetitionPenalty
-    });
+    console.log('🎵 Starting audio generation from script with parameters:', { dialogueCount: conversation?.conversation?.length, exaggeration, temperature, seedNum, cfgWeight, minP, topP, repetitionPenalty });
 
-    // Validate conversation
-    if (!conversation || !conversation.conversation || !Array.isArray(conversation.conversation) || conversation.conversation.length === 0) {
-      return res.status(400).json({
-        error: 'Valid conversation script is required'
-      });
+    if (!conversation?.conversation || !Array.isArray(conversation.conversation) || conversation.conversation.length === 0) {
+      return jsonResponse(400, { error: 'Valid conversation script is required' });
     }
+    if (exaggeration < 0.25 || exaggeration > 2.0) return jsonResponse(400, { error: 'Exaggeration must be between 0.25 and 2.0' });
+    if (temperature < 0.05 || temperature > 5.0) return jsonResponse(400, { error: 'Temperature must be between 0.05 and 5.0' });
+    if (cfgWeight < 0.0 || cfgWeight > 1.0) return jsonResponse(400, { error: 'CFG weight must be between 0.0 and 1.0' });
+    if (minP < 0.0 || minP > 1.0) return jsonResponse(400, { error: 'min_p must be between 0.0 and 1.0' });
+    if (topP < 0.0 || topP > 1.0) return jsonResponse(400, { error: 'top_p must be between 0.0 and 1.0' });
+    if (repetitionPenalty < 1.0 || repetitionPenalty > 2.0) return jsonResponse(400, { error: 'Repetition penalty must be between 1.0 and 2.0' });
 
-    // Validate parameters to match FastAPI constraints exactly
-    if (exaggeration < 0.25 || exaggeration > 2.0) {
-      return res.status(400).json({
-        error: 'Exaggeration must be between 0.25 and 2.0'
-      });
-    }
-
-    if (temperature < 0.05 || temperature > 5.0) {
-      return res.status(400).json({
-        error: 'Temperature must be between 0.05 and 5.0'
-      });
-    }
-
-    if (cfgWeight < 0.0 || cfgWeight > 1.0) {
-      return res.status(400).json({
-        error: 'CFG weight must be between 0.0 and 1.0'
-      });
-    }
-
-    if (minP < 0.0 || minP > 1.0) {
-      return res.status(400).json({
-        error: 'min_p must be between 0.0 and 1.0'
-      });
-    }
-
-    if (topP < 0.0 || topP > 1.0) {
-      return res.status(400).json({
-        error: 'top_p must be between 0.0 and 1.0'
-      });
-    }
-
-    if (repetitionPenalty < 1.0 || repetitionPenalty > 2.0) {
-      return res.status(400).json({
-        error: 'Repetition penalty must be between 1.0 and 2.0'
-      });
-    }
-
-    // Test TTS API connection
     console.log('🔍 Testing TTS API connection...');
     const apiConnected = await testTTSApiConnection();
     if (!apiConnected) {
-      return res.status(503).json({
-        success: false,
-        error: 'TTS API is not available. Please ensure the Chatterbox TTS server is running on port 8000.'
-      });
+      return jsonResponse(503, { success: false, error: 'TTS API is not available. Please ensure the Chatterbox TTS server is running on port 8000.' });
     }
     console.log('✅ TTS API connection successful');
 
-    // Verify audio files exist before proceeding
     console.log('🔍 Checking reference audio files...');
     for (const [char, audioPath] of Object.entries(REFERENCE_AUDIO_PATHS)) {
       if (!fs.existsSync(audioPath)) {
-        return res.status(500).json({
-          success: false,
-          error: `Reference audio file missing for ${char}: ${audioPath}`
-        });
+        return jsonResponse(500, { success: false, error: `Reference audio file missing for ${char}: ${audioPath}` });
       }
       console.log(`✅ ${char} audio file exists: ${audioPath}`);
     }
 
-    // Create session in database
     const sessionName = generateSessionName(conversation);
     const session = await prisma.session.create({
       data: {
@@ -604,7 +519,6 @@ export const generateAudioFromScript = async (req: Request, res: Response) => {
     cleanupOldUserImageFiles();
 
     // Initialize session directory
-    let audioFiles: string[] = [];
     const sessionDir = path.join(AUDIO_OUTPUT_DIR, sessionId);
 
     if (!fs.existsSync(sessionDir)) {
@@ -616,10 +530,10 @@ export const generateAudioFromScript = async (req: Request, res: Response) => {
     fs.writeFileSync(conversationPath, JSON.stringify(conversation, null, 2));
     console.log(`Saved conversation data to: ${conversationPath}`);
 
-    // Create dialogue records in database
-    const dialogueRecords = [];
+    const dialogueRecords: { id: string }[] = [];
     for (let i = 0; i < conversation.conversation.length; i++) {
-      const { character: convCharacter, dialogue } = conversation.conversation[i];
+      const item = conversation.conversation[i] as { character: string; dialogue: string };
+      const { character: convCharacter, dialogue } = item;
 
       const dialogueRecord = await prisma.dialogue.create({
         data: {
@@ -637,43 +551,72 @@ export const generateAudioFromScript = async (req: Request, res: Response) => {
     console.log('🎵 Starting audio generation...');
     console.log(`Session: ${sessionId}`);
 
-    // Process each dialogue item
-    for (let i = 0; i < conversation.conversation.length; i++) {
-      const dialogueRecord = dialogueRecords[i];
-      const { character: convCharacter, dialogue } = conversation.conversation[i];
+    // Publish start event immediately (SSE controller buffers recent messages)
+    publishFileUpdate(sessionId, {
+      type: 'started',
+      total: conversation.conversation.length
+    });
 
-      console.log(`\n📢 [${i + 1}/${conversation.conversation.length}] Processing dialogue for ${convCharacter}`);
+    const totalFiles = conversation.conversation.length;
+
+    // Process files in parallel - don't wait for all to complete
+    // Use a Set to track completed files atomically
+    const completedFiles = new Set<string>();
+    
+    const generatePromises = conversation.conversation.map(async (item, i) => {
+      const dialogueRecord = dialogueRecords[i];
+      const { character: convCharacter, dialogue } = item as { character: string; dialogue: string };
+
+      console.log(`\n📢 [${i + 1}/${totalFiles}] Processing dialogue for ${convCharacter}`);
       console.log(`Text: "${dialogue.substring(0, 80)}${dialogue.length > 80 ? '...' : ''}"`);
 
       // Validate character
       if (!['Stewie', 'Peter'].includes(convCharacter)) {
         console.warn(`⚠️ Skipping invalid character: ${convCharacter}`);
-
-        // Update dialogue record with error
-        await prisma.dialogue.update({
-          where: { id: dialogueRecord.id },
-          data: {}
+        const fileId = `${sessionId}_${i + 1}`;
+        completedFiles.add(fileId);
+        publishFileUpdate(sessionId, {
+          type: 'error',
+          fileId: dialogueRecord.id,
+          error: `Invalid character: ${convCharacter}`,
+          progress: completedFiles.size,
+          total: totalFiles
         });
-
-        continue;
+        return;
       }
 
       // Generate audio
       const filename = `${sessionId}_${String(i + 1).padStart(2, '0')}_${convCharacter.toLowerCase()}.wav`;
       const outputPath = path.join(sessionDir, filename);
+      const fileId = `${sessionId}_${i + 1}`;
 
       try {
-        await generateAudioWithChatterbox(dialogue, convCharacter as CharacterName, outputPath, {
-          exaggeration,
-          temperature,
-          seedNum,
-          cfgWeight,
-          minP,
-          topP,
-          repetitionPenalty
+        // Publish progress update (starting)
+        publishFileUpdate(sessionId, {
+          type: 'progress',
+          fileId,
+          filename,
+          progress: i + 1,
+          total: totalFiles,
+          status: 'generating'
         });
 
-        audioFiles.push(outputPath);
+        // Acquire semaphore to limit concurrent TTS requests
+        await ttsLimiter.acquire();
+        try {
+          await generateAudioWithChatterbox(dialogue, convCharacter as CharacterName, outputPath, {
+            exaggeration,
+            temperature,
+            seedNum,
+            cfgWeight,
+            minP,
+            topP,
+            repetitionPenalty
+          });
+        } finally {
+          // Always release semaphore, even if generation fails
+          ttsLimiter.release();
+        }
 
         // Get file size
         const stats = fs.statSync(outputPath);
@@ -693,14 +636,28 @@ export const generateAudioFromScript = async (req: Request, res: Response) => {
 
         console.log(`✅ Audio ${i + 1} completed: ${filename}`);
 
-        // Short delay between requests
-        if (i < conversation.conversation.length - 1) {
-          console.log(`⏳ Waiting 2 seconds...`);
-          await new Promise(resolve => setTimeout(resolve, 2000));
-        }
+        // Track completion atomically
+        completedFiles.add(fileId);
+        const currentCompleted = completedFiles.size;
+
+        // Publish completion update immediately
+        publishFileUpdate(sessionId, {
+          type: 'completed',
+          fileId,
+          filename,
+          path: outputPath,
+          progress: currentCompleted,
+          total: totalFiles,
+          completedCount: currentCompleted,
+          status: 'ready'
+        });
 
       } catch (audioError) {
         console.error(`❌ Failed to generate audio ${i + 1} for ${convCharacter}:`, audioError);
+
+        // Track completion even on error
+        completedFiles.add(fileId);
+        const currentCompleted = completedFiles.size;
 
         // Create audio file record with error
         await prisma.audioFile.create({
@@ -714,121 +671,103 @@ export const generateAudioFromScript = async (req: Request, res: Response) => {
           }
         });
 
-        continue;
-      }
-    }
-
-    const allGenerated = audioFiles.length === conversation.conversation.length;
-
-    // Update session with final stats
-    await prisma.session.update({
-      where: { id: sessionId },
-      data: {
-        audioFilesGenerated: audioFiles.length,
-        allSuccessful: allGenerated
+        // Publish error update
+        publishFileUpdate(sessionId, {
+          type: 'error',
+          fileId,
+          filename,
+          error: audioError instanceof Error ? audioError.message : 'Unknown error',
+          progress: currentCompleted,
+          total: totalFiles
+        });
       }
     });
 
-    console.log(`🏁 Audio generation complete: ${audioFiles.length}/${conversation.conversation.length} files generated`);
+    // Start all generations in parallel but don't await - return immediately
+    Promise.all(generatePromises).then(async () => {
+      // Get final count from database
+      const finalCount = await prisma.audioFile.count({
+        where: { sessionId, success: true }
+      });
 
-    return res.status(200).json({
+      const allGenerated = finalCount === totalFiles;
+
+      // Update session with final stats
+      await prisma.session.update({
+        where: { id: sessionId },
+        data: {
+          audioFilesGenerated: finalCount,
+          allSuccessful: allGenerated
+        }
+      });
+
+      // Publish final completion event
+      publishFileUpdate(sessionId, {
+        type: 'completed',
+        status: 'all_complete',
+        progress: finalCount,
+        total: totalFiles,
+        allSuccessful: allGenerated
+      });
+
+      console.log(`🏁 Audio generation complete: ${finalCount}/${totalFiles} files generated`);
+    }).catch(error => {
+      console.error('Error in parallel audio generation:', error);
+      publishFileUpdate(sessionId, {
+        type: 'error',
+        error: 'Generation failed',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    });
+
+    // Return immediately with sessionId - files will be streamed via SSE
+    return jsonResponse(200, {
       success: true,
-      message: allGenerated
-        ? 'Audio generated successfully'
-        : `Audio generated with ${audioFiles.length}/${conversation.conversation.length} files`,
-      audioFiles: audioFiles.map(file => ({
-        path: file,
-        filename: path.basename(file)
-      })),
-      sessionId: sessionId,
-      parameters: {
-        exaggeration,
-        temperature,
-        seedNum,
-        cfgWeight,
-        minP,
-        topP,
-        repetitionPenalty
-      },
-      stats: {
-        totalDialogues: conversation.conversation.length,
-        audioFilesGenerated: audioFiles.length,
-        allSuccessful: allGenerated
-      }
+      message: 'Audio generation started',
+      sessionId,
+      parameters: { exaggeration, temperature, seedNum, cfgWeight, minP, topP, repetitionPenalty },
+      streamEndpoint: `/api/stream/${sessionId}/files`,
+      note: 'Files are being generated asynchronously. Connect to the stream endpoint to receive real-time updates.'
     });
-
   } catch (error) {
     console.error('💥 Error in generateScript controller:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error occurred while generating conversation script',
-      details: error instanceof Error ? error.message : 'Unknown error'
-    });
+    return jsonResponse(500, { success: false, error: 'Internal server error occurred while generating conversation script', details: error instanceof Error ? error.message : 'Unknown error' });
   }
-};
+}
 
-export const regenerateAudioFile = async (req: Request, res: Response) => {
-  let sessionId: string = '';
-  let filename: string = '';
-
+export async function regenerateAudioFile(ctx: HttpContext): Promise<HandlerResult> {
+  let sessionId = '';
+  let filename = '';
   try {
-    const params = req.params;
-    sessionId = params.sessionId;
-    filename = params.filename;
-    const {
-      text,
-      exaggeration = 0.6,
-      temperature = 1.5,
-      seedNum = 0,
-      cfgWeight = 0.3,
-      minP = 0.05,
-      topP = 1.0,
-      repetitionPenalty = 1.2
-    } = req.body;
+    sessionId = ctx.params?.sessionId ?? '';
+    filename = ctx.params?.filename ?? '';
+    const b = ctx.body as Record<string, unknown>;
+    const text = (b?.text as string) ?? '';
+    const exaggeration = (b?.exaggeration as number) ?? 0.6;
+    const temperature = (b?.temperature as number) ?? 1.5;
+    const seedNum = (b?.seedNum as number) ?? 0;
+    const cfgWeight = (b?.cfgWeight as number) ?? 0.3;
+    const minP = (b?.minP as number) ?? 0.05;
+    const topP = (b?.topP as number) ?? 1.0;
+    const repetitionPenalty = (b?.repetitionPenalty as number) ?? 1.2;
 
     console.log('🔄 Starting audio regeneration for:', { sessionId, filename, text, exaggeration, temperature, seedNum, cfgWeight, minP, topP, repetitionPenalty });
 
-    // Validate parameters
-    if (exaggeration < 0.25 || exaggeration > 2.0) {
-      return res.status(400).json({ error: 'Exaggeration must be between 0.25 and 2.0' });
-    }
-    if (temperature < 0.05 || temperature > 5.0) {
-      return res.status(400).json({ error: 'Temperature must be between 0.05 and 5.0' });
-    }
-    if (cfgWeight < 0.0 || cfgWeight > 1.0) {
-      return res.status(400).json({ error: 'CFG weight must be between 0.0 and 1.0' });
-    }
-    if (minP < 0.0 || minP > 1.0) {
-      return res.status(400).json({ error: 'min_p must be between 0.0 and 1.0' });
-    }
-    if (topP < 0.0 || topP > 1.0) {
-      return res.status(400).json({ error: 'top_p must be between 0.0 and 1.0' });
-    }
-    if (repetitionPenalty < 1.0 || repetitionPenalty > 2.0) {
-      return res.status(400).json({ error: 'Repetition penalty must be between 1.0 and 2.0' });
-    }
+    if (exaggeration < 0.25 || exaggeration > 2.0) return jsonResponse(400, { error: 'Exaggeration must be between 0.25 and 2.0' });
+    if (temperature < 0.05 || temperature > 5.0) return jsonResponse(400, { error: 'Temperature must be between 0.05 and 5.0' });
+    if (cfgWeight < 0.0 || cfgWeight > 1.0) return jsonResponse(400, { error: 'CFG weight must be between 0.0 and 1.0' });
+    if (minP < 0.0 || minP > 1.0) return jsonResponse(400, { error: 'min_p must be between 0.0 and 1.0' });
+    if (topP < 0.0 || topP > 1.0) return jsonResponse(400, { error: 'top_p must be between 0.0 and 1.0' });
+    if (repetitionPenalty < 1.0 || repetitionPenalty > 2.0) return jsonResponse(400, { error: 'Repetition penalty must be between 1.0 and 2.0' });
 
-    // Parse the filename to extract the dialogue order and actual sessionId
-    // Filename format: {sessionId}_{order}_{character}.wav
     const filenameParts = filename.split('_');
-    if (filenameParts.length < 3) {
-      return res.status(400).json({ error: 'Invalid filename format' });
-    }
-
+    if (filenameParts.length < 3) return jsonResponse(400, { error: 'Invalid filename format' });
     const actualSessionId = filenameParts[0];
     const order = parseInt(filenameParts[1], 10);
-    if (isNaN(order)) {
-      return res.status(400).json({ error: 'Invalid order in filename' });
-    }
+    if (isNaN(order)) return jsonResponse(400, { error: 'Invalid order in filename' });
 
-    console.log('🔍 Parsed filename:', {
-      urlSessionId: sessionId,
-      actualSessionId,
-      filename,
-      order
-    });
+    console.log('🔍 Parsed filename:', { urlSessionId: sessionId, actualSessionId, filename, order });
 
-    // Use the actual sessionId from the filename
     const dialogueRecord = await prisma.dialogue.findFirst({
       where: {
         sessionId: actualSessionId,
@@ -840,20 +779,14 @@ export const regenerateAudioFile = async (req: Request, res: Response) => {
     });
 
     if (!dialogueRecord) {
-      return res.status(404).json({ error: 'Dialogue record not found in database' });
+      return jsonResponse(404, { error: 'Dialogue record not found in database' });
     }
 
-    // Update dialogue text if provided
     let finalText = dialogueRecord.text;
-    console.log('📝 Dialogue record found:', {
-      id: dialogueRecord.id,
-      originalText: dialogueRecord.text,
-      character: dialogueRecord.character,
-      order: dialogueRecord.order
-    });
+    console.log('📝 Dialogue record found:', { id: dialogueRecord.id, originalText: dialogueRecord.text, character: dialogueRecord.character, order: dialogueRecord.order });
 
-    if (text !== undefined && text.trim() !== '') {
-      finalText = text.trim();
+    if (text !== undefined && String(text).trim() !== '') {
+      finalText = String(text).trim();
       // Update the database record with new text
       await prisma.dialogue.update({
         where: { id: dialogueRecord.id },
@@ -866,10 +799,9 @@ export const regenerateAudioFile = async (req: Request, res: Response) => {
 
     const outputPath = path.join(AUDIO_OUTPUT_DIR, actualSessionId, filename);
 
-    // Test TTS API connection
     const apiConnected = await testTTSApiConnection();
     if (!apiConnected) {
-      return res.status(503).json({ error: 'TTS API is not available' });
+      return jsonResponse(503, { error: 'TTS API is not available' });
     }
 
     // Regenerate audio
@@ -923,50 +855,36 @@ export const regenerateAudioFile = async (req: Request, res: Response) => {
     console.log(`✅ File saved to: ${outputPath}`);
     console.log(`✅ File size: ${fileSize} bytes`);
 
-    return res.status(200).json({
+    return jsonResponse(200, {
       success: true,
       message: 'Audio regenerated successfully',
       filename,
       sessionId: actualSessionId,
       parameters: { exaggeration, temperature, seedNum, cfgWeight, minP, topP, repetitionPenalty },
-      fileSize: fileSize
+      fileSize,
     });
-
   } catch (error) {
     console.error('💥 Error regenerating audio:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     const errorType = error instanceof Error ? error.constructor.name : 'Unknown';
-    const errorStack = error instanceof Error ? error.stack : undefined;
-
     console.error('💥 Error type:', errorType);
     console.error('💥 Error message:', errorMessage);
-    console.error('💥 Error stack:', errorStack);
-
-    return res.status(500).json({
+    return jsonResponse(500, {
       success: false,
       error: 'Failed to regenerate audio',
       details: errorMessage,
-      debug: {
-        sessionId,
-        filename,
-        errorType,
-        errorMessage
-      }
+      debug: { sessionId, filename, errorType, errorMessage },
     });
   }
-};
+}
 
-export const getSessionDetails = async (req: Request, res: Response) => {
+export async function getSessionDetails(ctx: HttpContext): Promise<HandlerResult> {
   try {
-    const { sessionId } = req.params;
-
+    const sessionId = ctx.params?.sessionId;
     if (!sessionId) {
-      return res.status(400).json({
-        error: 'Session ID is required'
-      });
+      return jsonResponse(400, { error: 'Session ID is required' });
     }
 
-    // Fetch session with all related data
     const session = await prisma.session.findUnique({
       where: { id: sessionId },
       include: {
@@ -987,12 +905,9 @@ export const getSessionDetails = async (req: Request, res: Response) => {
     });
 
     if (!session) {
-      return res.status(404).json({
-        error: 'Session not found'
-      });
+      return jsonResponse(404, { error: 'Session not found' });
     }
 
-    // Format the response
     const formattedSession = {
       sessionId: session.id,
       createdAt: session.createdAt,
@@ -1040,25 +955,17 @@ export const getSessionDetails = async (req: Request, res: Response) => {
       }))
     };
 
-    return res.status(200).json({
-      success: true,
-      session: formattedSession
-    });
-
+    return jsonResponse(200, { success: true, session: formattedSession });
   } catch (error) {
     console.error('Error getting session details:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to get session details'
-    });
+    return jsonResponse(500, { success: false, error: 'Failed to get session details' });
   }
-};
+}
 
-export const getAudioFiles = async (req: Request, res: Response) => {
+export async function getAudioFiles(_ctx: HttpContext): Promise<HandlerResult> {
   console.log('🎵 [getAudioFiles] Endpoint hit!');
   console.log('🎵 [getAudioFiles] DATABASE_URL:', process.env.DATABASE_URL);
   try {
-    // Fetch sessions with their dialogues and audio files from database
     const sessions = await prisma.session.findMany({
       include: {
         dialogues: {
@@ -1155,173 +1062,96 @@ export const getAudioFiles = async (req: Request, res: Response) => {
       };
     });
 
-    return res.status(200).json({
-      success: true,
-      sessions: formattedSessions
-    });
-
+    return jsonResponse(200, { success: true, sessions: formattedSessions });
   } catch (error) {
     console.error('💥 [getAudioFiles] Error getting audio files:', error);
-    console.error('💥 [getAudioFiles] Error type:', error instanceof Error ? error.constructor.name : typeof error);
-    console.error('💥 [getAudioFiles] Error message:', error instanceof Error ? error.message : String(error));
-    console.error('💥 [getAudioFiles] Error stack:', error instanceof Error ? error.stack : 'No stack');
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to get audio files',
-      details: error instanceof Error ? error.message : String(error)
-    });
+    return jsonResponse(500, { success: false, error: 'Failed to get audio files', details: error instanceof Error ? error.message : String(error) });
   }
-};
+}
 
-export const downloadAudio = async (req: Request, res: Response) => {
+export async function downloadAudio(ctx: HttpContext): Promise<HandlerResult> {
   try {
-    const { filename } = req.params;
-    const { sessionId } = req.query;
+    const filename = ctx.params?.filename;
+    const sessionId = ctx.query?.sessionId;
 
     if (!filename) {
-      return res.status(400).json({
-        error: 'Filename is required'
-      });
+      return jsonResponse(400, { error: 'Filename is required' });
     }
 
     let filePath: string;
 
     if (sessionId) {
-      // Find the audio file in the database for the specific session
       const audioFile = await prisma.audioFile.findFirst({
-        where: {
-          sessionId: sessionId as string,
-          filename: filename
-        }
+        where: { sessionId: String(sessionId), filename },
       });
-
-      if (!audioFile) {
-        return res.status(404).json({
-          error: 'Audio file not found in database'
-        });
-      }
-
+      if (!audioFile) return jsonResponse(404, { error: 'Audio file not found in database' });
       filePath = audioFile.filePath;
     } else {
-      // Find the audio file in the database across all sessions
       const audioFile = await prisma.audioFile.findFirst({
-        where: {
-          filename: filename
-        }
+        where: { filename },
       });
-
-      if (!audioFile) {
-        return res.status(404).json({
-          error: 'Audio file not found in database'
-        });
-      }
-
+      if (!audioFile) return jsonResponse(404, { error: 'Audio file not found in database' });
       filePath = audioFile.filePath;
     }
 
     if (!fs.existsSync(filePath)) {
-      return res.status(404).json({
-        error: 'Audio file not found on disk'
-      });
+      return jsonResponse(404, { error: 'Audio file not found on disk' });
     }
 
-    // Set headers for audio download
-    res.setHeader('Content-Type', 'audio/wav');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-
-    // Stream the file
-    const fileStream = fs.createReadStream(filePath!);
-    fileStream.pipe(res);
-
+    const buf = await fs.promises.readFile(filePath);
+    return new Response(new Blob([buf]), {
+      status: 200,
+      headers: {
+        'Content-Type': 'audio/wav',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+      },
+    });
   } catch (error) {
     console.error('Error downloading audio:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to download audio file'
-    });
+    return jsonResponse(500, { success: false, error: 'Failed to download audio file' });
   }
-};
+}
 
-export const deleteAudioFile = async (req: Request, res: Response) => {
+export async function deleteAudioFile(ctx: HttpContext): Promise<HandlerResult> {
   try {
-    const { filename } = req.params;
-    const { sessionId } = req.query;
+    const filename = ctx.params?.filename;
+    const sessionId = ctx.query?.sessionId;
 
     console.log('Delete request:', { filename, sessionId, sessionIdType: typeof sessionId });
 
-    if (!filename) {
-      return res.status(400).json({
-        error: 'Filename is required'
-      });
-    }
+    if (!filename) return jsonResponse(400, { error: 'Filename is required' });
 
-    // Find and delete the audio file record from database
     const audioFile = await prisma.audioFile.findFirst({
-      where: {
-        sessionId: sessionId as string,
-        filename: filename
-      }
+      where: sessionId ? { sessionId: String(sessionId), filename } : { filename },
     });
-
     console.log('Database query result:', { found: !!audioFile, audioFile });
 
-    if (!audioFile) {
-      return res.status(404).json({
-        error: 'Audio file not found in database'
-      });
-    }
+    if (!audioFile) return jsonResponse(404, { error: 'Audio file not found in database' });
 
-    // Delete from database
-    await prisma.audioFile.delete({
-      where: { id: audioFile.id }
-    });
-
-    // Delete physical file
+    await prisma.audioFile.delete({ where: { id: audioFile.id } });
     if (fs.existsSync(audioFile.filePath)) {
       fs.unlinkSync(audioFile.filePath);
       console.log(`Deleted audio file: ${audioFile.filePath}`);
     }
 
-    return res.status(200).json({
-      success: true,
-      message: `Audio file ${filename} deleted successfully`
-    });
-
+    return jsonResponse(200, { success: true, message: `Audio file ${filename} deleted successfully` });
   } catch (error) {
     console.error('Error deleting audio file:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to delete audio file'
-    });
+    return jsonResponse(500, { success: false, error: 'Failed to delete audio file' });
   }
-};
+}
 
-export const deleteAudioSession = async (req: Request, res: Response) => {
+export async function deleteAudioSession(ctx: HttpContext): Promise<HandlerResult> {
   try {
-    const { sessionId } = req.params;
+    const sessionId = ctx.params?.sessionId;
+    if (!sessionId) return jsonResponse(400, { error: 'Session ID is required' });
 
-    if (!sessionId) {
-      return res.status(400).json({
-        error: 'Session ID is required'
-      });
-    }
-
-    // Find the session
     const session = await prisma.session.findUnique({
       where: { id: sessionId },
-      include: {
-        audioFiles: true,
-        dialogues: true
-      }
+      include: { audioFiles: true, dialogues: true },
     });
+    if (!session) return jsonResponse(404, { error: 'Session not found' });
 
-    if (!session) {
-      return res.status(404).json({
-        error: 'Session not found'
-      });
-    }
-
-    // Delete physical files
     for (const audioFile of session.audioFiles) {
       if (fs.existsSync(audioFile.filePath)) {
         fs.unlinkSync(audioFile.filePath);
@@ -1329,104 +1159,66 @@ export const deleteAudioSession = async (req: Request, res: Response) => {
       }
     }
 
-    // Delete the session directory if it exists
     const sessionDir = path.join(AUDIO_OUTPUT_DIR, sessionId);
     if (fs.existsSync(sessionDir)) {
       fs.rmSync(sessionDir, { recursive: true, force: true });
       console.log(`Deleted session directory: ${sessionDir}`);
     }
 
-    // Delete from database (cascade will handle related records)
-    await prisma.session.delete({
-      where: { id: sessionId }
-    });
+    await prisma.session.delete({ where: { id: sessionId } });
 
-    return res.status(200).json({
-      success: true,
-      message: `Session ${sessionId} and all associated files deleted successfully`
-    });
-
+    return jsonResponse(200, { success: true, message: `Session ${sessionId} and all associated files deleted successfully` });
   } catch (error) {
     console.error('Error deleting audio session:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to delete audio session'
-    });
+    return jsonResponse(500, { success: false, error: 'Failed to delete audio session' });
   }
-};
+}
 
-export const testTTSConnection = async (req: Request, res: Response) => {
+export async function testTTSConnection(_ctx: HttpContext): Promise<HandlerResult> {
   try {
     console.log('Testing TTS API connection...');
     const connected = await testTTSApiConnection();
 
     if (connected) {
-      return res.status(200).json({
-        success: true,
-        message: 'TTS API is connected and running',
-        apiUrl: CHATTERBOX_TTS_API
-      });
-    } else {
-      return res.status(503).json({
-        success: false,
-        message: 'TTS API is not available',
-        apiUrl: CHATTERBOX_TTS_API,
-        suggestion: 'Please ensure the Chatterbox TTS FastAPI server is running on port 8000'
-      });
+      return jsonResponse(200, { success: true, message: 'TTS API is connected and running', apiUrl: CHATTERBOX_TTS_API });
     }
+    return jsonResponse(503, {
+      success: false,
+      message: 'TTS API is not available',
+      apiUrl: CHATTERBOX_TTS_API,
+      suggestion: 'Please ensure the Chatterbox TTS FastAPI server is running on port 8000',
+    });
   } catch (error) {
     console.error('Error testing TTS connection:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to test TTS connection',
-      details: error instanceof Error ? error.message : 'Unknown error'
-    });
+    return jsonResponse(500, { success: false, error: 'Failed to test TTS connection', details: error instanceof Error ? error.message : 'Unknown error' });
   }
-};
+}
 
-export const cleanupAudioFiles = async (req: Request, res: Response) => {
+export async function cleanupAudioFiles(_ctx: HttpContext): Promise<HandlerResult> {
   try {
     if (!fs.existsSync(AUDIO_OUTPUT_DIR)) {
-      return res.status(200).json({
-        success: true,
-        message: 'No audio files to clean up',
-        deletedCount: 0
-      });
+      return jsonResponse(200, { success: true, message: 'No audio files to clean up', deletedCount: 0 });
     }
 
     let deletedCount = 0;
-    const sessions = fs.readdirSync(AUDIO_OUTPUT_DIR, { withFileTypes: true })
-      .filter(dirent => dirent.isDirectory());
+    const sessions = fs.readdirSync(AUDIO_OUTPUT_DIR, { withFileTypes: true }).filter((d) => d.isDirectory());
 
     for (const session of sessions) {
       const sessionPath = path.join(AUDIO_OUTPUT_DIR, session.name);
       const files = fs.readdirSync(sessionPath);
-
       for (const file of files) {
-        const filePath = path.join(sessionPath, file);
-        fs.unlinkSync(filePath);
+        fs.unlinkSync(path.join(sessionPath, file));
         deletedCount++;
       }
-
-      // Remove the session directory if empty
       if (fs.readdirSync(sessionPath).length === 0) {
         fs.rmdirSync(sessionPath);
       }
     }
 
     console.log(`Cleaned up ${deletedCount} audio files`);
-
-    return res.status(200).json({
-      success: true,
-      message: `Cleaned up ${deletedCount} temporary audio files`,
-      deletedCount
-    });
-
+    return jsonResponse(200, { success: true, message: `Cleaned up ${deletedCount} temporary audio files`, deletedCount });
   } catch (error) {
     console.error('Error cleaning up audio files:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to clean up audio files'
-    });
+    return jsonResponse(500, { success: false, error: 'Failed to clean up audio files' });
   }
-};
+}

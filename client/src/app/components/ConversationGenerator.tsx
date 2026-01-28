@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { API_ENDPOINTS, API_BASE_URL } from '../../config/api';
 import ImageUpload from './ImageUpload';
 
@@ -96,6 +96,12 @@ export default function ConversationGenerator() {
   const [jsonImportText, setJsonImportText] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [userImages, setUserImages] = useState<UserProvidedImage[]>([]);
+  const [generationProgress, setGenerationProgress] = useState<{
+    total: number;
+    completed: number;
+    files: Array<{ fileId: string; filename: string; path?: string; status: 'generating' | 'completed' | 'error' }>;
+  } | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
   const [userImageDecisions, setUserImageDecisions] = useState<Array<{
     userImageLabel: string;
     useImage: boolean;
@@ -259,17 +265,45 @@ export default function ConversationGenerator() {
       const data = await response.json();
 
       if (data.success) {
-        console.log('Audio generation successful:', {
-          audioFilesCount: data.audioFiles?.length,
-          returnedSessionId: data.sessionId,
-          currentSessionId: sessionId
+        const newSessionId = data.sessionId || sessionId;
+        console.log('Audio generation started:', {
+          returnedSessionId: newSessionId,
+          streamEndpoint: data.streamEndpoint,
+          note: data.note
         });
-        setAudioFiles(data.audioFiles || []);
-        setSessionId(data.sessionId || sessionId); // Update sessionId with the real one from database
-        if (data.sessionId) {
-          localStorage.setItem('audioSessionId', data.sessionId);
+        
+        setSessionId(newSessionId);
+        if (newSessionId) {
+          localStorage.setItem('audioSessionId', newSessionId);
         }
-        setCurrentStep('audio-generation');
+        
+        // Initialize progress tracking
+        setGenerationProgress({
+          total: conversation.length,
+          completed: 0,
+          files: []
+        });
+        
+        // Connect to SSE stream FIRST, then navigate to page
+        // This ensures SSE connection is established before any messages are published
+        if (data.streamEndpoint && newSessionId) {
+          console.log('Setting up SSE connection before navigating...');
+          connectToStream(newSessionId);
+          
+          // Small delay to ensure SSE connection is established
+          setTimeout(() => {
+            setCurrentStep('audio-generation');
+            setLoading(false);
+          }, 200);
+        } else if (data.audioFiles) {
+          // Fallback: if streamEndpoint not provided, use old behavior
+          setAudioFiles(data.audioFiles || []);
+          setCurrentStep('audio-generation');
+          setLoading(false);
+        } else {
+          setCurrentStep('audio-generation');
+          setLoading(false);
+        }
       } else {
         setError('Failed to generate audio files');
       }
@@ -298,7 +332,213 @@ export default function ConversationGenerator() {
     setConversation(updatedConversation);
   };
 
+  // Connect to SSE stream for real-time file updates
+  const connectToStream = (sessionId: string) => {
+    // Close existing connection if any
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+
+    const streamUrl = API_ENDPOINTS.streamFileUpdates(sessionId);
+    console.log('[SSE] Connecting to stream:', streamUrl);
+    
+    try {
+      const eventSource = new EventSource(streamUrl);
+      eventSourceRef.current = eventSource;
+
+      eventSource.onopen = () => {
+        console.log('[SSE] ✅ Connection opened successfully');
+      };
+
+      eventSource.onmessage = (event) => {
+      try {
+        // Skip heartbeat messages
+        if (event.data.startsWith(':')) {
+          return;
+        }
+
+        const update = JSON.parse(event.data);
+        console.log('SSE update received:', update);
+
+        if (update.type === 'started') {
+          const total = update.total || conversation.length;
+          setGenerationProgress({
+            total,
+            completed: 0,
+            files: new Array(total).fill(null).map((_, i) => ({
+              fileId: '',
+              filename: '',
+              status: 'waiting' as const
+            }))
+          });
+        } else if (update.type === 'progress') {
+          setGenerationProgress(prev => {
+            if (!prev) return prev;
+            // Extract index from fileId (format: sessionId_index)
+            const fileIdMatch = update.fileId?.match(/_(\d+)$/);
+            const fileIndex = fileIdMatch ? parseInt(fileIdMatch[1], 10) - 1 : -1;
+            
+            if (fileIndex >= 0 && fileIndex < prev.files.length) {
+              const newFiles = [...prev.files];
+              newFiles[fileIndex] = {
+                fileId: update.fileId || '',
+                filename: update.filename || '',
+                status: 'generating'
+              };
+              return {
+                ...prev,
+                files: newFiles
+              };
+            }
+            
+            // Fallback: find by fileId
+            const existingFileIndex = prev.files.findIndex(f => f.fileId === update.fileId);
+            const newFiles = [...prev.files];
+            if (existingFileIndex >= 0) {
+              newFiles[existingFileIndex] = {
+                ...newFiles[existingFileIndex],
+                status: 'generating'
+              };
+            }
+            return {
+              ...prev,
+              files: newFiles
+            };
+          });
+        } else if (update.type === 'completed') {
+          setGenerationProgress(prev => {
+            if (!prev) return prev;
+            // Extract index from fileId (format: sessionId_index)
+            const fileIdMatch = update.fileId?.match(/_(\d+)$/);
+            const fileIndex = fileIdMatch ? parseInt(fileIdMatch[1], 10) - 1 : -1;
+            
+            if (fileIndex >= 0 && fileIndex < prev.files.length) {
+              const newFiles = [...prev.files];
+              newFiles[fileIndex] = {
+                fileId: update.fileId || '',
+                filename: update.filename || '',
+                path: update.path,
+                status: 'completed'
+              };
+              
+              // Update audioFiles state with completed file
+              setAudioFiles(prevFiles => {
+                const fileExists = prevFiles.some(f => f.filename === update.filename);
+                if (!fileExists && update.path) {
+                  return [...prevFiles, {
+                    path: update.path,
+                    filename: update.filename || ''
+                  }];
+                }
+                return prevFiles;
+              });
+              
+              return {
+                ...prev,
+                completed: update.completedCount || update.progress || prev.completed + 1,
+                files: newFiles
+              };
+            }
+            
+            // Fallback: find by fileId
+            const existingFileIndex = prev.files.findIndex(f => f.fileId === update.fileId);
+            const newFiles = [...prev.files];
+            if (existingFileIndex >= 0) {
+              newFiles[existingFileIndex] = {
+                fileId: update.fileId || '',
+                filename: update.filename || '',
+                path: update.path,
+                status: 'completed'
+              };
+            }
+            
+            // Update audioFiles state with completed file
+            setAudioFiles(prevFiles => {
+              const fileExists = prevFiles.some(f => f.filename === update.filename);
+              if (!fileExists && update.path) {
+                return [...prevFiles, {
+                  path: update.path,
+                  filename: update.filename || ''
+                }];
+              }
+              return prevFiles;
+            });
+            
+            return {
+              ...prev,
+              completed: update.completedCount || update.progress || prev.completed + 1,
+              files: newFiles
+            };
+          });
+        } else if (update.type === 'error') {
+          setGenerationProgress(prev => {
+            if (!prev) return prev;
+            const existingFileIndex = prev.files.findIndex(f => f.fileId === update.fileId);
+            const newFiles = [...prev.files];
+            
+            if (existingFileIndex >= 0) {
+              newFiles[existingFileIndex] = {
+                ...newFiles[existingFileIndex],
+                status: 'error'
+              };
+            } else {
+              newFiles.push({
+                fileId: update.fileId || '',
+                filename: update.filename || '',
+                status: 'error'
+              });
+            }
+            
+            return {
+              ...prev,
+              files: newFiles
+            };
+          });
+          setError(`Error generating ${update.filename}: ${update.error}`);
+        }
+      } catch (error) {
+        console.error('Error parsing SSE message:', error);
+      }
+    };
+
+      eventSource.onerror = (error) => {
+        console.error('[SSE] ❌ Connection error:', error);
+        console.error('[SSE] ReadyState:', eventSource.readyState);
+        // EventSource.readyState: 0 = CONNECTING, 1 = OPEN, 2 = CLOSED
+        if (eventSource.readyState === EventSource.CLOSED) {
+          console.error('[SSE] Connection closed, attempting to reconnect...');
+          // Try to reconnect after a delay
+          setTimeout(() => {
+            if (sessionId) {
+              console.log('[SSE] Reconnecting...');
+              connectToStream(sessionId);
+            }
+          }, 3000);
+        }
+      };
+    } catch (error) {
+      console.error('[SSE] Failed to create EventSource:', error);
+    }
+  };
+
+  // Cleanup EventSource on unmount or restart
+  useEffect(() => {
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+    };
+  }, []);
+
   const handleRestart = () => {
+    // Close SSE connection
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    
     setCurrentStep('input');
     setConversation([]);
     setTopic('');
@@ -308,6 +548,7 @@ export default function ConversationGenerator() {
     setSuccessMessage('');
     setSessionId('');
     setUserImages([]);
+    setGenerationProgress(null);
     localStorage.removeItem('audioSessionId');
     setTtsParameters({
       exaggeration: 0.6,
@@ -782,11 +1023,15 @@ export default function ConversationGenerator() {
     </div>
   );
 
-  const renderAudioGeneration = () => (
+  const renderAudioGeneration = () => {
+    const isGenerating = generationProgress && generationProgress.completed < generationProgress.total;
+    const allComplete = generationProgress && generationProgress.completed >= generationProgress.total;
+    
+    return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-2xl font-bold text-gray-800 dark:text-white">
-          Audio Generated Successfully!
+          {isGenerating ? 'Generating Audio Files...' : allComplete ? 'Audio Generated Successfully!' : 'Audio Generation'}
         </h2>
         <button
           onClick={handleRestart}
@@ -796,6 +1041,27 @@ export default function ConversationGenerator() {
         </button>
       </div>
 
+      {/* Progress indicator */}
+      {generationProgress && (
+        <div className="p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-blue-800 dark:text-blue-200 font-semibold">
+              Progress: {generationProgress.completed} / {generationProgress.total} files
+            </span>
+            <span className="text-blue-600 dark:text-blue-400 text-sm">
+              {Math.round((generationProgress.completed / generationProgress.total) * 100)}%
+            </span>
+          </div>
+          <div className="w-full bg-blue-200 dark:bg-blue-800 rounded-full h-3">
+            <div
+              className="bg-blue-600 h-3 rounded-full transition-all duration-300"
+              style={{ width: `${(generationProgress.completed / generationProgress.total) * 100}%` }}
+            ></div>
+          </div>
+        </div>
+      )}
+
+
       {topic && (
         <div className="p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md">
           <h3 className="text-lg font-semibold text-blue-800 dark:text-blue-200 mb-2">Topic:</h3>
@@ -803,11 +1069,21 @@ export default function ConversationGenerator() {
         </div>
       )}
 
-      <div className="p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-md">
-        <p className="text-green-800 dark:text-green-200">
-          <strong>Audio files have been generated!</strong> You can now play or download each dialogue segment.
-        </p>
-      </div>
+      {allComplete && (
+        <div className="p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-md">
+          <p className="text-green-800 dark:text-green-200">
+            <strong>Audio files have been generated!</strong> You can now play or download each dialogue segment.
+          </p>
+        </div>
+      )}
+      
+      {isGenerating && (
+        <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md">
+          <p className="text-yellow-800 dark:text-yellow-200">
+            <strong>Generating audio files...</strong> Files will appear here as they're generated. You can start reviewing completed files while others are still being processed.
+          </p>
+        </div>
+      )}
 
       {conversation.length > 0 && (
         <div className="space-y-4">
@@ -830,48 +1106,95 @@ export default function ConversationGenerator() {
                   >
                     {item.character}:
                   </span>
-                  {audioFiles.length > 0 && audioFiles[index] && (
-                    <div className="flex flex-wrap gap-1 sm:gap-2 mt-2 sm:mt-0">
-                      <button
-                        onClick={() => playAudio(audioFiles[index].filename)}
-                        className="px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white text-xs sm:text-sm rounded-md transition-colors flex items-center gap-1 min-w-[60px] sm:min-w-0"
-                        title="Play audio"
-                      >
-                        <span className="text-xs">▶️</span>
-                        <span className="hidden sm:inline">Play</span>
-                      </button>
-                      <button
-                        onClick={() => downloadAudio(audioFiles[index].filename)}
-                        className="px-3 py-2 bg-gray-500 hover:bg-gray-600 text-white text-xs sm:text-sm rounded-md transition-colors flex items-center gap-1 min-w-[60px] sm:min-w-0"
-                        title="Download audio"
-                      >
-                        <span className="text-xs">⬇️</span>
-                        <span className="hidden sm:inline">Download</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          console.log('Current sessionId:', sessionId);
-                          console.log('Audio file to delete:', audioFiles[index].filename);
-                          handleDeleteAudio(audioFiles[index].filename);
-                        }}
-                        className="px-3 py-2 bg-red-500 hover:bg-red-600 text-white text-xs sm:text-sm rounded-md transition-colors flex items-center gap-1 min-w-[60px] sm:min-w-0"
-                        title="Delete audio"
-                      >
-                        <span className="text-xs">🗑️</span>
-                        <span className="hidden sm:inline">Delete</span>
-                      </button>
-                      <div className="relative">
-                        <button
-                          onClick={() => setShowRegenerateDropdown(showRegenerateDropdown === index ? null : index)}
-                          className="px-3 py-2 bg-green-500 hover:bg-green-600 text-white text-xs sm:text-sm rounded-md transition-colors flex items-center gap-1 min-w-[60px] sm:min-w-0"
-                          title="Regenerate with different parameters"
-                        >
-                          <span className="text-xs"></span>
-                          <span className="hidden sm:inline">Regenerate</span>
-                        </button>
-                      </div>
-                    </div>
-                  )}
+                  {(() => {
+                    const fileStatus = generationProgress?.files[index]?.status;
+                    const fileInfo = generationProgress?.files[index];
+                    // Find the audio file by matching filename from generationProgress
+                    const audioFile = fileInfo?.filename 
+                      ? audioFiles.find(f => f.filename === fileInfo.filename)
+                      : null;
+                    
+                    // Show controls if file is completed (even if audioFile not yet in state, use fileInfo.path)
+                    if (fileStatus === 'completed') {
+                      const fileToUse = audioFile || (fileInfo?.filename ? { filename: fileInfo.filename, path: fileInfo.path || '' } : null);
+                      if (!fileToUse) {
+                        return (
+                          <span className="px-3 py-2 bg-green-500 text-white text-xs sm:text-sm rounded-md mt-2 sm:mt-0">
+                            ✓ Ready (loading...)
+                          </span>
+                        );
+                      }
+                      return (
+                        <div className="flex flex-wrap gap-1 sm:gap-2 mt-2 sm:mt-0">
+                          <button
+                            onClick={() => playAudio(fileToUse.filename)}
+                            className="px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white text-xs sm:text-sm rounded-md transition-colors flex items-center gap-1 min-w-[60px] sm:min-w-0"
+                            title="Play audio"
+                          >
+                            <span className="text-xs">▶️</span>
+                            <span className="hidden sm:inline">Play</span>
+                          </button>
+                          <button
+                            onClick={() => downloadAudio(fileToUse.filename)}
+                            className="px-3 py-2 bg-gray-500 hover:bg-gray-600 text-white text-xs sm:text-sm rounded-md transition-colors flex items-center gap-1 min-w-[60px] sm:min-w-0"
+                            title="Download audio"
+                          >
+                            <span className="text-xs">⬇️</span>
+                            <span className="hidden sm:inline">Download</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              console.log('Current sessionId:', sessionId);
+                              console.log('Audio file to delete:', fileToUse.filename);
+                              handleDeleteAudio(fileToUse.filename);
+                            }}
+                            className="px-3 py-2 bg-red-500 hover:bg-red-600 text-white text-xs sm:text-sm rounded-md transition-colors flex items-center gap-1 min-w-[60px] sm:min-w-0"
+                            title="Delete audio"
+                          >
+                            <span className="text-xs">🗑️</span>
+                            <span className="hidden sm:inline">Delete</span>
+                          </button>
+                          <div className="relative">
+                            <button
+                              onClick={() => setShowRegenerateDropdown(showRegenerateDropdown === index ? null : index)}
+                              className="px-3 py-2 bg-green-500 hover:bg-green-600 text-white text-xs sm:text-sm rounded-md transition-colors flex items-center gap-1 min-w-[60px] sm:min-w-0"
+                              title="Regenerate with different parameters"
+                            >
+                              <span className="text-xs"></span>
+                              <span className="hidden sm:inline">Regenerate</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    } else if (fileStatus === 'generating') {
+                      return (
+                        <span className="px-3 py-2 bg-yellow-500 text-white text-xs sm:text-sm rounded-md mt-2 sm:mt-0">
+                          ⏳ Generating...
+                        </span>
+                      );
+                    } else if (fileStatus === 'error') {
+                      return (
+                        <span className="px-3 py-2 bg-red-500 text-white text-xs sm:text-sm rounded-md mt-2 sm:mt-0">
+                          ✗ Error
+                        </span>
+                      );
+                    } else if (fileStatus === 'completed' && !audioFile) {
+                      // File marked as completed but audioFile not yet in state (shouldn't happen, but handle gracefully)
+                      return (
+                        <span className="px-3 py-2 bg-green-500 text-white text-xs sm:text-sm rounded-md mt-2 sm:mt-0">
+                          ✓ Ready (loading...)
+                        </span>
+                      );
+                    } else if (generationProgress) {
+                      // Show waiting status if generation has started but this file hasn't started yet
+                      return (
+                        <span className="px-3 py-2 bg-gray-400 text-white text-xs sm:text-sm rounded-md mt-2 sm:mt-0">
+                          ⏳ Waiting...
+                        </span>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
                 <p className="text-gray-700 dark:text-gray-300 leading-relaxed">
                   {item.dialogue}
@@ -947,6 +1270,14 @@ export default function ConversationGenerator() {
           </div>
         </div>
       )}
+      
+      {conversation.length === 0 && (
+        <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md">
+          <p className="text-yellow-800 dark:text-yellow-200">
+            No conversation data available. Please go back and generate a script first.
+          </p>
+        </div>
+      )}
 
       {audioFiles.length > 0 && (
         <div className="mt-6 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-md">
@@ -966,6 +1297,7 @@ export default function ConversationGenerator() {
       )}
     </div>
   );
+  };
 
   const renderVideoGeneration = () => (
     <div className="space-y-6">

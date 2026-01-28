@@ -38,6 +38,7 @@ export const API_ENDPOINTS = {
   downloadAudio: (filename: string) => `${API_BASE_URL}/api/audio/download/${filename}`,
   testTTSConnection: `${API_BASE_URL}/api/audio/test-connection`,
   cleanupAudio: `${API_BASE_URL}/api/audio/cleanup`,
+  streamFileUpdates: (sessionId: string) => `${API_BASE_URL}/api/stream/${sessionId}/files`,
 
   // Video endpoints
   generateVideo: `${API_BASE_URL}/api/video/generate`,
