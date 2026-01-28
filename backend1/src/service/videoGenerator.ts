@@ -77,8 +77,9 @@ if (ffmpegPath) {
 }
 
 // Video generation configuration
-const VIDEO_OUTPUT_DIR = path.join(process.cwd(), 'generated_videos');
-const TEMP_DIR = path.join(process.cwd(), 'temp_alignment');
+// Generated videos are stored under central storage; alignment files under storage/temp/alignment
+const VIDEO_OUTPUT_DIR = path.join(process.cwd(), 'storage', 'videos');
+const TEMP_DIR = path.join(process.cwd(), 'storage', 'temp', 'alignment');
 
 // Ensure directories exist
 [VIDEO_OUTPUT_DIR, TEMP_DIR].forEach(dir => {
@@ -1342,7 +1343,7 @@ export async function generateVideoWithSubtitles(
       }
 
       // Only cleanup ASS file if it's not in the cache directory
-      const assCacheDir = path.join(process.cwd(), 'temp', 'ass_cache');
+      const assCacheDir = path.join(process.cwd(), 'storage', 'temp', 'ass_cache');
       if (assSubtitlePath && !assSubtitlePath.startsWith(assCacheDir)) {
         filesToCleanup.push(assSubtitlePath);
       } else if (assSubtitlePath) {

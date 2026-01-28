@@ -16,7 +16,8 @@ export async function generateImage(ctx: HttpContext): Promise<HandlerResult> {
 
     const result = await imagegeneration(String(prompt));
 
-    const outputDir = path.join(process.cwd(), 'generated_images');
+    // Store generated images under central storage directory
+    const outputDir = path.join(process.cwd(), 'storage', 'images');
     fs.mkdirSync(outputDir, { recursive: true });
 
     const timestamp = Date.now();

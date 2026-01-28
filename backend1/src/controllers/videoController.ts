@@ -11,10 +11,11 @@ import { cleanupOldUserImageFiles } from './audioController';
 
 const prisma = new PrismaClient();
 
-const ASS_CACHE_DIR = path.join(process.cwd(), 'temp', 'ass_cache');
+const ASS_CACHE_DIR = path.join(process.cwd(), 'storage', 'temp', 'ass_cache');
 const ASS_CACHE_DURATION_HOURS = 24;
-const VIDEO_OUTPUT_DIR = path.join(process.cwd(), 'generated_videos');
-const TEMP_DIR = path.join(process.cwd(), 'temp');
+// Centralised storage directories for generated media
+const VIDEO_OUTPUT_DIR = path.join(process.cwd(), 'storage', 'videos');
+const TEMP_DIR = path.join(process.cwd(), 'storage', 'temp');
 
 if (!fs.existsSync(ASS_CACHE_DIR)) {
   fs.mkdirSync(ASS_CACHE_DIR, { recursive: true });
@@ -140,7 +141,7 @@ const cleanupExpiredAssFiles = (): number => {
 
   return deletedCount;
 };
-const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'generated_images');
+const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
 
 // Ensure directories exist
 if (!fs.existsSync(VIDEO_OUTPUT_DIR)) {
@@ -766,7 +767,8 @@ export const cleanupVideoFiles = async (ctx: HttpContext): Promise<HandlerResult
 
 export const getTemplateVideos = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    const TEMPLATE_DIR = path.join(process.cwd(), 'video_template');
+    // Store template videos under central storage directory
+    const TEMPLATE_DIR = path.join(process.cwd(), 'storage', 'video_templates');
 
     if (!fs.existsSync(TEMPLATE_DIR)) {
       return jsonResponse(200,{ success: true, videos: [] });
@@ -806,7 +808,8 @@ export const uploadTemplateVideo = async (ctx: HttpContext): Promise<HandlerResu
       return jsonResponse(400,{ error: 'No file uploaded' });
     }
 
-    const TEMPLATE_DIR = path.join(process.cwd(), 'video_template');
+    // Store template videos under central storage directory
+    const TEMPLATE_DIR = path.join(process.cwd(), 'storage', 'video_templates');
 
     // Ensure directory exists
     if (!fs.existsSync(TEMPLATE_DIR)) {

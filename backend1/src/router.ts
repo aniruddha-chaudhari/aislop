@@ -20,8 +20,11 @@ export function register(r: Route | Route[]): void {
   else routes.push(r);
 }
 
-const GENERATED_IMAGES_DIR = path.join(process.cwd(), 'generated_images');
-const TEMP_DIR = path.join(process.cwd(), 'temp');
+// Public URL for images stays `/generated_images/*`, but files
+// are now stored under `storage/images` for better organisation.
+const GENERATED_IMAGES_DIR = path.join(process.cwd(), 'storage', 'images');
+// Central temp directory lives under `storage/temp`.
+const TEMP_DIR = path.join(process.cwd(), 'storage', 'temp');
 
 function ensureTemp(): string {
   if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });

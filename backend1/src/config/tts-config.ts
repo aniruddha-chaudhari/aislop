@@ -32,7 +32,8 @@ export const TTS_CONFIG = {
   },
   
   // Audio output directory (relative to project root)
-  audioOutputDir: 'generated_audio'
+  // Kept in central storage so all generated assets live under one folder.
+  audioOutputDir: 'storage/audio'
 };
 
 export type CharacterName = keyof typeof TTS_CONFIG.characters;

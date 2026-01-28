@@ -27,6 +27,9 @@ pids
 *.pid
 *.seed
 *.pid.lock
+#
+# App-generated media / runtime storage (keep out of git)
+storage/
 
 # Coverage directory used by tools like istanbul
 coverage/
@@ -73,11 +76,6 @@ Thumbs.db
 .yarn-integrity
 temp
 /src/generated/prisma
-video_template
-temp_alignment
-generated_audio
-generated_videos
-generated_images
 
 # Prompts and documentation files (not for version control)
 100topics.md

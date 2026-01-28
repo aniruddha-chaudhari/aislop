@@ -40,12 +40,14 @@ const REFERENCE_AUDIO_PATHS = {
 
 // Chatterbox TTS API configuration
 const CHATTERBOX_TTS_API = 'http://localhost:8000';
-const AUDIO_OUTPUT_DIR = path.join(process.cwd(), 'generated_audio');
-const TEMP_DIR = path.join(process.cwd(), 'temp');
+// Centralised storage directories for generated assets
+const AUDIO_OUTPUT_DIR = path.join(process.cwd(), 'storage', 'audio');
+const TEMP_DIR = path.join(process.cwd(), 'storage', 'temp');
 
-// Concurrency control for TTS API - limit concurrent requests to prevent overwhelming the server
-// Adjust MAX_CONCURRENT_TTS_REQUESTS based on your server's capacity (GPU memory, CPU, etc.)
-const MAX_CONCURRENT_TTS_REQUESTS = 2; // Start with 2, increase if server can handle more
+// Concurrency control for TTS API - limit concurrent requests to prevent overwhelming the server.
+// Chatterbox often runs effectively single-threaded on GPU; running concurrent /generate calls can
+// make the 2nd request wait long enough to hit client timeouts. Default to 1 for reliability.
+const MAX_CONCURRENT_TTS_REQUESTS = 1;
 
 // Semaphore for controlling concurrent TTS requests
 class TTSConcurrencyLimiter {
@@ -195,8 +197,8 @@ export function cleanupOldUserImageFiles(): void {
       }
     }
 
-    // Clean up generated_images directory contents
-    const generatedImagesDir = path.join(process.cwd(), 'generated_images');
+    // Clean up generated images directory contents
+    const generatedImagesDir = path.join(process.cwd(), 'storage', 'images');
     if (fs.existsSync(generatedImagesDir)) {
       try {
         const sessionDirs = fs.readdirSync(generatedImagesDir);
@@ -319,7 +321,8 @@ async function generateAudioWithChatterbox(
       headers: {
         ...formData.getHeaders()
       },
-      timeout: 120000, // 2 minutes timeout
+      // Generation can take >2 minutes depending on GPU + model warmup + text length.
+      timeout: 300000, // 5 minutes
       maxContentLength: Infinity,
       maxBodyLength: Infinity
     });
@@ -340,7 +343,7 @@ async function generateAudioWithChatterbox(
     console.log(`Downloading audio from: ${CHATTERBOX_TTS_API}/audio/${audioFilename}`);
     const downloadResponse = await axios.get(`${CHATTERBOX_TTS_API}/audio/${audioFilename}`, {
       responseType: 'stream',
-      timeout: 60000
+      timeout: 180000 // 3 minutes (slow disks / large files)
     });
 
     // Save to output path

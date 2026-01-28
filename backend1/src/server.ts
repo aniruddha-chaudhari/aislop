@@ -15,7 +15,7 @@ import { handleRequest, type BunServer } from './router';
 // Redis removed - using in-memory event emitter for SSE
 
 const port = Number(process.env.PORT) || 5000;
-const ASS_CACHE_DIR = path.join(process.cwd(), 'temp', 'ass_cache');
+const ASS_CACHE_DIR = path.join(process.cwd(), 'storage', 'temp', 'ass_cache');
 const ASS_CACHE_DURATION_HOURS = 24;
 const CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
