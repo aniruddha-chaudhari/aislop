@@ -11,6 +11,12 @@ export const AudioClipSchema = z.object({
   label: z.string(),
 });
 
+export const WordTimestampSchema = z.object({
+  word: z.string(),
+  start: z.number(),
+  end: z.number(),
+});
+
 export const SubtitleClipSchema = z.object({
   id: z.string(),
   kind: z.literal('subtitle'),
@@ -18,6 +24,7 @@ export const SubtitleClipSchema = z.object({
   duration: z.number(),
   speaker: z.string(),
   text: z.string(),
+  words: z.array(WordTimestampSchema).optional(), // Word-level for karaoke
 });
 
 export const OverlayClipSchema = z.object({
@@ -30,6 +37,7 @@ export const OverlayClipSchema = z.object({
   x: z.number(),
   y: z.number(),
   scale: z.number(),
+  path: z.string().optional(),
 });
 
 export const CharacterClipSchema = z.object({
@@ -93,6 +101,7 @@ export const ProjectSchema = z.object({
 /**
  * Type exports
  */
+export type WordTimestamp = z.infer<typeof WordTimestampSchema>;
 export type AudioClip = z.infer<typeof AudioClipSchema>;
 export type SubtitleClip = z.infer<typeof SubtitleClipSchema>;
 export type OverlayClip = z.infer<typeof OverlayClipSchema>;

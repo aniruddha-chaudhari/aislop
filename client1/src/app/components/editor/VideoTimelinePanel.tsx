@@ -28,11 +28,14 @@ type Props = {
   onBack?: () => void;
   onExport?: () => void;
   onSaveTimeline?: () => void;
-  onGenerateAiDraft?: () => void;
+  onGenerateSubtitlesAndChars?: () => void;
+  onGenerateImagePlan?: () => void;
   isGeneratingDraft?: boolean;
+  isGeneratingImagePlan?: boolean;
   isExporting?: boolean;
   exportProgress?: number;
-  hasTimeline?: boolean;
+  hasSubtitlesAndChars?: boolean;
+  hasImagePlan?: boolean;
   message?: { type: 'info' | 'error' | 'success'; text: string } | null;
   onHeightChange: (height: number) => void;
   onPlayPause: () => void;
@@ -70,11 +73,14 @@ export default function VideoTimelinePanel({
   onBack,
   onExport,
   onSaveTimeline,
-  onGenerateAiDraft,
+  onGenerateSubtitlesAndChars,
+  onGenerateImagePlan,
   isGeneratingDraft,
+  isGeneratingImagePlan,
   isExporting,
   exportProgress,
-  hasTimeline,
+  hasSubtitlesAndChars,
+  hasImagePlan,
   message,
   onHeightChange,
   onPlayPause,
@@ -267,15 +273,24 @@ export default function VideoTimelinePanel({
           </div>
         </div>
 
-        {/* Center: AI Draft Button */}
-        <div className="flex-1 flex justify-center">
-          {!hasTimeline && onGenerateAiDraft && (
+        {/* Center: Subtitles & Characters + Image Plan buttons */}
+        <div className="flex-1 flex justify-center items-center gap-2">
+          {!hasSubtitlesAndChars && onGenerateSubtitlesAndChars && (
             <button
-              onClick={onGenerateAiDraft}
+              onClick={onGenerateSubtitlesAndChars}
               disabled={isGeneratingDraft}
-              className="px-4 py-1.5 text-xs font-semibold bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+              className="px-3 py-1.5 text-xs font-semibold bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 text-white rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed shadow"
             >
-              {isGeneratingDraft ? '⏳ Generating AI Draft...' : '✨ Generate AI Draft'}
+              {isGeneratingDraft ? '⏳ Generating...' : 'Subtitles & Characters'}
+            </button>
+          )}
+          {!hasImagePlan && onGenerateImagePlan && (
+            <button
+              onClick={onGenerateImagePlan}
+              disabled={isGeneratingImagePlan}
+              className="px-3 py-1.5 text-xs font-semibold bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed shadow"
+            >
+              {isGeneratingImagePlan ? '⏳ Generating...' : ' Image Plan'}
             </button>
           )}
         </div>
@@ -290,7 +305,7 @@ export default function VideoTimelinePanel({
               {message.text}
             </div>
           )}
-          {hasTimeline && onSaveTimeline && (
+          {(hasSubtitlesAndChars || hasImagePlan) && onSaveTimeline && (
             <button
               onClick={onSaveTimeline}
               className="h-7 px-2.5 rounded-md bg-muted text-xs font-medium hover:opacity-90 transition"

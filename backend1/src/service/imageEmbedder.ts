@@ -679,7 +679,7 @@ Return a JSON object with this structure:
 }
 `;
 
-  // 🎯 8. AI ANALYSIS FOR IMAGE REQUIREMENTS WITH GOOGLE SEARCH AND USER IMAGES
+  // 🎯 8. AI ANALYSIS FOR IMAGE REQUIREMENTS WITH USER IMAGES
   static async analyzeDialogueForImages(
     sessionId: string,
     assData: AssFileData,
@@ -687,7 +687,7 @@ Return a JSON object with this structure:
     userProvidedImages?: UserProvidedImage[]
   ): Promise<ImageEmbeddingPlan> {
     try {
-      console.log('🤖 [AI] Starting enhanced AI analysis with Google search for technical diagrams');
+      console.log('🤖 [AI] Starting enhanced AI analysis for technical diagrams');
 
       const { entries } = assData;
       const imageTimings = AssFileProcessor.generateImageTimingFromAss(assData, 'ultra'); // Use ultra density for more images
@@ -709,14 +709,11 @@ Provide specific diagram concepts that would work well in educational video cont
         generateText({
           model,
           prompt: researchPrompt,
-          tools: {
-            google_search: google.tools.googleSearch({}),
-          }
         })
       );
 
       const visualResearch = researchResult.text;
-      console.log('✅ [SEARCH] Technical research completed');
+      console.log('✅ [AI] Technical research completed');
 
       // 🎯 10. PREPARE ENHANCED DIALOGUE SEQUENCE FOR AI
       // Clean up ASS formatting artifacts from dialogue text

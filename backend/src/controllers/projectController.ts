@@ -7,6 +7,8 @@ import { ProjectSchema, TimelineSchema } from '../schema/project';
 import fs from 'fs';
 import path from 'path';
 
+const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
+
 /**
  * Create a new project
  * POST /api/project/create
@@ -423,23 +425,26 @@ export async function uploadImageForClip(ctx: HttpContext): Promise<HandlerResul
     }
 
     // Get assetId from form data (which clip this image is for)
-    const assetId = ctx.body?.assetId || `asset_${Date.now()}`;
+    const assetId = (ctx.body as any)?.assetId || `asset_${Date.now()}`;
 
     // Save image to storage/images/{sessionId}/
-    const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
     const sessionDir = path.join(IMAGE_UPLOAD_DIR, project.audioSessionId);
 
     if (!fs.existsSync(sessionDir)) {
       fs.mkdirSync(sessionDir, { recursive: true });
     }
 
-    const imageFilename = `${assetId}.png`;
+    const ext = path.extname(file.originalname) || '.png';
+    const imageFilename = `${assetId}${ext}`;
     const imagePath = path.join(sessionDir, imageFilename);
 
-    // Save file
-    await file.arrayBuffer().then((buffer) => {
-      fs.writeFileSync(imagePath, Buffer.from(buffer));
-    });
+    // Copy from temp to final location
+    fs.copyFileSync(file.path, imagePath);
+    
+    // Clean up temp file
+    if (fs.existsSync(file.path)) {
+      fs.unlinkSync(file.path);
+    }
 
     console.log(`✅ [PROJECT] Uploaded image for clip ${assetId} in project ${projectId}`);
 
@@ -521,6 +526,112 @@ export async function listProjectImages(ctx: HttpContext): Promise<HandlerResult
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to list images',
+    });
+  }
+}
+
+/**
+ * Generate a quick preview of the project timeline
+ * POST /api/project/:id/preview
+ * Returns a lower quality, faster render for quick iteration
+ * Progressively renders based on current timeline state
+ */
+export async function generatePreview(ctx: HttpContext): Promise<HandlerResult> {
+  try {
+    const projectId = ctx.params?.id;
+
+    if (!projectId) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Project ID is required',
+      });
+    }
+
+    const project = await projectService.getProject(projectId);
+
+    if (!project) {
+      return jsonResponse(404, {
+        success: false,
+        error: 'Project not found',
+      });
+    }
+
+    console.log(`🎬 [PROJECT CONTROLLER] Generating preview for project ${projectId}`);
+    console.log(`📊 [PROJECT CONTROLLER] Timeline state:`, {
+      hasTimeline: !!project.timeline,
+      audioSession: project.audioSessionId,
+      template: project.template?.src
+    });
+
+    // Generate preview with lower quality settings
+    // Timeline can be empty - will just render template + audio
+    const result = await compileTimeline(project, {
+      quality: 'preview',  // Lower quality for faster processing
+      outputDir: path.join(process.cwd(), 'storage', 'previews'),
+      outputFilename: `preview_${projectId}.mp4`,
+    });
+
+    if (!result.success) {
+      return jsonResponse(500, {
+        success: false,
+        error: result.error || 'Failed to generate preview',
+      });
+    }
+
+    return jsonResponse(200, {
+      success: true,
+      previewPath: result.outputPath,
+      previewUrl: `/api/project/${projectId}/preview-video`,
+      message: 'Preview generated successfully',
+    });
+  } catch (error) {
+    console.error('❌ [PROJECT CONTROLLER] Error generating preview:', error);
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to generate preview',
+    });
+  }
+}
+
+/**
+ * Serve the preview video file
+ * GET /api/project/:id/preview-video
+ */
+export async function servePreview(ctx: HttpContext): Promise<HandlerResult> {
+  try {
+    const projectId = ctx.params?.id;
+
+    if (!projectId) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Project ID is required',
+      });
+    }
+
+    const previewPath = path.join(process.cwd(), 'storage', 'previews', `preview_${projectId}.mp4`);
+
+    if (!fs.existsSync(previewPath)) {
+      return jsonResponse(404, {
+        success: false,
+        error: 'Preview not found',
+      });
+    }
+
+    const fileBuffer = fs.readFileSync(previewPath);
+
+    return {
+      status: 200,
+      headers: {
+        'Content-Type': 'video/mp4',
+        'Content-Length': String(fileBuffer.length),
+      },
+      body: fileBuffer,
+    };
+  } catch (error) {
+    console.error('❌ [PROJECT CONTROLLER] Error serving preview:', error);
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to serve preview',
     });
   }
 }

@@ -83,6 +83,7 @@ register([
   { method: 'GET', pattern: '/api/project/:id/export/status', handler: project.getExportStatus },
   { method: 'GET', pattern: '/api/project/:id/images', handler: project.listProjectImages },
   { method: 'POST', pattern: '/api/project/:id/ai-draft', handler: project.generateAiDraftForProject },
+  { method: 'POST', pattern: '/api/project/:id/image-plan', handler: project.generateImagePlanForProject },
   { method: 'POST', pattern: '/api/project/:id/preview', handler: project.generateProjectPreview },
   { method: 'GET', pattern: '/api/project/:id/preview', handler: project.serveProjectPreview },
   { method: 'PUT', pattern: '/api/project/:id/timeline', handler: project.saveTimeline },

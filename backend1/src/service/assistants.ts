@@ -69,9 +69,6 @@ const researchontopicwithlinks = async (topic: string) => {
       generateText({
         model,
         prompt: enhancedPrompt,
-        tools: {
-          google_search: google.tools.googleSearch({}),
-        }
       })
     );
     return result.text;

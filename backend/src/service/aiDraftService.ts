@@ -43,8 +43,8 @@ export async function generateAiDraft(
       duration: req.contextualDuration ?? req.duration ?? 8,
       assetId: req.id ?? `img_${index}`,
       label: req.title ?? `Image ${index + 1}`,
-      x: 0.5,
-      y: 0.3,
+      x: 0.5,   // Center horizontally
+      y: 0.65,  // Towards bottom
       scale: 0.5,
       ...(req.imagePath && { path: req.imagePath }),
     }));

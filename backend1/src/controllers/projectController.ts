@@ -1,9 +1,10 @@
 import type { HttpContext, HandlerResult } from '../utils/http';
 import { jsonResponse } from '../utils/http';
 import * as projectService from '../service/projectService';
-import { generateAiDraft } from '../service/aiDraftService';
+import { generateSubtitlesAndCharacters, generateImagePlan } from '../service/aiDraftService';
+import type { Track } from '../schema/project';
 import { compileTimeline } from '../service/timelineCompiler';
-import { generatePreview } from '../service/previewGenerator';
+import { generatePreview, generateTimelinePreview } from '../service/previewGenerator';
 import { ProjectSchema, TimelineSchema } from '../schema/project';
 import fs from 'fs';
 import path from 'path';
@@ -189,7 +190,7 @@ export async function deleteProject(ctx: HttpContext): Promise<HandlerResult> {
 }
 
 /**
- * Generate AI draft for a project
+ * Generate subtitles and character clips for a project (local WhisperX)
  * POST /api/project/:id/ai-draft
  */
 export async function generateAiDraftForProject(ctx: HttpContext): Promise<HandlerResult> {
@@ -213,27 +214,113 @@ export async function generateAiDraftForProject(ctx: HttpContext): Promise<Handl
       });
     }
 
+    if (!project.audioSessionId || project.audioSessionId === 'no-session') {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Audio session is required',
+      });
+    }
+
     const topic = body.topic || project.name || 'Technical conversation';
 
-    console.log(`🎬 [PROJECT CONTROLLER] Generating AI draft for project ${projectId}`);
+    console.log(`🎬 [PROJECT CONTROLLER] Generating subtitles & characters for project ${projectId}`);
 
-    // Generate timeline using AI draft service
-    const timeline = await generateAiDraft(project.audioSessionId, topic);
+    const result = await generateSubtitlesAndCharacters(project.audioSessionId, topic);
 
-    // Update project with generated timeline
+    // Merge with existing timeline (keep overlay tracks: template, t_imgs)
+    const existing = project.timeline;
+    const existingTracks = (existing?.tracks ?? []) as Track[];
+    const overlayTracks = existingTracks.filter((t) => t.type === 'overlay');
+    const tracks: Track[] = [
+      ...overlayTracks,
+      result.audioTrack,
+      result.subtitleTrack,
+      result.characterTrack,
+    ];
+    const timeline = {
+      duration: Math.max(result.duration, existing?.duration ?? 0),
+      tracks,
+    };
+
     const updatedProject = await projectService.updateTimeline(projectId, timeline);
 
     return jsonResponse(200, {
       success: true,
       project: updatedProject,
       timeline,
-      message: 'AI draft generated successfully',
+      message: 'Subtitles & characters generated successfully',
     });
   } catch (error) {
     console.error('❌ [PROJECT CONTROLLER] Error generating AI draft:', error);
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to generate AI draft',
+    });
+  }
+}
+
+/**
+ * Generate image plan overlay clips for a project
+ * POST /api/project/:id/image-plan
+ */
+export async function generateImagePlanForProject(ctx: HttpContext): Promise<HandlerResult> {
+  try {
+    const projectId = ctx.params?.id;
+    const body = ctx.body as any;
+
+    if (!projectId) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Project ID is required',
+      });
+    }
+
+    const project = await projectService.getProject(projectId);
+
+    if (!project) {
+      return jsonResponse(404, {
+        success: false,
+        error: 'Project not found',
+      });
+    }
+
+    if (!project.audioSessionId || project.audioSessionId === 'no-session') {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Audio session is required',
+      });
+    }
+
+    const topic = body.topic || project.name || 'Technical conversation';
+
+    console.log(`🎬 [PROJECT CONTROLLER] Generating image plan for project ${projectId}`);
+
+    const result = await generateImagePlan(project.audioSessionId, topic);
+
+    // Merge overlay track into existing timeline (replace t_imgs, keep others)
+    const existing = project.timeline;
+    const existingTracks = (existing?.tracks ?? []) as Track[];
+    const otherOverlays = existingTracks.filter((t) => t.type === 'overlay' && t.id !== 't_imgs');
+    const nonOverlays = existingTracks.filter((t) => t.type !== 'overlay');
+    const tracks: Track[] = [...otherOverlays, result.overlayTrack, ...nonOverlays];
+    const timeline = {
+      duration: existing?.duration ?? 60,
+      tracks,
+    };
+
+    const updatedProject = await projectService.updateTimeline(projectId, timeline);
+
+    return jsonResponse(200, {
+      success: true,
+      project: updatedProject,
+      timeline,
+      message: 'Image plan generated successfully',
+    });
+  } catch (error) {
+    console.error('❌ [PROJECT CONTROLLER] Error generating image plan:', error);
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to generate image plan',
     });
   }
 }
@@ -577,11 +664,9 @@ export async function generateProjectPreview(ctx: HttpContext): Promise<HandlerR
 
     console.log(`🎬 [PROJECT CONTROLLER] Generating preview for project ${projectId}`);
 
-    // Generate preview video
-    const result = await generatePreview(
-      projectId,
-      project.template.path,  // Use template.path not template.src
-      project.audioSessionId,
+    // Use timeline-aware preview (includes subtitles, overlays, characters when present)
+    const result = await generateTimelinePreview(
+      project,
       (percent, message) => {
         console.log(`[PREVIEW] ${percent}% - ${message}`);
       }

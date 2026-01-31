@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import type { Clip, ClipRef } from '../../../features/editor/types';
+import { useState, useEffect, useRef } from 'react';
+import type { Clip, ClipRef, OverlayClip } from '../../../features/editor/types';
+import { API_ENDPOINTS, API_BASE_URL } from '../../../config/api';
 
 type Props = {
   width: number;
@@ -9,6 +10,7 @@ type Props = {
   selected: Clip | null;
   selectedRef: ClipRef | null;
   onUpdateClip: (patch: Partial<Clip>) => void;
+  projectId: string;
 };
 
 function clamp01(n: number): number {
@@ -21,8 +23,12 @@ export default function TextPropertiesPanel({
   selected,
   selectedRef,
   onUpdateClip,
+  projectId,
 }: Props) {
   const [isResizing, setIsResizing] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleMouseDown = () => {
     setIsResizing(true);
@@ -47,6 +53,62 @@ export default function TextPropertiesPanel({
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [isResizing, onWidthChange]);
+
+  // Load image preview when overlay clip is selected
+  useEffect(() => {
+    if (selected?.kind === 'overlay') {
+      const overlay = selected as OverlayClip;
+      if (overlay.path) {
+        setImagePreview(overlay.path);
+      } else {
+        // Try to load from storage/images/{sessionId}/{assetId}.png via API
+        setImagePreview(null);
+      }
+    } else {
+      setImagePreview(null);
+    }
+  }, [selected]);
+
+  const handleUploadImage = async (file: File) => {
+    if (!selected || selected.kind !== 'overlay') return;
+
+    setUploadingImage(true);
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+      formData.append('assetId', (selected as OverlayClip).assetId);
+
+      const response = await fetch(API_ENDPOINTS.uploadProjectImage(projectId), {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      if (data.success) {
+        // Update clip with image path
+        const fullPath = `${API_BASE_URL}/api/audio/download/${data.filename}?sessionId=${projectId}`;
+        onUpdateClip({ path: data.imagePath } as Partial<Clip>);
+        setImagePreview(data.imagePath);
+      }
+    } catch (error) {
+      console.error('Error uploading image:', error);
+      alert('Failed to upload image');
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      handleUploadImage(file);
+    }
+  };
 
   return (
     <div 
@@ -131,6 +193,57 @@ export default function TextPropertiesPanel({
               </div>
               <div className="mt-2 text-[11px] text-muted-foreground">
                 Tip: drag the overlay in the preview to change X/Y.
+              </div>
+            </div>
+          )}
+
+          {selected.kind === 'overlay' && (
+            <div className="rounded border border-border bg-muted/30 p-3">
+              <div className="text-xs font-semibold mb-3">Image Asset</div>
+              
+              {imagePreview ? (
+                <div className="space-y-2">
+                  <img 
+                    src={imagePreview} 
+                    alt="Overlay preview" 
+                    className="w-full rounded border border-border bg-black/5"
+                    onError={() => setImagePreview(null)}
+                  />
+                  <div className="text-[10px] text-muted-foreground truncate">{imagePreview}</div>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploadingImage}
+                    className="w-full px-3 py-2 text-xs bg-muted hover:bg-accent/10 border border-border rounded transition"
+                  >
+                    {uploadingImage ? 'Uploading...' : 'Replace Image'}
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="w-full h-32 rounded border-2 border-dashed border-border bg-muted/20 flex items-center justify-center text-muted-foreground text-xs">
+                    No image uploaded
+                  </div>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploadingImage}
+                    className="w-full px-3 py-2 text-xs bg-accent hover:bg-accent/90 text-white rounded transition disabled:opacity-50"
+                  >
+                    {uploadingImage ? 'Uploading...' : '📤 Upload Image'}
+                  </button>
+                </div>
+              )}
+              
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+              
+              <div className="mt-3 text-[10px] text-muted-foreground">
+                <div className="font-semibold mb-1">Asset ID: {(selected as OverlayClip).assetId}</div>
+                <div>Label: {(selected as OverlayClip).label}</div>
               </div>
             </div>
           )}

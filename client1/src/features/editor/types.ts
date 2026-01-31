@@ -11,10 +11,14 @@ export type AudioClip = BaseClip & {
   label: string;
 };
 
+export type WordTimestamp = { word: string; start: number; end: number };
+
 export type SubtitleClip = BaseClip & {
   kind: 'subtitle';
   speaker: 'Stewie' | 'Peter' | 'Narrator';
   text: string;
+  /** Word-level timestamps for karaoke effect */
+  words?: WordTimestamp[];
 };
 
 export type OverlayClip = BaseClip & {

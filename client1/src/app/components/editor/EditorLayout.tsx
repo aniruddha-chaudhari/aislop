@@ -48,6 +48,7 @@ type AudioSession = {
 export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const router = useRouter();
   const [isGeneratingDraft, setIsGeneratingDraft] = useState(false);
+  const [isGeneratingImagePlan, setIsGeneratingImagePlan] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
   const [message, setMessage] = useState<{ type: 'info' | 'error' | 'success'; text: string } | null>(null);
@@ -611,11 +612,18 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     }
   }, [isPlaying, draftProject.duration]);
 
-  const hasTimeline = draftProject.tracks.length > 0 && draftProject.tracks.some(t => t.clips.length > 0);
+  // Subtitles & characters generated (t_subs or t_chars have clips)
+  const hasSubtitlesAndChars = draftProject.tracks.some(t =>
+    (t.type === 'subtitle' || t.type === 'character') && t.clips.length > 0
+  );
+  // Image plan generated (t_imgs overlay track has clips)
+  const hasImagePlan = draftProject.tracks.some(t =>
+    t.id === 't_imgs' && t.type === 'overlay' && t.clips.length > 0
+  );
 
-  const handleGenerateAiDraft = async () => {
+  const handleGenerateSubtitlesAndChars = async () => {
     setIsGeneratingDraft(true);
-    setMessage({ type: 'info', text: 'Generating AI draft...' });
+    setMessage({ type: 'info', text: 'Generating subtitles & characters...' });
 
     try {
       const response = await fetch(API_ENDPOINTS.generateAiDraft(project.id), {
@@ -624,32 +632,62 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         body: JSON.stringify({ topic: project.name }),
       });
 
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data.success && data.project) {
+        setMessage({ type: 'success', text: 'Subtitles & characters generated!' });
+        if (onProjectUpdate) onProjectUpdate();
+        setTimeout(() => setMessage(null), 3000);
+      } else {
+        throw new Error(data.error || 'Failed to generate');
+      }
+    } catch (error) {
+      console.error('Error generating subtitles & characters:', error);
+      setMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : 'Failed to generate',
+      });
+    } finally {
+      setIsGeneratingDraft(false);
+    }
+  };
+
+  const handleGenerateImagePlan = async () => {
+    setIsGeneratingImagePlan(true);
+    setMessage({ type: 'info', text: 'Generating image plan...' });
+
+    try {
+      const response = await fetch(API_ENDPOINTS.generateImagePlan(project.id), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: project.name }),
+      });
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
       const data = await response.json();
-      
-      
+
       if (data.success && data.project) {
-        setMessage({ type: 'success', text: 'AI draft generated! Timeline is ready.' });
-        if (onProjectUpdate) {
-          onProjectUpdate();
-        }
-        // Clear message after 3s
+        setMessage({ type: 'success', text: 'Image plan generated!' });
+        if (onProjectUpdate) onProjectUpdate();
         setTimeout(() => setMessage(null), 3000);
       } else {
-        throw new Error(data.error || 'Failed to generate AI draft');
+        throw new Error(data.error || 'Failed to generate image plan');
       }
     } catch (error) {
-      console.error('Error generating AI draft:', error);
-      setMessage({ 
-        type: 'error', 
-        text: error instanceof Error ? error.message : 'Failed to generate AI draft' 
+      console.error('Error generating image plan:', error);
+      setMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : 'Failed to generate image plan',
       });
     } finally {
-      setIsGeneratingDraft(false);
+      setIsGeneratingImagePlan(false);
     }
   };
 
@@ -801,6 +839,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
               if (!selected) return;
               updateClip(selected, patch);
             }}
+            projectId={project.id}
           />
         </div>
 
@@ -814,9 +853,12 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
           projectName={project.name}
           onBack={() => router.back()}
           onExport={handleExport}
-          onGenerateAiDraft={handleGenerateAiDraft}
+          onGenerateSubtitlesAndChars={handleGenerateSubtitlesAndChars}
+          onGenerateImagePlan={handleGenerateImagePlan}
           isGeneratingDraft={isGeneratingDraft}
-          hasTimeline={hasTimeline}
+          isGeneratingImagePlan={isGeneratingImagePlan}
+          hasSubtitlesAndChars={hasSubtitlesAndChars}
+          hasImagePlan={hasImagePlan}
           onHeightChange={setTimelineHeight}
           onPlayPause={handlePlayToggle}
           onPlayheadChange={setPlayheadTime}

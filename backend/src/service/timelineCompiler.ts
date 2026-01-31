@@ -20,9 +20,24 @@ const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
  */
 export async function compileTimeline(
   project: Project,
-  onProgress?: (progress: number, message: string) => void
+  options?: {
+    quality?: 'preview' | 'final';
+    outputDir?: string;
+    outputFilename?: string;
+    onProgress?: (progress: number, message: string) => void;
+  }
 ): Promise<{ success: boolean; outputPath: string; error?: string }> {
-  console.log(`🎬 [COMPILER] Starting timeline compilation for project ${project.id}`);
+  const quality = options?.quality || 'final';
+  const outputDir = options?.outputDir || VIDEO_OUTPUT_DIR;
+  const outputFilename = options?.outputFilename || `${project.id}_${Date.now()}.mp4`;
+  const onProgress = options?.onProgress;
+
+  console.log(`🎬 [COMPILER] Starting timeline compilation for project ${project.id} (${quality} quality)`);
+
+  // Ensure output directory exists
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
 
   try {
     // 1. Load audio session files
@@ -31,21 +46,26 @@ export async function compileTimeline(
       throw new Error('No audio files found for session');
     }
 
-    // 2. Generate ASS subtitle file from timeline
-    const assPath = await generateAssFromTimeline(project.timeline, project.audioSessionId);
-
-    // 3. Concatenate audio files
+    // 2. Concatenate audio files
     const concatenatedAudioPath = await concatenateAudioFiles(audioFiles, project.id);
 
+    // 3. Generate ASS subtitle file from timeline (only if timeline exists)
+    let assPath: string | null = null;
+    if (project.timeline && project.timeline.tracks.length > 0) {
+      assPath = await generateAssFromTimeline(project.timeline, project.audioSessionId);
+    } else {
+      console.log(`⚠️ [COMPILER] No timeline found, skipping subtitle generation`);
+    }
+
     // 4. Build and execute FFmpeg command
-    const outputFilename = `${project.id}_${Date.now()}.mp4`;
-    const outputPath = path.join(VIDEO_OUTPUT_DIR, outputFilename);
+    const outputPath = path.join(outputDir, outputFilename);
 
     await executeFFmpegCommand(
       project,
       concatenatedAudioPath,
       assPath,
       outputPath,
+      quality,
       onProgress
     );
 
@@ -204,19 +224,28 @@ async function concatenateAudioFiles(
 async function executeFFmpegCommand(
   project: Project,
   audioPath: string,
-  assPath: string,
+  assPath: string | null,
   outputPath: string,
+  quality: 'preview' | 'final',
   onProgress?: (progress: number, message: string) => void
 ): Promise<void> {
   const ffmpeg = require('fluent-ffmpeg');
   const { timeline, template } = project;
 
-  // Get overlay and character clips
-  const overlayTrack = timeline.tracks.find(t => t.type === 'overlay');
-  const characterTrack = timeline.tracks.find(t => t.type === 'character');
+  // Determine duration - use timeline duration if available, else calculate from audio
+  let duration = timeline?.duration || 60; // Fallback to 60s
 
-  const overlayClips = overlayTrack?.clips.filter(c => c.kind === 'overlay') as OverlayClip[] || [];
-  const characterClips = characterTrack?.clips.filter(c => c.kind === 'character') as CharacterClip[] || [];
+  // Get overlay and character clips (only if timeline exists)
+  const overlayClips: OverlayClip[] = [];
+  const characterClips: CharacterClip[] = [];
+  
+  if (timeline && timeline.tracks.length > 0) {
+    const overlayTrack = timeline.tracks.find(t => t.type === 'overlay');
+    const characterTrack = timeline.tracks.find(t => t.type === 'character');
+    
+    overlayClips.push(...(overlayTrack?.clips.filter(c => c.kind === 'overlay') as OverlayClip[] || []));
+    characterClips.push(...(characterTrack?.clips.filter(c => c.kind === 'character') as CharacterClip[] || []));
+  }
 
   console.log(`📊 [COMPILER] Processing ${overlayClips.length} overlay clips, ${characterClips.length} character clips`);
 
@@ -230,7 +259,7 @@ async function executeFFmpegCommand(
       .input(template.path)
       .inputOptions([
         '-stream_loop', '-1', // Loop video
-        '-t', timeline.duration.toString() // Limit to timeline duration
+        '-t', duration.toString() // Limit to duration
       ]);
   } else {
     // Static image - convert to video
@@ -238,14 +267,14 @@ async function executeFFmpegCommand(
       .input(template.path)
       .inputOptions([
         '-loop', '1',
-        '-t', timeline.duration.toString()
+        '-t', duration.toString()
       ]);
   }
 
   // 2. Add audio
   command.input(audioPath);
 
-  // 3. Add overlay images as inputs (use clip.path when set, else storage/images/{sessionId}/{assetId}.png)
+  // 3. Add overlay images as inputs (only clips with existing image files)
   const overlayInputs: { clip: OverlayClip; inputIndex: number }[] = [];
   overlayClips.forEach((clip, index) => {
     const imagePath = clip.path ?? path.join(IMAGE_UPLOAD_DIR, project.audioSessionId, `${clip.assetId}.png`);
@@ -253,7 +282,7 @@ async function executeFFmpegCommand(
       command.input(imagePath);
       overlayInputs.push({ clip, inputIndex: 2 + index }); // 0=template, 1=audio, 2+=overlays
     } else {
-      console.warn(`⚠️ [COMPILER] Overlay image not found: ${imagePath}`);
+      console.warn(`⚠️ [COMPILER] Overlay image not found, skipping: ${imagePath}`);
     }
   });
 
@@ -263,7 +292,7 @@ async function executeFFmpegCommand(
   for (const clip of characterClips) {
     const charPath = getCharacterImagePath(clip.character);
     if (!charPath) {
-      console.warn(`⚠️ [COMPILER] Character image not found: ${clip.character}`);
+      console.warn(`⚠️ [COMPILER] Character image not found, skipping: ${clip.character}`);
       continue;
     }
     command.input(charPath);
@@ -273,13 +302,15 @@ async function executeFFmpegCommand(
     console.log(`🧍 [COMPILER] Adding ${characterInputs.length} character overlay(s)`);
   }
 
-  // 5. Build filter complex
+  // 5. Build filter complex (only if we have timeline elements)
   let filterComplex = '';
   let lastLabel = '0:v';
 
-  // Add subtitles first
-  filterComplex += `[${lastLabel}]ass='${assPath.replace(/\\/g, '\\\\').replace(/:/g, '\\:')}'[with_subs]`;
-  lastLabel = 'with_subs';
+  // Add subtitles first (only if assPath exists)
+  if (assPath && fs.existsSync(assPath)) {
+    filterComplex += `[${lastLabel}]ass='${assPath.replace(/\\/g, '\\\\').replace(/:/g, '\\:')}'[with_subs]`;
+    lastLabel = 'with_subs';
+  }
 
   // Add overlay images
   overlayInputs.forEach(({ clip, inputIndex }, index) => {
@@ -306,21 +337,41 @@ async function executeFFmpegCommand(
   });
 
   // Set output options
-  command
-    .complexFilter(filterComplex)
-    .outputOptions([
+  // Only use complex filter if we have filters to apply
+  if (filterComplex) {
+    command.complexFilter(filterComplex);
+    command.outputOptions([
       '-map', `[${lastLabel}]`, // Use final filtered video
       '-map', '1:a', // Use audio from input 1
       '-c:v', 'libx264',
-      '-preset', 'medium',
-      '-crf', '23',
+      '-preset', preset,
+      '-crf', crf,
+      '-s', scale,
       '-pix_fmt', 'yuv420p',
       '-c:a', 'aac',
-      '-b:a', '192k',
+      '-b:a', quality === 'preview' ? '128k' : '192k',
       '-ar', '44100',
       '-shortest'
-    ])
-    .output(outputPath);
+    ]);
+  } else {
+    // No filters - just template + audio
+    console.log('ℹ️ [COMPILER] No timeline elements, rendering template + audio only');
+    command.outputOptions([
+      '-map', '0:v', // Use template video
+      '-map', '1:a', // Use audio from input 1
+      '-c:v', 'libx264',
+      '-preset', preset,
+      '-crf', crf,
+      '-s', scale,
+      '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac',
+      '-b:a', quality === 'preview' ? '128k' : '192k',
+      '-ar', '44100',
+      '-shortest'
+    ]);
+  }
+  
+  command.output(outputPath);
 
   // Progress tracking
   command.on('progress', (progress: any) => {

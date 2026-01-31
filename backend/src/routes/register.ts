@@ -81,6 +81,8 @@ register([
   // Parameterized routes come after specific routes
   { method: 'GET', pattern: '/api/project/:id/export/status', handler: project.getExportStatus },
   { method: 'GET', pattern: '/api/project/:id/images', handler: project.listProjectImages },
+  { method: 'GET', pattern: '/api/project/:id/preview-video', handler: project.servePreview },
+  { method: 'POST', pattern: '/api/project/:id/preview', handler: project.generatePreview },
   { method: 'POST', pattern: '/api/project/:id/ai-draft', handler: project.generateAiDraftForProject },
   { method: 'PUT', pattern: '/api/project/:id/timeline', handler: project.saveTimeline },
   { method: 'POST', pattern: '/api/project/:id/export', handler: project.startExport },
