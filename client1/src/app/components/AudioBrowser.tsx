@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { Music, FolderOpen, Folder, CheckCircle, AlertTriangle, Square, Play, Trash2, Download, RefreshCw, Baby, User } from 'lucide-react';
 import { API_ENDPOINTS, API_BASE_URL } from '../../config/api';
 
 
@@ -101,10 +102,9 @@ export default function AudioBrowser() {
       return () => { cancelled = true; };
     }
 
-    // If backend already provided totals on each session, use those first
     const backendTotals: Record<string, number> = {};
     let hasAnyBackendTotal = false;
-    sessions.forEach((s: any) => {
+    sessions.forEach((s: AudioSession & { totalDurationSeconds?: number }) => {
       if (typeof s.totalDurationSeconds === 'number' && s.totalDurationSeconds > 0) {
         backendTotals[s.sessionId] = Math.floor(s.totalDurationSeconds);
         hasAnyBackendTotal = true;
@@ -112,11 +112,10 @@ export default function AudioBrowser() {
     });
     if (hasAnyBackendTotal) {
       setSessionDurations(backendTotals);
-      // Also use backend-provided start offsets per dialogue if present
       const offsets: Record<string, Record<string, number>> = {};
-      sessions.forEach((s: any) => {
+      sessions.forEach((s: AudioSession) => {
         const map: Record<string, number> = {};
-        s.dialogues?.forEach((d: any) => {
+        s.dialogues?.forEach((d: Dialogue) => {
           if (typeof d.startOffsetSeconds === 'number') {
             map[d.id] = Math.max(0, Math.floor(d.startOffsetSeconds));
           }
@@ -155,10 +154,7 @@ export default function AudioBrowser() {
       const perSessionOffsets: Record<string, Record<string, number>> = {};
 
       for (const session of sessions) {
-        // Build ordered list of dialogues with audio
         const dialoguesWithAudio = session.dialogues.filter(d => !!d.audioFile);
-
-        // Determine per-dialogue durations (using backend first)
         const durations: number[] = new Array(dialoguesWithAudio.length).fill(0);
         const pending: { index: number; promise: Promise<number> }[] = [];
 
@@ -180,7 +176,6 @@ export default function AudioBrowser() {
           });
         }
 
-        // Compute offsets per dialogue id
         let cumulative = 0;
         const offsetsForSession: Record<string, number> = {};
         dialoguesWithAudio.forEach((d, idx) => {
@@ -199,16 +194,11 @@ export default function AudioBrowser() {
     };
 
     compute();
-
     return () => { cancelled = true; };
   }, [sessions]);
 
-  // Normalize different backend shapes:
-  // 1) Node backend: { success: boolean, sessions: [...] }
-  // 2) Python (WhisperX) flat list: [ { filename, sessionId, ... } ]
-  // 3) Python (WhisperX) grouped: { sessions, files }
+  // Normalize different backend shapes
   const normalizeSessions = (rawData: any): AudioSession[] => {
-    // Case 1: Node backend with success flag
     if (rawData && typeof rawData === 'object' && 'success' in rawData) {
       const typed = rawData as AudioResponse;
       if (!typed.success) {
@@ -217,154 +207,39 @@ export default function AudioBrowser() {
       return typed.sessions || [];
     }
 
-    // Case 2: Python grouped payload { sessions, files }
     if (rawData && typeof rawData === 'object' && 'sessions' in rawData) {
       return Array.isArray((rawData as any).sessions) ? (rawData as any).sessions : [];
     }
 
-    // Case 3: Python flat array -> group by sessionId
-    if (Array.isArray(rawData)) {
-      const bySession: Record<string, AudioSession> = {};
-
-      rawData.forEach((item: any, idx: number) => {
-        const sessionId = item.sessionId || 'unknown_session';
-        if (!bySession[sessionId]) {
-          bySession[sessionId] = {
-            sessionId,
-            name: item.topic || `Session ${sessionId}`,
-            createdAt: item.generatedAt
-              ? new Date(
-                // generatedAt from stat.mtime is seconds; heuristic to convert
-                item.generatedAt > 10_000_000_000 ? item.generatedAt : item.generatedAt * 1000
-              ).toISOString()
-              : new Date().toISOString(),
-            parameters: {
-              exaggeration: item.exaggeration ?? 0.6,
-              temperature: item.temperature ?? 1.5,
-              seedNum: item.seedNum ?? 0,
-              cfgWeight: item.cfgWeight ?? 0.4,
-              minP: item.minP ?? 0.05,
-              topP: item.topP ?? 1.0,
-              repetitionPenalty: item.repetitionPenalty ?? 1.2
-            },
-            stats: {
-              totalDialogues: 0,
-              audioFilesGenerated: 0,
-              allSuccessful: true
-            },
-            dialogues: [],
-            files: []
-          };
-        }
-
-        const session = bySession[sessionId];
-        const file: AudioFile = {
-          id: item.id || item.filename || `file_${idx}`,
-          filename: item.filename || `file_${idx}.wav`,
-          path: item.path || '',
-          fileSize: item.fileSize || 0,
-          generatedAt: item.generatedAt
-            ? new Date(
-              item.generatedAt > 10_000_000_000 ? item.generatedAt : item.generatedAt * 1000
-            ).toISOString()
-            : new Date().toISOString(),
-          duration: item.duration || 0
-        };
-
-        const dialogue: Dialogue = {
-          id: item.dialogueId || `${sessionId}_${session.dialogues.length}`,
-          text: item.text || '',
-          character: item.character || 'Unknown',
-          order: typeof item.order === 'number' ? item.order : session.dialogues.length,
-          audioFile: file,
-          startOffsetSeconds: item.startOffsetSeconds
-        };
-
-        session.dialogues.push(dialogue);
-        session.files.push(file);
-        session.stats.totalDialogues += 1;
-        session.stats.audioFilesGenerated += 1;
-      });
-
-      return Object.values(bySession).sort((a, b) => {
-        const ai = parseInt(a.sessionId.replace(/\D/g, ''), 10);
-        const bi = parseInt(b.sessionId.replace(/\D/g, ''), 10);
-        if (isNaN(ai) || isNaN(bi)) return 0;
-        return bi - ai;
-      });
-    }
-
-    // Unknown shape
     throw new Error('Unexpected response format from /api/audio/files');
   };
 
   const fetchAudioFiles = async () => {
-    console.log(' Fetching audio files...');
     setLoading(true);
     setError('');
 
     try {
-      console.log('🌐 Fetching from:', API_ENDPOINTS.audio);
-
-      // Ask Python backend for grouped sessions to ease normalization; Node ignores the param.
-      const response = await fetch(`${API_ENDPOINTS.audio}?flat=false`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        mode: 'cors', // Explicitly set CORS mode
-        credentials: 'include', // Include credentials if needed
-      });
-
-      console.log('📡 Response status:', response.status);
-      console.log('📡 Response headers:', Object.fromEntries(response.headers.entries()));
+      const response = await fetch(`${API_ENDPOINTS.audio}?flat=false`);
 
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error(' Response error text:', errorText);
-        throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
 
       const rawData = await response.json();
-      console.log(' Fetched audio files data:', rawData);
-
       const normalized = normalizeSessions(rawData);
 
-      // Sort sessions newest-first by createdAt (fallback to updatedAt, then numeric suffix)
+      // Sort sessions newest-first
       const sortedSessions = normalized.sort((a, b) => {
-        const dateA = a.createdAt ? new Date(a.createdAt).getTime() : (a.updatedAt ? new Date(a.updatedAt).getTime() : 0);
-        const dateB = b.createdAt ? new Date(b.createdAt).getTime() : (b.updatedAt ? new Date(b.updatedAt).getTime() : 0);
-        if (dateA !== dateB) return dateB - dateA;
-
-        // Fallback to numeric suffix if dates are missing/identical
-        const aId = parseInt(String(a.sessionId).replace(/\D/g, '')) || 0;
-        const bId = parseInt(String(b.sessionId).replace(/\D/g, '')) || 0;
-        return bId - aId;
+        const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return dateB - dateA;
       });
 
-      console.log(' Sorted sessions:', sortedSessions.length);
       setSessions(sortedSessions);
-      console.log(' Sessions state updated');
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      const errorType = error instanceof Error ? error.constructor.name : 'Unknown';
-      console.error('💥 Error fetching audio files:', error);
-      console.error('💥 Error type:', errorType);
-      console.error('💥 Error message:', errorMessage);
-      console.error('💥 Full error object:', error);
-
-      // More specific error messages for common issues
-      if (errorMessage.includes('Failed to fetch') || errorMessage.includes('CORS')) {
-        setError('Connection blocked by browser security. Try: 1) Disable ad blockers, 2) Check antivirus settings, 3) Open http://localhost:5376 directly in a new tab.');
-      } else if (errorMessage.includes('ERR_NETWORK_CHANGED')) {
-        setError('Network connection changed. Please refresh the page.');
-      } else if (errorMessage.includes('net::ERR_INTERNET_DISCONNECTED')) {
-        setError('No internet connection. Please check your network.');
-      } else {
-        setError(`Failed to connect to server: ${errorMessage}. Make sure the backend is running on ${API_BASE_URL}.`);
-      }
+      setError(`Failed to connect to server: ${errorMessage}`);
     } finally {
-      console.log(' fetchAudioFiles completed');
       setLoading(false);
     }
   };
@@ -391,13 +266,11 @@ export default function AudioBrowser() {
     const session = sessions.find(s => s.sessionId === sessionId);
     if (!session) return;
 
-    // Stop any currently playing audio
     if (currentAudioElement) {
       currentAudioElement.pause();
       currentAudioElement.currentTime = 0;
     }
 
-    // Get all dialogues with audio files, sorted by order
     const dialoguesWithAudio = session.dialogues
       .filter(d => d.audioFile)
       .sort((a, b) => a.order - b.order);
@@ -409,7 +282,6 @@ export default function AudioBrowser() {
 
     setPlayingSession(sessionId);
 
-    // Play each audio file sequentially
     for (let i = 0; i < dialoguesWithAudio.length; i++) {
       const dialogue = dialoguesWithAudio[i];
 
@@ -418,19 +290,9 @@ export default function AudioBrowser() {
           const audio = new Audio(`${API_BASE_URL}/api/audio/download/${dialogue.audioFile!.filename}?sessionId=${sessionId}`);
           setCurrentAudioElement(audio);
 
-          audio.addEventListener('ended', () => {
-            resolve();
-          });
-
-          audio.addEventListener('error', (err) => {
-            console.error('Error playing audio:', err);
-            reject(err);
-          });
-
-          audio.play().catch(err => {
-            console.error('Error playing audio:', err);
-            reject(err);
-          });
+          audio.addEventListener('ended', () => resolve());
+          audio.addEventListener('error', (err) => reject(err));
+          audio.play().catch(err => reject(err));
         });
       } catch (error) {
         console.error('Failed to play audio file:', error);
@@ -470,17 +332,13 @@ export default function AudioBrowser() {
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      // Refresh the audio files list
       await fetchAudioFiles();
-
-      console.log('Audio file deleted successfully');
     } catch (error) {
       console.error('Error deleting audio file:', error);
-      setError('Failed to delete audio file. Please try again.');
+      setError('Failed to delete audio file');
     }
   };
 
@@ -488,62 +346,36 @@ export default function AudioBrowser() {
     setRegeneratingIndex(filename);
     setError('');
 
-    // Prepare the request body with current text if not modified
     const requestBody = {
       ...regenerateParams,
       text: regenerateParams.text.trim() !== '' ? regenerateParams.text.trim() : currentText
     };
-
-    console.log(' Regenerating audio with request body:', requestBody);
-    console.log('🔗 API URL:', `${API_BASE_URL}/api/audio/regenerate/${sessionId}/${filename}`);
-
-    // Check if the request body looks correct
-    console.log(' Request body JSON:', JSON.stringify(requestBody, null, 2));
 
     try {
       const response = await fetch(
         `${API_BASE_URL}/api/audio/regenerate/${sessionId}/${filename}`,
         {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(requestBody),
         }
       );
 
-      console.log('📡 Response status:', response.status);
-      console.log('📡 Response headers:', Object.fromEntries(response.headers.entries()));
-
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error(' Response error text:', errorText);
-        const errorData = JSON.parse(errorText);
-        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
 
       const data = await response.json();
-      console.log('✅ Response data:', data);
 
       if (data.success) {
-        // Refresh the audio files list to show updated file
-        console.log('✅ Regeneration successful, refreshing audio files...');
         await fetchAudioFiles();
-        console.log('✅ Audio files refreshed successfully');
-        setError(''); // Clear any previous errors
+        setError('');
       } else {
-        console.error(' Regeneration failed:', data);
         setError('Failed to regenerate audio');
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      const errorType = error instanceof Error ? error.constructor.name : 'Unknown';
-      const errorStack = error instanceof Error ? error.stack : undefined;
-      console.error('💥 Error regenerating audio:', error);
-      console.error('💥 Error type:', errorType);
-      console.error('💥 Error message:', errorMessage);
-      console.error('💥 Error stack:', errorStack);
-      setError(`Failed to regenerate audio: ${errorMessage}`);
+      console.error('Error regenerating audio:', error);
+      setError('Failed to regenerate audio');
     } finally {
       setRegeneratingIndex(null);
       setShowRegenerateDropdown(null);
@@ -554,7 +386,7 @@ export default function AudioBrowser() {
     const session = sessions.find(s => s.sessionId === sessionId);
     const sessionName = session?.name || `Session ${sessionId}`;
 
-    if (!confirm(`Are you sure you want to delete "${sessionName}" and all its audio files? This action cannot be undone.`)) {
+    if (!confirm(`Are you sure you want to delete "${sessionName}"?`)) {
       return;
     }
 
@@ -567,404 +399,344 @@ export default function AudioBrowser() {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      const data = await response.json();
-
-      if (data.success) {
-        // Remove the session from the state
-        setSessions(sessions.filter(session => session.sessionId !== sessionId));
-        alert(`"${sessionName}" deleted successfully`);
-      } else {
-        throw new Error(data.error || 'Failed to delete session');
-      }
+      setSessions(sessions.filter(s => s.sessionId !== sessionId));
     } catch (error) {
       console.error('Error deleting session:', error);
-      setError('Failed to delete session. Please try again.');
-    }
-  };
-
-  const formatSessionId = (sessionId: string) => {
-    try {
-      const timestamp = parseInt(sessionId.replace('audio_', ''));
-      const date = new Date(timestamp);
-      return date.toLocaleString();
-    } catch {
-      return sessionId;
+      setError('Failed to delete session');
     }
   };
 
   if (loading) {
     return (
-      <div className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-[0_20px_40px_var(--shadow)]">
-        <div className="flex items-center justify-center py-12 text-[var(--editor-muted)]">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-[var(--accent)] border-t-transparent" />
-          <span className="ml-3 text-sm">Loading audio files...</span>
-        </div>
+      <div className="flex items-center justify-center py-12">
+        <div className="text-sm text-[var(--editor-muted)]">Loading audio files...</div>
       </div>
     );
   }
 
   return (
-    <div className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-3 shadow-[0_20px_40px_var(--shadow)] sm:p-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0 mb-6">
-        <h2 className="text-xl sm:text-2xl font-bold text-[var(--foreground)]">
-          Browse Audio Files
-        </h2>
+    <div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between mb-6">
+        <div>
+          <div className="text-sm font-semibold">Audio Library</div>
+          <div className="mt-1 text-xs text-[var(--editor-muted)]">
+            {sessions.length > 0 ? `${sessions.length} session${sessions.length !== 1 ? 's' : ''}` : 'No sessions yet'}
+          </div>
+        </div>
         <button
           onClick={fetchAudioFiles}
-          className="rounded-md bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] transition-colors hover:bg-[var(--secondary)]"
+          className="studio-button-secondary rounded-xl px-3 py-2 text-xs font-semibold shadow-[0_14px_32px_var(--shadow)] transition"
         >
           Refresh
         </button>
       </div>
 
       {error && (
-        <div className="mb-6 rounded-md border border-red-800 bg-red-900/20 p-4">
-          <p className="text-sm text-red-400">{error}</p>
+        <div className="mb-6 rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-500">
+          {error}
         </div>
       )}
 
       {sessions.length === 0 ? (
-        <div className="py-12 text-center">
-          <div className="mb-4 text-6xl text-[var(--editor-muted)]">🎵</div>
-          <h3 className="mb-2 text-lg font-semibold text-[var(--foreground)]">
-            No audio files found
-          </h3>
-          <p className="mb-4 text-sm text-[var(--editor-muted)]">
-            Generate some conversations with audio to see them here.
+        <div className="rounded-2xl border border-[var(--border)] bg-[var(--card)] px-6 py-12 text-center">
+          <Music className="w-16 h-16 mx-auto mb-4 text-[var(--editor-muted)]" />
+          <h3 className="text-lg font-semibold mb-2">No audio files found</h3>
+          <p className="text-sm text-[var(--editor-muted)]">
+            Generate conversations with audio to see them here.
           </p>
         </div>
       ) : (
-        <div className="space-y-4">
-          <p className="mb-4 text-sm text-[var(--editor-muted)]">
-            Found {sessions.length} conversation session{sessions.length !== 1 ? 's' : ''}
-          </p>
-
+        <div className="space-y-3">
           {sessions.map((session) => (
             <div
               key={session.sessionId}
-              className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--secondary)]"
+              className="rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-[0_18px_40px_var(--shadow)] overflow-hidden transition hover:border-[color-mix(in_srgb,var(--accent)_45%,var(--border))] hover:bg-[color-mix(in_srgb,var(--card)_85%,black)]"
             >
-              {/* Session Header */}
-              <div className="flex items-center justify-between bg-[var(--primary)] px-3 py-3 sm:px-4">
+              <div className="px-4 py-3 flex items-center justify-between bg-[var(--muted)]/30 border-b border-[var(--border)]">
                 <button
                   onClick={() => toggleSession(session.sessionId)}
-                  className="flex items-start sm:items-center space-x-2 sm:space-x-3 flex-1 hover:bg-gray-100 dark:hover:bg-gray-600 rounded px-2 py-1 -mx-2 -my-1 transition-colors"
+                  className="flex items-center space-x-3 flex-1 text-left hover:opacity-80 transition"
                 >
-                  <span className="text-lg flex-shrink-0 mt-0.5 sm:mt-0">
-                    {expandedSessions.has(session.sessionId) ? '📂' : '📁'}
-                  </span>
-                  <div className="text-left min-w-0 flex-1">
-                    <h3 className="break-words text-sm font-semibold text-[var(--foreground)] sm:text-base">
+                  {expandedSessions.has(session.sessionId) ? (
+                    <FolderOpen className="w-5 h-5 flex-shrink-0 text-[var(--editor-muted)]" />
+                  ) : (
+                    <Folder className="w-5 h-5 flex-shrink-0 text-[var(--editor-muted)]" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-sm font-semibold truncate">
                       {session.name || `Session ${session.sessionId}`}
                     </h3>
-                    <div className="space-y-1 text-xs text-[var(--editor-muted)] sm:text-sm sm:space-y-0">
-                      <div className="flex flex-wrap gap-1 sm:gap-2">
-                        <span>{formatSessionId(session.sessionId)}</span>
-                        <span>•</span>
-                        <span>{session.stats.audioFilesGenerated}/{session.stats.totalDialogues} files</span>
-                        <span>•</span>
-                        <span>{session.stats.allSuccessful ? '✅ Complete' : '⚠️ Partial'}</span>
-                      </div>
-                      <div className="sm:inline">
-                        <span>Total: {formatDurationLabel(sessionDurations[session.sessionId] || 0)}</span>
-                      </div>
-                    </div>
-                    <div className="mt-1 flex flex-wrap gap-2 text-xs text-[var(--editor-muted)]">
-                      <span>Exag: {session.parameters.exaggeration}</span>
+                    <div className="flex items-center gap-1.5 text-xs text-[var(--editor-muted)] mt-1">
+                      <span>{session.stats.audioFilesGenerated}/{session.stats.totalDialogues} files</span>
                       <span>•</span>
-                      <span>Temp: {session.parameters.temperature}</span>
+                      <span>Total: {formatDurationLabel(sessionDurations[session.sessionId] ?? 0)}</span>
+                      <span>•</span>
+                      {session.stats.allSuccessful ? (
+                        <span className="flex items-center gap-1">
+                          <CheckCircle className="w-3 h-3" />
+                          Complete
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1">
+                          <AlertTriangle className="w-3 h-3" />
+                          Partial
+                        </span>
+                      )}
                     </div>
                   </div>
-                  <span className="ml-2 flex-shrink-0 text-[var(--editor-muted)]">
-                    {expandedSessions.has(session.sessionId) ? '▼' : '▶'}
-                  </span>
                 </button>
-                <div className="flex items-center gap-2 ml-2 sm:ml-3">
+                <div className="flex items-center gap-2">
                   {playingSession === session.sessionId ? (
                     <button
                       onClick={() => stopAllAudio()}
-                      className="flex flex-shrink-0 items-center gap-1 rounded-md bg-red-600 px-2 py-1 text-xs text-white transition-colors hover:bg-red-500 sm:px-3 sm:text-sm"
-                      title="Stop playing all audio"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500 hover:bg-red-600 text-white text-xs font-medium transition"
                     >
-                      <span>⏹️</span>
-                      <span className="hidden sm:inline">Stop</span>
+                      <Square className="w-3.5 h-3.5" />
+                      Stop
                     </button>
                   ) : (
                     <button
                       onClick={() => playAllAudio(session.sessionId)}
-                      className="flex flex-shrink-0 items-center gap-1 rounded-md bg-emerald-600 px-2 py-1 text-xs text-white transition-colors hover:bg-emerald-500 sm:px-3 sm:text-sm"
-                      title="Play all audio files in sequence"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-500 hover:bg-green-600 text-white text-xs font-medium transition"
                       disabled={session.stats.audioFilesGenerated === 0}
                     >
-                      <span>▶️</span>
-                      <span className="hidden sm:inline">Play All</span>
+                      <Play className="w-3.5 h-3.5" />
+                      Play All
                     </button>
                   )}
                   <button
                     onClick={() => deleteSession(session.sessionId)}
-                    className="flex-shrink-0 rounded-md bg-red-600 px-2 py-1 text-xs text-white transition-colors hover:bg-red-500 sm:px-3 sm:text-sm"
-                    title="Delete session and all audio files"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-500 text-xs font-medium border border-red-500/20 transition"
                   >
-                    <span className="sm:hidden">🗑️</span>
-                    <span className="hidden sm:inline">🗑️ Delete</span>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Delete
                   </button>
                 </div>
               </div>
 
-              {/* Session Content */}
               {expandedSessions.has(session.sessionId) && (
-                <div className="space-y-3 bg-[var(--secondary)] p-3 sm:p-4">
+                <div className="p-4 space-y-3">
                   {session.dialogues.map((dialogue) => (
                     <div
                       key={dialogue.id}
-                      className={`dialogue-container overflow-visible rounded-lg border-l-4 p-3 sm:p-4 ${
-                        dialogue.character === 'Stewie'
-                          ? 'border-purple-400 bg-black/30'
-                          : dialogue.character === 'Peter'
-                            ? 'border-emerald-400 bg-black/30'
-                            : 'border-gray-500 bg-black/30'
-                        }`}
+                      className="rounded-xl border border-[var(--border)] bg-[var(--muted)]/20 p-4 transition hover:bg-[var(--muted)]/30"
                     >
-                      <div className="space-y-3 min-w-0">
-                        <div className="flex items-start space-x-2 sm:space-x-3 mb-2">
-                          <span className="text-xl sm:text-2xl flex-shrink-0">
-                            {dialogue.character === 'Stewie' ? '👶' : dialogue.character === 'Peter' ? '👨' : '🎵'}
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <p
-                              className={`text-sm font-semibold sm:text-base ${
-                                dialogue.character === 'Stewie'
-                                  ? 'text-purple-300'
-                                  : dialogue.character === 'Peter'
-                                    ? 'text-emerald-300'
-                                    : 'text-[var(--foreground)]'
-                              }`}
-                            >
-                              {dialogue.character} - Line {dialogue.order}
+                      <div className="flex items-start gap-3 mb-3">
+                        {dialogue.character === 'Stewie' ? (
+                          <Baby className="w-6 h-6 flex-shrink-0 mt-0.5 text-[var(--editor-muted)]" />
+                        ) : (
+                          <User className="w-6 h-6 flex-shrink-0 mt-0.5 text-[var(--editor-muted)]" />
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 mb-2">
+                            <p className="text-sm font-semibold">
+                              {dialogue.character}
                             </p>
-                            {dialogue.audioFile && (
-                              <p className="text-sm text-[var(--editor-muted)]">
-                                {dialogue.audioFile.filename} • {(dialogue.audioFile.fileSize / 1024).toFixed(1)} KB •
-                                <span className="ml-1">
-                                  ⏱️ {formatDurationLabel((sessionOffsets[session.sessionId]?.[dialogue.id]) || 0)}
-                                </span>
-                              </p>
-                            )}
+                            <span className="text-xs text-[var(--editor-muted)]">•</span>
+                            <p className="text-xs text-[var(--editor-muted)]">
+                              Line {dialogue.order}
+                            </p>
                           </div>
+                          {dialogue.audioFile && (
+                            <p className="text-xs text-[var(--editor-muted)] font-mono break-all">
+                              {dialogue.audioFile.filename}
+                            </p>
+                          )}
                         </div>
-                        <div className="ml-0 sm:ml-11 mt-2 overflow-hidden">
-                          <p className="break-words text-sm italic text-[var(--foreground)] sm:text-base word-wrap overflow-wrap-anywhere">
-                            &ldquo;{dialogue.text}&rdquo;
-                          </p>
-                        </div>
+                      </div>
+                      <div className="ml-11 border-l-2 border-[var(--accent)]/30 pl-3">
+                        <p className="text-base leading-relaxed text-white">
+                          {dialogue.text}
+                        </p>
+                      </div>
 
-                        {dialogue.audioFile && (
-                          <div className="flex flex-wrap gap-2 ml-0 sm:ml-11 mt-3">
+                      {dialogue.audioFile && (
+                        <>
+                          <div className="flex flex-wrap gap-2 ml-11 mt-4">
                             <button
                               onClick={() => playAudio(dialogue.audioFile!.filename, session.sessionId)}
-                              className="flex items-center gap-1 rounded-md bg-[var(--primary)] px-3 py-2 text-xs text-[var(--primary-foreground)] transition-colors hover:bg-[var(--secondary)] sm:text-sm"
-                              title="Play audio"
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500 hover:bg-blue-600 text-white text-xs font-medium transition"
                             >
-                              <span>▶️</span>
-                              <span className="hidden sm:inline">Play</span>
+                              <Play className="w-3.5 h-3.5" />
+                              Play
                             </button>
                             <button
                               onClick={() => downloadAudio(dialogue.audioFile!.filename, session.sessionId)}
-                              className="flex items-center gap-1 rounded-md bg-neutral-600 px-3 py-2 text-xs text-white transition-colors hover:bg-neutral-500 sm:text-sm"
-                              title="Download audio"
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-500 hover:bg-gray-600 text-white text-xs font-medium transition"
                             >
-                              <span>⬇️</span>
-                              <span className="hidden sm:inline">Download</span>
+                              <Download className="w-3.5 h-3.5" />
+                              Download
                             </button>
                             <button
                               onClick={() => deleteAudioFile(dialogue.audioFile!.filename, session.sessionId)}
-                              className="flex items-center gap-1 rounded-md bg-red-600 px-3 py-2 text-xs text-white transition-colors hover:bg-red-500 sm:text-sm"
-                              title="Delete audio file"
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500 hover:bg-red-600 text-white text-xs font-medium transition"
                             >
-                              <span>🗑️</span>
-                              <span className="hidden sm:inline">Delete</span>
+                              <Trash2 className="w-3.5 h-3.5" />
+                              Delete
                             </button>
-                            <div className="relative">
-                              <button
-                                onClick={() => {
-                                  setShowRegenerateDropdown(
-                                    showRegenerateDropdown === dialogue.audioFile!.filename
-                                      ? null
-                                      : dialogue.audioFile!.filename
-                                  );
-                                  // Reset parameters with current text
-                                  console.log(' Opening regenerate dropdown for:', dialogue.audioFile!.filename);
-                                  console.log(' Current dialogue text:', dialogue.text);
-                                  setRegenerateParams(prev => ({
-                                    ...prev,
-                                    text: dialogue.text
-                                  }));
-                                  console.log(' Set regenerateParams.text to:', dialogue.text);
-                                }}
-                                className="flex items-center gap-1 rounded-md bg-amber-500 px-3 py-2 text-xs text-black transition-colors hover:bg-amber-400 sm:text-sm"
-                                title="Regenerate audio with different parameters"
-                                disabled={regeneratingIndex === dialogue.audioFile!.filename}
-                              >
-                                <span></span>
-                                <span className="hidden sm:inline">
-                                  {regeneratingIndex === dialogue.audioFile!.filename ? 'Regenerating...' : 'Regenerate'}
-                                </span>
-                              </button>
-                            </div>
+                            <button
+                              onClick={() => {
+                                setShowRegenerateDropdown(
+                                  showRegenerateDropdown === dialogue.audioFile!.filename
+                                    ? null
+                                    : dialogue.audioFile!.filename
+                                );
+                                setRegenerateParams(prev => ({
+                                  ...prev,
+                                  text: dialogue.text
+                                }));
+                              }}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium transition"
+                              disabled={regeneratingIndex === dialogue.audioFile!.filename}
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${regeneratingIndex === dialogue.audioFile!.filename ? 'animate-spin' : ''}`} />
+                              {regeneratingIndex === dialogue.audioFile!.filename ? 'Regenerating...' : 'Regenerate'}
+                            </button>
                           </div>
-                        )}
 
-                        {/* Regenerate Parameters - Show inline on mobile, dropdown on desktop */}
-                        {showRegenerateDropdown === dialogue.audioFile!.filename && (
-                          <div className="mt-4 rounded-md border border-[var(--border)] bg-[var(--secondary)] p-4">
-                            <h4 className="mb-3 text-sm font-semibold text-[var(--foreground)]">Regenerate Parameters</h4>
+                          {/* Regenerate Parameters */}
+                          {showRegenerateDropdown === dialogue.audioFile!.filename && (
+                            <div className="mt-4 p-4 bg-[var(--muted)]/50 border border-[var(--border)] rounded-lg ml-11">
+                              <h4 className="text-sm font-semibold mb-3">Regenerate Parameters</h4>
 
-                            <div className="space-y-3">
-                              <div>
-                                <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">
-                                  Exaggeration: {regenerateParams.exaggeration}
-                                </label>
-                                <input
-                                  type="range"
-                                  min="0"
-                                  max="1"
-                                  step="0.1"
-                                  value={regenerateParams.exaggeration}
-                                  onChange={(e) => setRegenerateParams(prev => ({ ...prev, exaggeration: parseFloat(e.target.value) }))}
-                                  className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-neutral-700"
-                                />
+                              <div className="space-y-3">
+                                <div>
+                                  <label className="block text-xs font-medium mb-1">
+                                    Exaggeration: {regenerateParams.exaggeration}
+                                  </label>
+                                  <input
+                                    type="range"
+                                    min="0"
+                                    max="1"
+                                    step="0.1"
+                                    value={regenerateParams.exaggeration}
+                                    onChange={(e) => setRegenerateParams(prev => ({ ...prev, exaggeration: parseFloat(e.target.value) }))}
+                                    className="w-full"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block text-xs font-medium mb-1">
+                                    Temperature: {regenerateParams.temperature}
+                                  </label>
+                                  <input
+                                    type="range"
+                                    min="0.5"
+                                    max="2.0"
+                                    step="0.1"
+                                    value={regenerateParams.temperature}
+                                    onChange={(e) => setRegenerateParams(prev => ({ ...prev, temperature: parseFloat(e.target.value) }))}
+                                    className="w-full"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block text-xs font-medium mb-1">
+                                    Seed: {regenerateParams.seedNum}
+                                  </label>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    max="999999"
+                                    value={regenerateParams.seedNum}
+                                    onChange={(e) => setRegenerateParams(prev => ({ ...prev, seedNum: parseInt(e.target.value) || 0 }))}
+                                    className="w-full px-2 py-1 text-sm border border-[var(--border)] rounded-md bg-[var(--background)]"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block text-xs font-medium mb-1">
+                                    CFG Weight: {regenerateParams.cfgWeight}
+                                  </label>
+                                  <input
+                                    type="range"
+                                    min="0"
+                                    max="1"
+                                    step="0.1"
+                                    value={regenerateParams.cfgWeight}
+                                    onChange={(e) => setRegenerateParams(prev => ({ ...prev, cfgWeight: parseFloat(e.target.value) }))}
+                                    className="w-full"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block text-xs font-medium mb-1">
+                                    Min P: {regenerateParams.minP}
+                                  </label>
+                                  <input
+                                    type="range"
+                                    min="0"
+                                    max="0.5"
+                                    step="0.01"
+                                    value={regenerateParams.minP}
+                                    onChange={(e) => setRegenerateParams(prev => ({ ...prev, minP: parseFloat(e.target.value) }))}
+                                    className="w-full"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block text-xs font-medium mb-1">
+                                    Top P: {regenerateParams.topP}
+                                  </label>
+                                  <input
+                                    type="range"
+                                    min="0.5"
+                                    max="1.0"
+                                    step="0.05"
+                                    value={regenerateParams.topP}
+                                    onChange={(e) => setRegenerateParams(prev => ({ ...prev, topP: parseFloat(e.target.value) }))}
+                                    className="w-full"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block text-xs font-medium mb-1">
+                                    Repetition Penalty: {regenerateParams.repetitionPenalty}
+                                  </label>
+                                  <input
+                                    type="range"
+                                    min="1.0"
+                                    max="2.0"
+                                    step="0.1"
+                                    value={regenerateParams.repetitionPenalty}
+                                    onChange={(e) => setRegenerateParams(prev => ({ ...prev, repetitionPenalty: parseFloat(e.target.value) }))}
+                                    className="w-full"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block text-xs font-medium mb-1">
+                                    Dialogue Text (leave empty to use original)
+                                  </label>
+                                  <textarea
+                                    value={regenerateParams.text}
+                                    onChange={(e) => setRegenerateParams(prev => ({ ...prev, text: e.target.value }))}
+                                    rows={4}
+                                    className="w-full px-3 py-2 text-sm border border-[var(--border)] rounded-md bg-[var(--background)] resize-none"
+                                    placeholder={dialogue.text}
+                                  />
+                                </div>
                               </div>
 
-                              <div>
-                                <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">
-                                  Temperature: {regenerateParams.temperature}
-                                </label>
-                                <input
-                                  type="range"
-                                  min="0.5"
-                                  max="2.0"
-                                  step="0.1"
-                                  value={regenerateParams.temperature}
-                                  onChange={(e) => setRegenerateParams(prev => ({ ...prev, temperature: parseFloat(e.target.value) }))}
-                                  className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-neutral-700"
-                                />
-                              </div>
-
-                              <div>
-                                <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">
-                                  Seed: {regenerateParams.seedNum}
-                                </label>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  max="999999"
-                                  value={regenerateParams.seedNum}
-                                  onChange={(e) => setRegenerateParams(prev => ({ ...prev, seedNum: parseInt(e.target.value) || 0 }))}
-                                  className="w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm text-[var(--foreground)]"
-                                />
-                              </div>
-
-                              <div>
-                                <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">
-                                  CFG Weight: {regenerateParams.cfgWeight}
-                                </label>
-                                <input
-                                  type="range"
-                                  min="0"
-                                  max="1"
-                                  step="0.1"
-                                  value={regenerateParams.cfgWeight}
-                                  onChange={(e) => setRegenerateParams(prev => ({ ...prev, cfgWeight: parseFloat(e.target.value) }))}
-                                  className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-neutral-700"
-                                />
-                              </div>
-
-                              <div>
-                                <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">
-                                  Min P: {regenerateParams.minP}
-                                </label>
-                                <input
-                                  type="range"
-                                  min="0"
-                                  max="0.5"
-                                  step="0.01"
-                                  value={regenerateParams.minP}
-                                  onChange={(e) => setRegenerateParams(prev => ({ ...prev, minP: parseFloat(e.target.value) }))}
-                                  className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-neutral-700"
-                                />
-                              </div>
-
-                              <div>
-                                <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">
-                                  Top P: {regenerateParams.topP}
-                                </label>
-                                <input
-                                  type="range"
-                                  min="0.5"
-                                  max="1.0"
-                                  step="0.05"
-                                  value={regenerateParams.topP}
-                                  onChange={(e) => setRegenerateParams(prev => ({ ...prev, topP: parseFloat(e.target.value) }))}
-                                  className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-neutral-700"
-                                />
-                              </div>
-
-                              <div>
-                                <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">
-                                  Repetition Penalty: {regenerateParams.repetitionPenalty}
-                                </label>
-                                <input
-                                  type="range"
-                                  min="1.0"
-                                  max="2.0"
-                                  step="0.1"
-                                  value={regenerateParams.repetitionPenalty}
-                                  onChange={(e) => setRegenerateParams(prev => ({ ...prev, repetitionPenalty: parseFloat(e.target.value) }))}
-                                  className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-neutral-700"
-                                />
+                              <div className="flex gap-2 mt-4">
+                                <button
+                                  onClick={() => regenerateAudioFile(dialogue.audioFile!.filename, session.sessionId, dialogue.text)}
+                                  className="flex-1 px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm rounded-lg transition"
+                                  disabled={regeneratingIndex === dialogue.audioFile!.filename}
+                                >
+                                  {regeneratingIndex === dialogue.audioFile!.filename ? 'Regenerating...' : 'Regenerate Audio'}
+                                </button>
+                                <button
+                                  onClick={() => setShowRegenerateDropdown(null)}
+                                  className="px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white text-sm rounded-lg transition"
+                                >
+                                  Cancel
+                                </button>
                               </div>
                             </div>
-
-                            <div className="space-y-3 mt-4">
-                              <div>
-                                <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">
-                                  Dialogue Text (leave empty to use original text)
-                                </label>
-                                <textarea
-                                  value={regenerateParams.text}
-                                  onChange={(e) => setRegenerateParams(prev => ({ ...prev, text: e.target.value }))}
-                                  rows={4}
-                                  className="w-full resize-none rounded-md border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm text-[var(--foreground)]"
-                                  placeholder={dialogue.text}
-                                />
-                              </div>
-                            </div>
-
-                            <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 mt-4">
-                              <button
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  console.log('🔘 Button clicked for file:', dialogue.audioFile!.filename);
-                                  console.log('🔘 Current regenerateParams:', regenerateParams);
-                                  console.log('🔘 Current text value:', regenerateParams.text);
-                                  regenerateAudioFile(dialogue.audioFile!.filename, session.sessionId, dialogue.text);
-                                }}
-                                className="flex-1 rounded-md bg-amber-500 px-4 py-2 text-sm text-black transition-colors hover:bg-amber-400 disabled:opacity-50"
-                                disabled={regeneratingIndex === dialogue.audioFile!.filename}
-                              >
-                                {regeneratingIndex === dialogue.audioFile!.filename ? 'Regenerating...' : 'Regenerate Audio'}
-                              </button>
-                              <button
-                                onClick={() => setShowRegenerateDropdown(null)}
-                                className="rounded-md bg-neutral-700 px-4 py-2 text-sm text-white transition-colors hover:bg-neutral-600"
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
+                          )}
+                        </>
+                      )}
                     </div>
                   ))}
                 </div>

@@ -47,6 +47,8 @@ export const API_ENDPOINTS = {
   deleteVideo: `${API_BASE_URL}/api/video/delete`,
   cleanupVideos: `${API_BASE_URL}/api/video/cleanup`,
   templateVideos: `${API_BASE_URL}/api/video/templates`,
+  serveTemplateVideo: (filename: string) => `${API_BASE_URL}/api/video/templates/${encodeURIComponent(filename)}`,
+  uploadTemplate: `${API_BASE_URL}/api/video/upload-template`,
   uploadTemplateVideo: `${API_BASE_URL}/api/video/upload-template`,
   uploadAss: `${API_BASE_URL}/api/video/upload-ass`,
   analyzeAss: `${API_BASE_URL}/api/video/analyze-ass`,
@@ -72,4 +74,17 @@ export const API_ENDPOINTS = {
 
   // Image generation endpoint
   generateImage: `${API_BASE_URL}/api/image/generate`,
+
+  // Project (Timeline Editor) endpoints
+  createProject: `${API_BASE_URL}/api/project/create`,
+  listProjects: `${API_BASE_URL}/api/project/list`,
+  getProject: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}`,
+  updateProject: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}`,
+  deleteProject: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}`,
+  generateAiDraft: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/ai-draft`,
+  saveTimeline: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/timeline`,
+  exportProject: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/export`,
+  exportStatus: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/export/status`,
+  uploadProjectImage: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/upload-image`,
+  projectImages: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/images`,
 } as const;

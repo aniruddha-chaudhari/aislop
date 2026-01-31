@@ -8,7 +8,6 @@ generator client {
 
 datasource db {
   provider = "sqlite"
-  url      = "file:./dev.db"
 }
 
 model Session {
@@ -32,6 +31,7 @@ model Session {
   totalDialogues     Int     @default(0)
   audioFilesGenerated Int    @default(0)
   allSuccessful      Boolean @default(false)
+  totalDuration      Float?  // Total duration in seconds (sum of all audio files)
 
   // Relations
   dialogues      Dialogue[]

@@ -21,10 +21,11 @@ export type OverlayClip = BaseClip & {
   kind: 'overlay';
   assetId: string;
   label: string;
-  // normalized position in preview space [0..1]
   x: number;
   y: number;
   scale: number;
+  /** When set, export uses this path instead of storage/images/{sessionId}/{assetId}.png */
+  path?: string;
 };
 
 export type CharacterClip = BaseClip & {
@@ -56,6 +57,7 @@ export type EditorProject = {
   name: string;
   format: '9:16';
   duration: number;
+  audioSessionId?: string;
   template: {
     type: 'video' | 'image';
     label: string;

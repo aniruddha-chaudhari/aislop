@@ -69,6 +69,10 @@ Thumbs.db
 # Output of 'npm pack'
 *.tgz
 
+
+.cursor
+.agents
+
 # Yarn Integrity file
 .yarn-integrity
 temp

@@ -1,8 +1,14 @@
 'use client';
 
-import { useEffect, useMemo, useRef } from 'react';
-import { Pause, Play, Volume2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CharacterClip, Clip, ClipRef, EditorProject, OverlayClip, SubtitleClip } from '../../../features/editor/types';
+import { API_ENDPOINTS } from '../../../config/api';
+
+export type PreviewPlayerApi = {
+  /** Optional: seek to this time (seconds) before playing. Use current playhead so video starts from timeline position. */
+  requestPlay: (seekToSeconds?: number) => void;
+  requestPause: () => void;
+};
 
 type Props = {
   project: EditorProject;
@@ -16,6 +22,8 @@ type Props = {
   selected: ClipRef | null;
   onSelectClip: (ref: ClipRef | null) => void;
   onUpdateClip: (ref: ClipRef, patch: Partial<Clip>) => void;
+  /** Called with play/pause API so parent can call play() in same stack as user click (required for autoplay policy). */
+  onPreviewReady?: (api: PreviewPlayerApi | null) => void;
 };
 
 export default function CanvasPreview({
@@ -25,12 +33,28 @@ export default function CanvasPreview({
   duration,
   volume,
   onPlayPause,
+  onPlayheadChange,
   onVolumeChange,
   selected,
   onSelectClip,
   onUpdateClip,
+  onPreviewReady,
 }: Props) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const playerRef = useRef<HTMLVideoElement | null>(null);
+  const playerWrapperRef = useRef<HTMLDivElement | null>(null);
+  
+  const setPlayerRef = useCallback((node: HTMLVideoElement | null) => {
+    console.log('[CanvasPreview] setPlayerRef called', { node, tagName: node?.tagName });
+    playerRef.current = node;
+  }, []);
+  
+  // Get the video element
+  const getVideoElement = (): HTMLVideoElement | null => {
+    return playerRef.current;
+  };
+  
+  const isSeekingRef = useRef(false);
+  const [mutedForPolicy, setMutedForPolicy] = useState(true);
   const frameRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{
     ref: ClipRef;
@@ -39,12 +63,6 @@ export default function CanvasPreview({
     originX: number;
     originY: number;
   } | null>(null);
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${String(secs).padStart(2, '0')}`;
-  };
 
   const { activeSubtitle, activeOverlays, activeCharacters } = useMemo(() => {
     const now = playheadTime;
@@ -74,6 +92,8 @@ export default function CanvasPreview({
     };
   }, [playheadTime, project.tracks]);
 
+  const PLACEHOLDER_OVERLAY_SRCS = ['/window.svg', '/file.svg', '/globe.svg'];
+
   const resolveOverlaySrc = (assetId: string): string => {
     // No real assets wired yet; map to built-in public svgs so <img> exists.
     if (assetId.includes('02')) return '/globe.svg';
@@ -81,9 +101,49 @@ export default function CanvasPreview({
     return '/window.svg';
   };
 
+  const isPlaceholderOverlaySrc = (src: string) => PLACEHOLDER_OVERLAY_SRCS.includes(src);
+
   const resolveCharacterSrc = (character: CharacterClip['character']): string => {
     return character === 'Stewie' ? '/vercel.svg' : '/next.svg';
   };
+
+  // Convert template path to API URL if it's a file system path
+  const getTemplateUrl = (templateSrc: string | undefined): string | undefined => {
+    if (!templateSrc) return undefined;
+    
+    // If it's already a URL (http/https), return as-is
+    if (templateSrc.startsWith('http://') || templateSrc.startsWith('https://')) {
+      return templateSrc;
+    }
+    
+    // If it's a file:// URL, extract the filename
+    if (templateSrc.startsWith('file://')) {
+      const url = new URL(templateSrc);
+      const filename = url.pathname.split('/').pop() || url.pathname.split('\\').pop();
+      if (filename) {
+        return API_ENDPOINTS.serveTemplateVideo(filename);
+      }
+    }
+    
+    // If it's a file system path (contains backslashes or forward slashes with drive letter)
+    if (templateSrc.includes('\\') || templateSrc.includes('/')) {
+      // Extract filename from path
+      const parts = templateSrc.split(/[/\\]/);
+      const filename = parts[parts.length - 1];
+      if (filename) {
+        return API_ENDPOINTS.serveTemplateVideo(filename);
+      }
+    }
+    
+    // If it's just a filename, use it directly
+    return API_ENDPOINTS.serveTemplateVideo(templateSrc);
+  };
+
+  const videoSrc = useMemo(
+    () => getTemplateUrl(project.template.src),
+    [project.template.src]
+  );
+  const hasVideoSrc = Boolean(videoSrc);
 
   const pointerToNormalized = (clientX: number, clientY: number) => {
     const el = frameRef.current;
@@ -108,36 +168,208 @@ export default function CanvasPreview({
     window.removeEventListener('pointerup', onPointerUp);
   };
 
-  // Keep <video> in sync with playhead and playback state.
+  const lastSeekedRef = useRef<number>(0);
+  const videoReadyRef = useRef(false);
+
   useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    v.volume = Math.max(0, Math.min(1, volume / 100));
+    videoReadyRef.current = false;
+    setMutedForPolicy(true);
+  }, [videoSrc]);
+
+  const tryApplyPlayback = () => {
+    const video = getVideoElement();
+    if (!video || typeof video.play !== 'function') {
+      console.warn('[CanvasPreview] video element not ready for playback');
+      return;
+    }
+    console.log('[CanvasPreview] tryApplyPlayback', { isPlaying, playheadTime, videoCurrent: video.currentTime });
+    if (isPlaying) {
+      try {
+        if (Number.isFinite(playheadTime)) video.currentTime = playheadTime;
+      } catch {
+        // ignore
+      }
+      video.play().catch((err) => {
+        console.warn('[CanvasPreview] play() failed:', err);
+      });
+    } else {
+      video.pause();
+    }
+  };
+
+  // Expose play/pause so parent can call play() in same stack as user click (required for autoplay policy).
+  useEffect(() => {
+    if (!onPreviewReady) return;
+    const api: PreviewPlayerApi = {
+      requestPlay: (seekToSeconds) => {
+        const video = getVideoElement();
+        if (!video) {
+          console.warn('[CanvasPreview] requestPlay called but video is null');
+          return;
+        }
+        
+        console.log('[CanvasPreview] requestPlay - full video state', { 
+          seekToSeconds, 
+          playheadTime, 
+          currentTime: video.currentTime,
+          duration: video.duration,
+          readyState: video.readyState,
+          networkState: video.networkState,
+          paused: video.paused,
+          ended: video.ended,
+          seeking: video.seeking,
+          seekable: video.seekable?.length,
+          buffered: video.buffered?.length
+        });
+        
+        const t = seekToSeconds ?? playheadTime;
+        
+        // If already at the target time, just play
+        if (Math.abs(video.currentTime - t) < 0.1) {
+          console.log('[CanvasPreview] already at target time, playing directly');
+          video.play().catch((err) => {
+            console.warn('[CanvasPreview] play() failed:', err);
+          });
+          return;
+        }
+        
+        // Check if seekable
+        if (video.seekable && video.seekable.length > 0) {
+          const seekableStart = video.seekable.start(0);
+          const seekableEnd = video.seekable.end(0);
+          console.log('[CanvasPreview] video seekable range:', { seekableStart, seekableEnd, targetTime: t });
+          
+          if (t < seekableStart || t > seekableEnd) {
+            console.warn('[CanvasPreview] target time outside seekable range!');
+          }
+        } else {
+          console.warn('[CanvasPreview] video not seekable yet!');
+        }
+        
+        // Try seeking multiple times as a workaround
+        let attemptCount = 0;
+        const maxAttempts = 5;
+        
+        const attemptSeek = () => {
+          attemptCount++;
+          console.log('[CanvasPreview] seek attempt', attemptCount, 'setting currentTime to', t);
+          video.currentTime = t;
+          console.log('[CanvasPreview] currentTime is now', video.currentTime);
+          
+          if (Math.abs(video.currentTime - t) < 0.1) {
+            console.log('[CanvasPreview] seek successful!');
+            // Wait for seeked event then play
+            const onSeeked = () => {
+              console.log('[CanvasPreview] seek completed, now playing from', video.currentTime);
+              video.removeEventListener('seeked', onSeeked);
+              video.play().catch((err) => {
+                console.warn('[CanvasPreview] play() after seek failed:', err);
+              });
+            };
+            video.addEventListener('seeked', onSeeked, { once: true });
+          } else if (attemptCount < maxAttempts) {
+            console.warn('[CanvasPreview] seek failed, retrying in 50ms...');
+            setTimeout(attemptSeek, 50);
+          } else {
+            console.error('[CanvasPreview] seek failed after', maxAttempts, 'attempts, playing from current position');
+            video.play().catch((err) => {
+              console.warn('[CanvasPreview] play() failed:', err);
+            });
+          }
+        };
+        
+        attemptSeek();
+      },
+      requestPause: () => {
+        const video = getVideoElement();
+        if (!video) {
+          console.warn('[CanvasPreview] requestPause called but video ref is null');
+          return;
+        }
+        video.pause();
+      },
+    };
+    onPreviewReady(api);
+    return () => onPreviewReady(null);
+  }, [onPreviewReady, playheadTime]);
+
+  // When the player signals ready, apply initial state if needed
+  const handleReady = () => {
+    videoReadyRef.current = true;
+    console.log('[CanvasPreview] onReady', { src: videoSrc, mutedForPolicy });
+    // Don't auto-play on ready - wait for user to click play
+  };
+
+  // Drive play/pause from timeline whenever isPlaying changes.
+  // Don't use tryApplyPlayback here - let requestPlay/requestPause handle it
+  // useEffect(() => {
+  //   console.log('[CanvasPreview] isPlaying changed', { 
+  //     isPlaying, 
+  //     videoReady: videoReadyRef.current,
+  //     playheadTime,
+  //     duration 
+  //   });
+  //   if (!videoReadyRef.current) return;
+  //   tryApplyPlayback();
+  // }, [isPlaying]);
+
+  // Sync volume from timeline.
+  useEffect(() => {
+    const video = getVideoElement();
+    if (!video || typeof video.volume !== 'number') return;
+    video.volume = Math.max(0, Math.min(1, volume / 100));
   }, [volume]);
 
+  // Sync timeline → video: when user clicks ruler/lane or drags playhead (only when PAUSED).
   useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    // Avoid thrashing currentTime.
-    if (Number.isFinite(playheadTime) && Math.abs(v.currentTime - playheadTime) > 0.05) {
-      try {
-        v.currentTime = playheadTime;
-      } catch {
-        // ignore for unsupported states
-      }
-    }
-  }, [playheadTime]);
-
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
+    console.log('[CanvasPreview] Sync timeline→video effect', { 
+      isPlaying, 
+      playheadTime, 
+      hasVideoSrc, 
+      isSeekingRef: isSeekingRef.current 
+    });
+    
     if (isPlaying) {
-      // If there's no src, play() may reject; that's fine.
-      v.play().catch(() => {});
-    } else {
-      v.pause();
+      console.log('[CanvasPreview] Skipping sync - video is playing');
+      return;
     }
-  }, [isPlaying]);
+    if (!hasVideoSrc || !Number.isFinite(playheadTime)) {
+      console.log('[CanvasPreview] Skipping sync - no video or invalid playhead');
+      return;
+    }
+    if (isSeekingRef.current) {
+      console.log('[CanvasPreview] Skipping sync - user is seeking');
+      return;
+    }
+
+    const video = getVideoElement();
+    if (!video || typeof video.currentTime !== 'number') {
+      console.log('[CanvasPreview] Skipping sync - no video element');
+      return;
+    }
+
+    // Only seek if significantly different (avoid micro-adjustments)
+    const diff = Math.abs(video.currentTime - playheadTime);
+    console.log('[CanvasPreview] Sync check', { 
+      videoCurrent: video.currentTime, 
+      playheadTime, 
+      diff 
+    });
+    
+    if (diff < 0.1) {
+      console.log('[CanvasPreview] Skipping sync - already close enough');
+      return;
+    }
+
+    lastSeekedRef.current = playheadTime;
+    console.log('[CanvasPreview] Syncing video to timeline', { 
+      from: video.currentTime, 
+      to: playheadTime 
+    });
+    
+    video.currentTime = playheadTime;
+    console.log('[CanvasPreview] After sync, video.currentTime is', video.currentTime);
+  }, [playheadTime, hasVideoSrc, isPlaying]);
 
   return (
     <div className="flex-1 bg-black flex flex-col items-center justify-center relative overflow-hidden min-h-0">
@@ -148,33 +380,87 @@ export default function CanvasPreview({
           ref={frameRef}
           className="h-full w-auto aspect-[9/16] max-w-full flex items-center justify-center relative shrink-0 bg-[var(--card)]"
           style={{ minWidth: 0 }}
-          onPointerDown={() => {
-            // click empty space clears selection
-            onSelectClip(null);
+          onPointerDown={(e) => {
+            // only clear selection when clicking empty space (not on video/controls)
+            if (e.target === frameRef.current) onSelectClip(null);
           }}
         >
-          {/* Template background (Phase 2) */}
-          <div className="absolute inset-0">
-            {project.template.type === 'video' ? (
+          {/* Template: container with ref to find video element */}
+          <div ref={playerWrapperRef} className="absolute inset-0 z-[20] pointer-events-none">
+            {project.template.type === 'video' && hasVideoSrc ? (
               <video
-                ref={videoRef}
-                className="absolute inset-0 h-full w-full object-cover"
-                src={project.template.src}
-                poster={project.template.posterSrc}
-                muted
+                ref={setPlayerRef}
+                src={videoSrc}
+                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', pointerEvents: 'auto' }}
                 playsInline
+                preload="auto"
+                onLoadStart={() => {
+                  console.log('[CanvasPreview] onLoadStart', { src: videoSrc });
+                }}
+                onLoadedMetadata={handleReady}
+                onSeeking={() => { 
+                  console.log('[CanvasPreview] onSeeking fired');
+                  isSeekingRef.current = true; 
+                }}
+                onSeeked={() => { 
+                  const video = getVideoElement();
+                  console.log('[CanvasPreview] onSeeked fired', { 
+                    currentTime: video?.currentTime 
+                  });
+                  isSeekingRef.current = false; 
+                }}
+                onTimeUpdate={() => {
+                  if (isSeekingRef.current) {
+                    console.log('[CanvasPreview] onTimeUpdate skipped - seeking');
+                    return;
+                  }
+                  const video = getVideoElement();
+                  if (!video || !Number.isFinite(video.currentTime)) {
+                    console.log('[CanvasPreview] onTimeUpdate skipped - no video');
+                    return;
+                  }
+                  console.log('[CanvasPreview] onTimeUpdate', { 
+                    currentTime: video.currentTime,
+                    lastSeek: lastSeekedRef.current 
+                  });
+                  lastSeekedRef.current = video.currentTime;
+                  onPlayheadChange(video.currentTime);
+                }}
+                onPlay={() => {
+                  const video = getVideoElement();
+                  console.log('[CanvasPreview] onPlay fired', { 
+                    currentTime: video?.currentTime,
+                    duration: video?.duration,
+                    paused: video?.paused
+                  });
+                  setMutedForPolicy(false);
+                }}
+                onPause={() => {
+                  const video = getVideoElement();
+                  console.log('[CanvasPreview] onPause fired', { 
+                    currentTime: video?.currentTime 
+                  });
+                }}
+                onEnded={() => {
+                  console.log('[CanvasPreview] onEnded fired', { isPlaying, playheadTime, duration });
+                  if (isPlaying) onPlayPause();
+                }}
+                onError={(err) => {
+                  console.warn('[CanvasPreview] Video failed to load:', videoSrc, err);
+                }}
               />
-            ) : (
+            ) : project.template.type === 'image' && hasVideoSrc ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
+                key={videoSrc}
                 className="absolute inset-0 h-full w-full object-cover"
-                src={project.template.src ?? '/next.svg'}
+                src={videoSrc ?? '/next.svg'}
                 alt={project.template.label}
               />
-            )}
+            ) : null}
 
-            {/* Fallback visual if no template src */}
-            {!project.template.src && (
+            {/* Fallback visual if no template src or video failed to load */}
+            {!hasVideoSrc && (
               <div className="absolute inset-0 flex items-center justify-center">
                 <div className="relative w-[80%] aspect-square max-w-[min(60%,80vw)] flex items-center justify-center">
                   <div className="absolute inset-0 rounded-full bg-gradient-to-br from-orange-500 via-yellow-400 to-blue-500 opacity-80 blur-2xl" />
@@ -186,15 +472,17 @@ export default function CanvasPreview({
             )}
           </div>
 
-          {/* Overlays (Phase 2) */}
-          <div className="absolute inset-0 z-10">
+          {/* Overlays (Phase 2) — drawn on top (z-30) but pointer-events-none so video controls stay usable */}
+          <div className="absolute inset-0 z-[30] pointer-events-none">
             {activeOverlays.map(({ ref, clip: o }) => {
+              const overlaySrc = resolveOverlaySrc(o.assetId);
+              if (isPlaceholderOverlaySrc(overlaySrc)) return null;
               const isSelected = selected?.trackId === ref.trackId && selected?.clipId === ref.clipId;
               return (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 key={o.id}
-                src={resolveOverlaySrc(o.assetId)}
+                src={overlaySrc}
                 alt={o.label}
                 className={[
                   'absolute select-none drop-shadow-[0_10px_30px_rgba(0,0,0,0.45)]',
@@ -285,37 +573,6 @@ export default function CanvasPreview({
             )}
           </div>
 
-          {/* 9:16 badge */}
-          <div className="absolute bottom-2 left-2 text-xs text-accent bg-black/50 px-2 py-1 rounded">
-            9:16
-          </div>
-
-          {/* Playhead time display */}
-          <div className="absolute bottom-2 right-2 text-xs text-accent font-mono bg-black/50 px-2 py-1 rounded">
-            {formatTime(playheadTime)} / {formatTime(duration)}
-          </div>
-
-          {/* Play button overlay */}
-          <button
-            onClick={onPlayPause}
-            className="absolute bottom-10 right-1/2 translate-x-1/2 w-12 h-12 rounded-full bg-accent text-card flex items-center justify-center hover:scale-110 transition z-20"
-          >
-            {isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" />}
-          </button>
-
-          {/* Volume */}
-          <div className="absolute right-2 top-1/2 -translate-y-1/2 flex flex-col items-center gap-2 bg-black/50 px-2 py-3 rounded-lg z-20">
-            <Volume2 size={14} className="text-accent" />
-            <input
-              type="range"
-              min="0"
-              max="100"
-              value={volume}
-              onChange={(e) => onVolumeChange(Number(e.target.value))}
-              className="w-1 h-16 accent-accent rotate-180 cursor-pointer"
-            />
-            <span className="text-[10px] text-muted-foreground">{volume}%</span>
-          </div>
         </div>
       </div>
     </div>

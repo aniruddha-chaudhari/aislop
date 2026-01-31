@@ -9,6 +9,7 @@ import axios from 'axios';
 import FormData from 'form-data';
 import { PrismaClient } from '../generated/prisma';
 import { publishFileUpdate } from '../service/eventEmitter';
+import { updateSessionDuration } from '../service/sessionDuration';
 
 // Initialize Prisma client - schema.prisma has hardcoded database path
 const prisma = new PrismaClient();
@@ -695,6 +696,10 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
 
       const allGenerated = finalCount === totalFiles;
 
+      // Calculate and store total duration
+      const totalDuration = await updateSessionDuration(sessionId);
+      console.log(`📊 [AUDIO GENERATION] Total session duration: ${totalDuration.toFixed(2)}s`);
+
       // Update session with final stats
       await prisma.session.update({
         where: { id: sessionId },
@@ -858,6 +863,9 @@ export async function regenerateAudioFile(ctx: HttpContext): Promise<HandlerResu
     console.log(`✅ File saved to: ${outputPath}`);
     console.log(`✅ File size: ${fileSize} bytes`);
 
+    // Recalculate and update session duration
+    await updateSessionDuration(actualSessionId);
+
     return jsonResponse(200, {
       success: true,
       message: 'Audio regenerated successfully',
@@ -992,7 +1000,36 @@ export async function getAudioFiles(_ctx: HttpContext): Promise<HandlerResult> {
 
     // Transform the data for the frontend
     const formattedSessions = sessions.map(session => {
-      // Build a lookup from dialogue id to duration and compute start offsets in dialogue order
+      // Use stored total duration if available, otherwise calculate it
+      let totalDurationSeconds = 0;
+      
+      if (typeof session.totalDuration === 'number' && session.totalDuration > 0) {
+        totalDurationSeconds = Math.floor(session.totalDuration);
+      } else {
+        // Fallback: calculate from audio files
+        const durationsByDialogueId: Record<string, number> = {};
+        const sortedDialogues = [...session.dialogues].sort((a, b) => a.order - b.order);
+        
+        for (const d of sortedDialogues) {
+          if (d.audioFile) {
+            let duration = 0;
+            if (typeof d.audioFile.duration === 'number' && isFinite(d.audioFile.duration) && d.audioFile.duration > 0) {
+              duration = d.audioFile.duration;
+            } else if (d.audioFile.filePath && fs.existsSync(d.audioFile.filePath)) {
+              duration = getWavDurationSeconds(d.audioFile.filePath);
+            }
+            durationsByDialogueId[d.id] = Math.max(0, duration);
+          }
+        }
+        
+        let cumulative = 0;
+        for (const d of sortedDialogues) {
+          cumulative += durationsByDialogueId[d.id] || 0;
+        }
+        totalDurationSeconds = Math.floor(cumulative);
+      }
+
+      // Build a lookup from dialogue id to duration and start offsets
       const durationsByDialogueId: Record<string, number> = {};
       const sortedDialogues = [...session.dialogues].sort((a, b) => a.order - b.order);
       for (const d of sortedDialogues) {
@@ -1013,9 +1050,6 @@ export async function getAudioFiles(_ctx: HttpContext): Promise<HandlerResult> {
         startOffsetByDialogueId[d.id] = Math.floor(cumulative);
         cumulative += durationsByDialogueId[d.id] || 0;
       }
-
-      // Compute total duration from cumulative
-      const totalDurationSeconds = Math.floor(cumulative);
 
       return {
         sessionId: session.id,

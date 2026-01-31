@@ -1,5 +1,5 @@
 # PowerShell script to start all services in separate terminals
-# Run from backend1 directory. Starts: backend1 (Bun), client (Next.js), TTS preprocessing, Chatterbox TTS.
+# Can be run from project root or backend1 directory. Starts: backend1 (Bun), client1 (Next.js), TTS preprocessing, Chatterbox TTS.
 
 # Check if running as administrator
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
@@ -14,13 +14,23 @@ if (-not $isAdmin) {
     Start-Sleep -Seconds 2
 }
 
-$backendRoot = $PSScriptRoot
-$clientRoot = Join-Path $PSScriptRoot "..\client"
+# Determine project root and paths
+if (Test-Path (Join-Path $PSScriptRoot "backend1")) {
+    # Script is in project root
+    $projectRoot = $PSScriptRoot
+    $backendRoot = Join-Path $projectRoot "backend1"
+    $clientRoot = Join-Path $projectRoot "client1"
+} else {
+    # Script is in backend1 directory
+    $projectRoot = Split-Path $PSScriptRoot -Parent
+    $backendRoot = $PSScriptRoot
+    $clientRoot = Join-Path $projectRoot "client1"
+}
 
 # Terminal 1: Backend1 (Bun) — port 5000
 Start-Process powershell -ArgumentList "-NoExit", "cd '$backendRoot'; bun run dev"
 
-# Terminal 2: Frontend (Next.js client) — sibling of backend1
+# Terminal 2: Client1 (Next.js client) — sibling of backend1
 Start-Process powershell -ArgumentList "-NoExit", "cd '$clientRoot'; pnpm dev"
 
 # Terminal 3: TTS Preprocessing service

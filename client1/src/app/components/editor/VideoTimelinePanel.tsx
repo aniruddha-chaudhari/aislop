@@ -1,8 +1,22 @@
 'use client';
 
-import { useMemo, useRef, useState, useEffect } from 'react';
+import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { ArrowLeft, Download, Play, Pause, Plus, Settings } from 'lucide-react';
 import type { Clip, ClipRef, EditorProject, Track } from '../../../features/editor/types';
+
+/**
+ * Sort tracks in the correct order:
+ * 1. Overlay (template) - always first
+ * 2. Audio - always second
+ * 3. Everything else (subtitle, character, etc.) - after
+ */
+function sortTracks(tracks: Track[]): Track[] {
+  const overlayTracks = tracks.filter(t => t.type === 'overlay');
+  const audioTracks = tracks.filter(t => t.type === 'audio');
+  const otherTracks = tracks.filter(t => t.type !== 'overlay' && t.type !== 'audio');
+  
+  return [...overlayTracks, ...audioTracks, ...otherTracks];
+}
 
 type Props = {
   project: EditorProject;
@@ -13,6 +27,13 @@ type Props = {
   projectName?: string;
   onBack?: () => void;
   onExport?: () => void;
+  onSaveTimeline?: () => void;
+  onGenerateAiDraft?: () => void;
+  isGeneratingDraft?: boolean;
+  isExporting?: boolean;
+  exportProgress?: number;
+  hasTimeline?: boolean;
+  message?: { type: 'info' | 'error' | 'success'; text: string } | null;
   onHeightChange: (height: number) => void;
   onPlayPause: () => void;
   onPlayheadChange: (time: number) => void;
@@ -48,6 +69,13 @@ export default function VideoTimelinePanel({
   projectName,
   onBack,
   onExport,
+  onSaveTimeline,
+  onGenerateAiDraft,
+  isGeneratingDraft,
+  isExporting,
+  exportProgress,
+  hasTimeline,
+  message,
   onHeightChange,
   onPlayPause,
   onPlayheadChange,
@@ -56,6 +84,27 @@ export default function VideoTimelinePanel({
   onSelectClip,
   onUpdateClip,
 }: Props) {
+  React.useEffect(() => {
+    console.log('[VideoTimelinePanel] Project data changed:', {
+      projectId: project.id,
+      tracksCount: project.tracks.length,
+      totalClips: project.tracks.reduce((sum, t) => sum + t.clips.length, 0),
+      duration: project.duration,
+      tracks: project.tracks.map(t => ({
+        id: t.id,
+        name: t.name,
+        type: t.type,
+        clipsCount: t.clips.length,
+        clips: t.clips.map(c => ({
+          id: c.id,
+          kind: c.kind,
+          start: c.start,
+          duration: c.duration,
+          label: c.kind === 'subtitle' ? c.speaker : c.kind === 'character' ? c.character : c.kind === 'overlay' ? c.label : c.label
+        }))
+      }))
+    });
+  }, [project]);
   const [isResizing, setIsResizing] = useState(false);
   const dragRef = useRef<{
     ref: ClipRef;
@@ -105,10 +154,45 @@ export default function VideoTimelinePanel({
     return out;
   }, [project.duration]);
 
+  const timelineContentRef = useRef<HTMLDivElement | null>(null);
+  const playheadDragRef = useRef(false);
+
+  const getTimeFromClientX = (clientX: number): number => {
+    const el = timelineContentRef.current;
+    if (!el) return playheadTime;
+    const rect = el.getBoundingClientRect();
+    const x = clientX - rect.left;
+    return clamp(x / pxPerSecond, 0, project.duration);
+  };
+
+  const onRulerClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const t = getTimeFromClientX(e.clientX);
+    onPlayheadChange(t);
+    onSelectClip(null);
+  };
+
+  const onPlayheadPointerDown = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    playheadDragRef.current = true;
+    onPlayheadChange(getTimeFromClientX(e.clientX));
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    window.addEventListener('pointermove', onPlayheadPointerMove);
+    window.addEventListener('pointerup', onPlayheadPointerUp);
+  };
+
+  const onPlayheadPointerMove = (e: PointerEvent) => {
+    if (!playheadDragRef.current) return;
+    onPlayheadChange(getTimeFromClientX(e.clientX));
+  };
+
+  const onPlayheadPointerUp = () => {
+    playheadDragRef.current = false;
+    window.removeEventListener('pointermove', onPlayheadPointerMove);
+    window.removeEventListener('pointerup', onPlayheadPointerUp);
+  };
+
   const onLaneClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const t = clamp(x / pxPerSecond, 0, project.duration);
+    const t = getTimeFromClientX(e.clientX);
     onPlayheadChange(t);
     onSelectClip(null);
   };
@@ -160,14 +244,21 @@ export default function VideoTimelinePanel({
       {/* Timeline Header */}
       <div className="h-10 bg-muted border-b border-border flex items-center justify-between px-4 mt-1">
         <div className="flex items-center gap-2 min-w-0">
+          {onBack && (
+            <button
+              onClick={onBack}
+              className="p-1.5 rounded-md hover:bg-accent transition text-foreground"
+              title="Back to Projects"
+            >
+              ← 
+            </button>
+          )}
           <button
-            onClick={onBack}
-            disabled={!onBack}
-            className="p-1.5 rounded hover:bg-accent transition text-foreground disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Back"
-            aria-label="Back"
+            onClick={onPlayPause}
+            className="p-1.5 rounded hover:bg-accent transition text-foreground"
+            title={isPlaying ? 'Pause' : 'Play'}
           >
-            <ArrowLeft className="w-4 h-4" />
+            {isPlaying ? <Pause size={16} /> : <Play size={16} />}
           </button>
           <div className="min-w-0">
             <div className="text-xs font-semibold truncate">
@@ -175,7 +266,38 @@ export default function VideoTimelinePanel({
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+
+        {/* Center: AI Draft Button */}
+        <div className="flex-1 flex justify-center">
+          {!hasTimeline && onGenerateAiDraft && (
+            <button
+              onClick={onGenerateAiDraft}
+              disabled={isGeneratingDraft}
+              className="px-4 py-1.5 text-xs font-semibold bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+            >
+              {isGeneratingDraft ? '⏳ Generating AI Draft...' : '✨ Generate AI Draft'}
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          {message && (
+            <div className={`px-3 py-1 text-xs rounded-md ${
+              message.type === 'error' ? 'bg-red-500/10 text-red-500' :
+              message.type === 'success' ? 'bg-green-500/10 text-green-500' :
+              'bg-blue-500/10 text-blue-500'
+            }`}>
+              {message.text}
+            </div>
+          )}
+          {hasTimeline && onSaveTimeline && (
+            <button
+              onClick={onSaveTimeline}
+              className="h-7 px-2.5 rounded-md bg-muted text-xs font-medium hover:opacity-90 transition"
+            >
+              Save
+            </button>
+          )}
           <div className="flex items-center gap-1">
             <button 
               onClick={() => onZoomChange(Math.max(0.5, timelineZoom - 0.1))}
@@ -205,12 +327,12 @@ export default function VideoTimelinePanel({
           <span className="text-xs text-muted-foreground">{(timelineZoom * 100).toFixed(0)}%</span>
           <button
             onClick={onExport}
-            disabled={!onExport}
+            disabled={!onExport || isExporting}
             className="h-7 px-2.5 rounded-md bg-accent text-card text-xs font-medium hover:opacity-90 transition disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
             title="Export"
           >
             <Download className="w-3.5 h-3.5" />
-            Export
+            {isExporting ? `Exporting ${exportProgress || 0}%` : 'Export'}
           </button>
         </div>
       </div>
@@ -220,8 +342,9 @@ export default function VideoTimelinePanel({
         <div className="flex min-w-0">
           {/* Fixed left labels column */}
           <div className="w-32 shrink-0 border-r border-border">
+            {/* Header spacer to align with time ruler */}
             <div className="h-8 bg-muted border-b border-border" />
-            {project.tracks.map((t) => (
+            {sortTracks(project.tracks).map((t) => (
               <div key={t.id} className="h-12 bg-muted flex items-center px-3 border-b border-border">
                 <span className="text-xs font-semibold truncate">{t.name}</span>
               </div>
@@ -231,15 +354,21 @@ export default function VideoTimelinePanel({
           {/* Shared horizontal scroll area (ruler + all lanes) */}
           <div className="flex-1 min-w-0">
             <div className="relative overflow-x-auto">
-              <div className="relative" style={{ width: `${laneWidth}px` }}>
-                {/* Shared playhead line across ruler + tracks */}
+              <div ref={timelineContentRef} className="relative" style={{ width: `${laneWidth}px` }}>
+                {/* Draggable playhead */}
                 <div
-                  className="absolute top-0 bottom-0 w-px bg-accent pointer-events-none"
+                  className="absolute top-0 bottom-0 w-3 -translate-x-1/2 cursor-ew-resize z-10 flex justify-center"
                   style={{ left: `${playheadTime * pxPerSecond}px` }}
-                />
+                  onPointerDown={onPlayheadPointerDown}
+                >
+                  <div className="w-px flex-1 bg-accent pointer-events-none" />
+                </div>
 
-                {/* Time ruler */}
-                <div className="h-8 border-b border-border bg-card relative">
+                {/* Time ruler - click to seek */}
+                <div
+                  className="h-8 border-b border-border bg-card relative cursor-pointer"
+                  onClick={onRulerClick}
+                >
                   {timeTicks.map((t) => (
                     <div
                       key={t}
@@ -252,8 +381,8 @@ export default function VideoTimelinePanel({
                   ))}
                 </div>
 
-                {/* Tracks lanes */}
-                {project.tracks.map((t) => (
+                {/* Tracks lanes - sorted: overlay first, then audio, then others */}
+                {sortTracks(project.tracks).map((t) => (
                   <div
                     key={t.id}
                     className="h-12 border-b border-border bg-card relative"

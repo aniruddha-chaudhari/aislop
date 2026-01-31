@@ -84,7 +84,18 @@ function findRoute(method: string, pathname: string): { route: Route; params: Re
   for (const route of routes) {
     if (route.method !== method) continue;
     const params = matchPath(route.pattern, pathname);
-    if (params) return { route, params };
+    if (params !== null) {
+      // Debug logging for project routes
+      if (pathname.includes('/api/project/')) {
+        console.log(`✅ [ROUTE MATCH] ${method} ${pathname} -> ${route.pattern}`);
+      }
+      return { route, params };
+    }
+  }
+  // Debug logging for unmatched project routes
+  if (pathname.includes('/api/project/')) {
+    console.log(`❌ [ROUTE NOT FOUND] ${method} ${pathname} - Available project routes:`, 
+      routes.filter(r => r.pattern.includes('/api/project/')).map(r => `${r.method} ${r.pattern}`));
   }
   return null;
 }

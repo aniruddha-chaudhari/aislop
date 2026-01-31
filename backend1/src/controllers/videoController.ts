@@ -855,6 +855,98 @@ export const uploadTemplateVideo = async (ctx: HttpContext): Promise<HandlerResu
   }
 };
 
+export const serveTemplateVideo = async (ctx: HttpContext): Promise<HandlerResult> => {
+  try {
+    const rawFilename = ctx.params?.filename;
+
+    if (!rawFilename) {
+      return jsonResponse(400, { error: 'Filename is required' });
+    }
+
+    const filename = path.basename(decodeURIComponent(rawFilename));
+    if (!filename) {
+      return jsonResponse(400, { error: 'Invalid filename' });
+    }
+
+    const TEMPLATE_DIR = path.join(process.cwd(), 'storage', 'video_templates');
+    const filePath = path.join(TEMPLATE_DIR, filename);
+
+    // Security: ensure the file is within the template directory
+    if (!filePath.startsWith(TEMPLATE_DIR)) {
+      return jsonResponse(400, { error: 'Invalid file path' });
+    }
+
+    if (!fs.existsSync(filePath)) {
+      return jsonResponse(404, { error: 'Template video not found' });
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    
+    const mimeTypes: Record<string, string> = {
+      '.mp4': 'video/mp4',
+      '.mov': 'video/quicktime',
+      '.avi': 'video/x-msvideo',
+      '.mkv': 'video/x-matroska',
+      '.webm': 'video/webm',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+    };
+
+    const contentType = mimeTypes[ext] || 'application/octet-stream';
+    const stat = await fs.promises.stat(filePath);
+    const fileSize = stat.size;
+    
+    // Get range header from request
+    const range = ctx.request?.headers.get('range');
+
+    // If no range, send entire file
+    if (!range) {
+      const buf = await fs.promises.readFile(filePath);
+      return new Response(new Blob([buf]), {
+        status: 200,
+        headers: {
+          'Content-Type': contentType,
+          'Content-Length': String(fileSize),
+          'Accept-Ranges': 'bytes',
+          'Cache-Control': 'public, max-age=3600',
+        },
+      });
+    }
+
+    // Parse range header (e.g., "bytes=0-1023")
+    const parts = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    const chunkSize = (end - start) + 1;
+
+    // Read only the requested chunk
+    const fileHandle = await fs.promises.open(filePath, 'r');
+    const buffer = Buffer.alloc(chunkSize);
+    await fileHandle.read(buffer, 0, chunkSize, start);
+    await fileHandle.close();
+
+    return new Response(new Blob([buffer]), {
+      status: 206, // Partial Content
+      headers: {
+        'Content-Type': contentType,
+        'Content-Length': String(chunkSize),
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'public, max-age=3600',
+      },
+    });
+  } catch (error) {
+    console.error('Error serving template video:', error);
+    return jsonResponse(500, {
+      success: false,
+      error: 'Failed to serve template video'
+    });
+  }
+};
+
 // 🎯 IMAGE EMBEDDING ENDPOINTS
 
 // Analyze ASS file and generate image embedding plan

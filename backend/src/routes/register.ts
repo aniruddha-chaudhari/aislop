@@ -8,6 +8,7 @@ import * as audio from '../controllers/audioController';
 import { generateImage } from '../controllers/imageController';
 import * as video from '../controllers/videoController';
 import * as stream from '../controllers/streamController';
+import * as project from '../controllers/projectController';
 
 register([
   { method: 'GET', pattern: '/', handler: async () => jsonResponse(200, { message: 'Hello World!', server: 'AI Slope Backend', status: 'Running' }) },
@@ -72,6 +73,21 @@ register([
   { method: 'GET', pattern: '/api/video/cleanup-ass-cache', handler: video.cleanupAssCache },
   { method: 'GET', pattern: '/api/video/ass-content', handler: video.getAssContent },
   { method: 'POST', pattern: '/api/video/upload-custom-suggestions', handler: video.uploadCustomSuggestions },
+
+  // Project (Timeline Editor)
+  // Register specific routes BEFORE parameterized routes to avoid conflicts
+  { method: 'POST', pattern: '/api/project/create', handler: project.createProject },
+  { method: 'GET', pattern: '/api/project/list', handler: project.listProjects },
+  // Parameterized routes come after specific routes
+  { method: 'GET', pattern: '/api/project/:id/export/status', handler: project.getExportStatus },
+  { method: 'GET', pattern: '/api/project/:id/images', handler: project.listProjectImages },
+  { method: 'POST', pattern: '/api/project/:id/ai-draft', handler: project.generateAiDraftForProject },
+  { method: 'PUT', pattern: '/api/project/:id/timeline', handler: project.saveTimeline },
+  { method: 'POST', pattern: '/api/project/:id/export', handler: project.startExport },
+  { method: 'POST', pattern: '/api/project/:id/upload-image', handler: project.uploadImageForClip, multipart: 'single', multipartField: 'image' },
+  { method: 'GET', pattern: '/api/project/:id', handler: project.getProject },
+  { method: 'PUT', pattern: '/api/project/:id', handler: project.updateProject },
+  { method: 'DELETE', pattern: '/api/project/:id', handler: project.deleteProject },
 
   // Streaming
   { method: 'GET', pattern: '/api/stream/:sessionId/files', handler: stream.streamFileUpdates },

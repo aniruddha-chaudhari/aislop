@@ -9,7 +9,7 @@ export function makeMockProject(id: string): EditorProject {
     template: {
       type: 'video',
       label: 'Minecraft (9:16)',
-      // No real mp4 checked in yet; use poster so <video> still renders.
+      src: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
       posterSrc: '/next.svg',
     },
     tracks: [

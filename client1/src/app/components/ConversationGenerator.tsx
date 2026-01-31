@@ -841,11 +841,11 @@ export default function ConversationGenerator() {
       <button
         onClick={handleGenerateScript}
         disabled={loading || !prompt.trim()}
-        className="w-full rounded-md bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] transition-colors duration-200 hover:bg-[var(--secondary)] disabled:cursor-not-allowed disabled:bg-[var(--muted)] sm:py-3 sm:text-base"
+        className="w-full rounded-md bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] transition-colors duration-200 hover:bg-[var(--secondary)] disabled:cursor-not-allowed disabled:bg-[var(--muted)] disabled:text-[var(--muted-foreground)] sm:py-3 sm:text-base"
       >
         {loading ? (
           <div className="flex items-center justify-center space-x-2">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-[var(--primary-foreground)] border-t-transparent"></div>
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"></div>
             <span className="text-sm sm:text-base">Generating Script...</span>
           </div>
         ) : (
