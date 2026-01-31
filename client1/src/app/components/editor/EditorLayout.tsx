@@ -173,6 +173,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     setSelected(null);
     setPlayheadTime(0);
     setIsPlaying(false);
+    setPreviewVideoSrc(null); // Clear preview when project/template/session changes
   }, [project]);
 
   // Fetch templates and audio sessions on mount
@@ -448,12 +449,17 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       if (data.success) {
         setMessage({ type: 'success', text: `Audio session changed to ${sessionName}` });
         console.log('[EditorLayout] Calling onProjectUpdate after audio session change, hasCallback:', !!onProjectUpdate);
+        
+        // Clear old preview since audio session changed
+        setPreviewVideoSrc(null);
+        
         await onProjectUpdate?.();
 
         // Get updated project to check for existing template track
         const updatedProjectResponse = await fetch(API_ENDPOINTS.getProject(project.id));
         const updatedProjectData = updatedProjectResponse.ok ? await updatedProjectResponse.json() : null;
-        const currentTracks = updatedProjectData?.project?.timeline?.tracks?.map((t: any) => ({
+        const updatedProject = updatedProjectData?.project;
+        const currentTracks = updatedProject?.timeline?.tracks?.map((t: any) => ({
           id: t.id,
           type: t.type,
           name: t.name,
@@ -497,6 +503,33 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             console.log('[EditorLayout] Save timeline response data:', saveData);
             console.log('[EditorLayout] Calling onProjectUpdate after saving timeline');
             await onProjectUpdate?.();
+            
+            // Proactively generate preview in background if we have template + audio session
+            if (updatedProject?.template?.src) {
+              console.log('[EditorLayout] Auto-generating preview in background...');
+              setIsGeneratingPreview(true);
+              setMessage({ type: 'info', text: 'Preparing preview...' });
+              
+              fetch(API_ENDPOINTS.generatePreview(project.id), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+              })
+                .then(res => res.json())
+                .then(data => {
+                  if (data.success) {
+                    const previewUrl = `${API_ENDPOINTS.servePreview(project.id)}?t=${Date.now()}`;
+                    setPreviewVideoSrc(previewUrl);
+                    setMessage({ type: 'success', text: 'Preview ready! Click Play to watch.' });
+                    setTimeout(() => setMessage(null), 3000);
+                  }
+                })
+                .catch(err => {
+                  console.error('[EditorLayout] Background preview generation failed:', err);
+                })
+                .finally(() => {
+                  setIsGeneratingPreview(false);
+                });
+            }
           } catch (timelineError) {
           }
         }

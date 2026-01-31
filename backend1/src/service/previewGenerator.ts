@@ -76,16 +76,8 @@ export async function generatePreview(
     const outputFilename = `preview_${cacheKey}.mp4`;
     const outputPath = path.join(PREVIEW_DIR, outputFilename);
 
-    // Return cached preview if it exists and is recent
-    if (fs.existsSync(outputPath)) {
-      const stats = fs.statSync(outputPath);
-      const ageMs = Date.now() - stats.mtimeMs;
-      // Cache for 1 hour
-      if (ageMs < 3600000) {
-        console.log(`✅ [PREVIEW] Using cached preview: ${outputPath}`);
-        return { success: true, outputPath };
-      }
-    }
+    // Always regenerate preview (no caching) to ensure changes are reflected
+    console.log(`🎬 [PREVIEW] Generating fresh preview (no cache): ${outputPath}`);
 
     onProgress?.(10, 'Concatenating audio files...');
 
@@ -136,8 +128,11 @@ export async function generatePreview(
     onProgress?.(60, 'Encoding preview...');
 
     // Output options: low-res, fast encode
+    // CRITICAL: -map 0:v uses template VIDEO, -map 1:a uses DIALOGUE audio (not template audio!)
     command
       .outputOptions([
+        '-map', '0:v', // Video from template (input 0)
+        '-map', '1:a', // Audio from concatenated dialogue (input 1), NOT template
         '-c:v', 'libx264',
         '-preset', 'ultrafast', // Fast encode
         '-crf', '28', // Lower quality for smaller file

@@ -553,7 +553,12 @@ export async function generateProjectPreview(ctx: HttpContext): Promise<HandlerR
       });
     }
 
-    if (!project.template?.src) {
+    if (!project.template?.path) {
+      console.log('❌ [PREVIEW] No template.path found:', {
+        template: project.template,
+        templateType: typeof project.template,
+        templateKeys: project.template ? Object.keys(project.template) : []
+      });
       return jsonResponse(400, {
         success: false,
         error: 'Project has no template assigned',
@@ -561,6 +566,9 @@ export async function generateProjectPreview(ctx: HttpContext): Promise<HandlerR
     }
 
     if (!project.audioSessionId || project.audioSessionId === 'no-session') {
+      console.log('❌ [PREVIEW] No audio session:', {
+        audioSessionId: project.audioSessionId
+      });
       return jsonResponse(400, {
         success: false,
         error: 'Project has no audio session assigned',
@@ -572,7 +580,7 @@ export async function generateProjectPreview(ctx: HttpContext): Promise<HandlerR
     // Generate preview video
     const result = await generatePreview(
       projectId,
-      project.template.src,
+      project.template.path,  // Use template.path not template.src
       project.audioSessionId,
       (percent, message) => {
         console.log(`[PREVIEW] ${percent}% - ${message}`);
@@ -624,25 +632,21 @@ export async function serveProjectPreview(ctx: HttpContext): Promise<HandlerResu
       });
     }
 
-    // Check for existing preview in cache
-    const PREVIEW_DIR = path.join(process.cwd(), 'storage', 'previews');
-    const previewFiles = fs.existsSync(PREVIEW_DIR) 
-      ? fs.readdirSync(PREVIEW_DIR).filter(f => f.startsWith(`preview_`))
-      : [];
-
-    if (previewFiles.length === 0) {
-      return jsonResponse(404, {
+    if (!project.template?.path || !project.audioSessionId || project.audioSessionId === 'no-session') {
+      return jsonResponse(400, {
         success: false,
-        error: 'Preview not found. Generate it first using POST /api/project/:id/preview',
+        error: 'Project has no template or audio session',
       });
     }
 
-    const previewPath = path.join(PREVIEW_DIR, previewFiles[0]);
+    // Use same cache key as previewGenerator to find the correct preview file
+    const { getPreviewPath } = await import('../service/previewGenerator');
+    const previewPath = getPreviewPath(projectId, project.template.path, project.audioSessionId);
 
-    if (!fs.existsSync(previewPath)) {
+    if (!previewPath) {
       return jsonResponse(404, {
         success: false,
-        error: 'Preview file not found',
+        error: 'Preview not found. Generate it first using POST /api/project/:id/preview',
       });
     }
 
