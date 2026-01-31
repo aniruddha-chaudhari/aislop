@@ -24,6 +24,9 @@ type Props = {
   onUpdateClip: (ref: ClipRef, patch: Partial<Clip>) => void;
   /** Called with play/pause API so parent can call play() in same stack as user click (required for autoplay policy). */
   onPreviewReady?: (api: PreviewPlayerApi | null) => void;
+  /** Optional: Preview video source (FFmpeg composite) to use instead of template */
+  previewVideoSrc?: string | null;
+  isGeneratingPreview?: boolean;
 };
 
 export default function CanvasPreview({
@@ -39,6 +42,8 @@ export default function CanvasPreview({
   onSelectClip,
   onUpdateClip,
   onPreviewReady,
+  previewVideoSrc,
+  isGeneratingPreview = false,
 }: Props) {
   const playerRef = useRef<HTMLVideoElement | null>(null);
   const playerWrapperRef = useRef<HTMLDivElement | null>(null);
@@ -140,8 +145,8 @@ export default function CanvasPreview({
   };
 
   const videoSrc = useMemo(
-    () => getTemplateUrl(project.template.src),
-    [project.template.src]
+    () => previewVideoSrc || getTemplateUrl(project.template.src),
+    [previewVideoSrc, project.template.src]
   );
   const hasVideoSrc = Boolean(videoSrc);
 
@@ -460,7 +465,7 @@ export default function CanvasPreview({
             ) : null}
 
             {/* Fallback visual if no template src or video failed to load */}
-            {!hasVideoSrc && (
+            {!hasVideoSrc && !isGeneratingPreview && (
               <div className="absolute inset-0 flex items-center justify-center">
                 <div className="relative w-[80%] aspect-square max-w-[min(60%,80vw)] flex items-center justify-center">
                   <div className="absolute inset-0 rounded-full bg-gradient-to-br from-orange-500 via-yellow-400 to-blue-500 opacity-80 blur-2xl" />
@@ -470,9 +475,19 @@ export default function CanvasPreview({
                 </div>
               </div>
             )}
+            
+            {/* Loading indicator during preview generation */}
+            {isGeneratingPreview && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/50">
+                <div className="w-12 h-12 border-4 border-accent border-t-transparent rounded-full animate-spin mb-4" />
+                <div className="text-white text-sm font-medium">Generating preview...</div>
+              </div>
+            )}
           </div>
 
           {/* Overlays (Phase 2) — drawn on top (z-30) but pointer-events-none so video controls stay usable */}
+          {/* Only show overlays if NOT using preview video (preview has overlays baked in) */}
+          {!previewVideoSrc && (
           <div className="absolute inset-0 z-[30] pointer-events-none">
             {activeOverlays.map(({ ref, clip: o }) => {
               const overlaySrc = resolveOverlaySrc(o.assetId);
@@ -572,6 +587,7 @@ export default function CanvasPreview({
               </div>
             )}
           </div>
+          )}
 
         </div>
       </div>

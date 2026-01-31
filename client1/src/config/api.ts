@@ -85,6 +85,8 @@ export const API_ENDPOINTS = {
   saveTimeline: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/timeline`,
   exportProject: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/export`,
   exportStatus: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/export/status`,
+  generatePreview: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/preview`,
+  servePreview: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/preview`,
   uploadProjectImage: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/upload-image`,
   projectImages: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/images`,
 } as const;

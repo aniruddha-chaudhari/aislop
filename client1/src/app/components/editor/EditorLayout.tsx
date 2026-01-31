@@ -63,16 +63,80 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const rafRef = useRef<number | null>(null);
   const lastTsRef = useRef<number | null>(null);
   const previewPlayerRef = useRef<PreviewPlayerApi | null>(null);
+  
+  // Preview generation
+  const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
+  const [previewVideoSrc, setPreviewVideoSrc] = useState<string | null>(null);
 
-  const handlePlayToggle = () => {
+  const handlePlayToggle = async () => {
     const next = !isPlaying;
     let seekTo: number | undefined;
     console.log('[EditorLayout] handlePlayToggle', { 
       next, 
       playheadTime, 
       duration: draftProject.duration,
-      atEnd: playheadTime >= draftProject.duration 
+      atEnd: playheadTime >= draftProject.duration,
+      hasTemplate: !!project.template?.src,
+      audioSessionId: project.audioSessionId
     });
+    
+    // If playing and we have template + audio session, generate/use preview
+    if (next && project.template?.src && project.audioSessionId && project.audioSessionId !== 'no-session') {
+      // Check if we need to generate preview
+      if (!previewVideoSrc) {
+        setIsGeneratingPreview(true);
+        setMessage({ type: 'info', text: 'Generating preview...' });
+        
+        try {
+          const response = await fetch(API_ENDPOINTS.generatePreview(project.id), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          });
+
+          const data = await response.json();
+          
+          if (!response.ok) {
+            throw new Error(data.error || `HTTP error! status: ${response.status}`);
+          }
+          
+          if (data.success) {
+            const previewUrl = `${API_ENDPOINTS.servePreview(project.id)}?t=${Date.now()}`;
+            setPreviewVideoSrc(previewUrl);
+            setMessage({ type: 'success', text: 'Preview ready!' });
+            setTimeout(() => setMessage(null), 2000);
+            
+            // Now play the preview
+            setIsPlaying(true);
+            previewPlayerRef.current?.requestPlay?.(playheadTime >= draftProject.duration ? 0 : playheadTime);
+          } else {
+            throw new Error(data.error || 'Failed to generate preview');
+          }
+        } catch (error) {
+          console.error('[EditorLayout] Preview generation error:', error);
+          setMessage({ 
+            type: 'error', 
+            text: error instanceof Error ? error.message : 'Failed to generate preview' 
+          });
+          setTimeout(() => setMessage(null), 5000);
+        } finally {
+          setIsGeneratingPreview(false);
+        }
+        return;
+      }
+    } else if (next && (!project.template?.src || !project.audioSessionId || project.audioSessionId === 'no-session')) {
+      // Show message about what's missing
+      const missing = [];
+      if (!project.template?.src) missing.push('template');
+      if (!project.audioSessionId || project.audioSessionId === 'no-session') missing.push('audio session');
+      
+      setMessage({ 
+        type: 'info', 
+        text: `Please select a ${missing.join(' and ')} first` 
+      });
+      setTimeout(() => setMessage(null), 3000);
+      return;
+    }
+    
     if (next && playheadTime >= draftProject.duration) {
       setPlayheadTime(0);
       seekTo = 0;
@@ -690,6 +754,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             onSelectClip={setSelected}
             onUpdateClip={updateClip}
             onPreviewReady={(api) => { previewPlayerRef.current = api; }}
+            previewVideoSrc={previewVideoSrc}
+            isGeneratingPreview={isGeneratingPreview}
           />
 
           {/* Right Properties Panel */}

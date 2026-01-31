@@ -3,6 +3,7 @@ import { jsonResponse } from '../utils/http';
 import * as projectService from '../service/projectService';
 import { generateAiDraft } from '../service/aiDraftService';
 import { compileTimeline } from '../service/timelineCompiler';
+import { generatePreview } from '../service/previewGenerator';
 import { ProjectSchema, TimelineSchema } from '../schema/project';
 import fs from 'fs';
 import path from 'path';
@@ -527,3 +528,139 @@ export async function listProjectImages(ctx: HttpContext): Promise<HandlerResult
     });
   }
 }
+
+/**
+ * Generate preview video for a project
+ * POST /api/project/:id/preview
+ */
+export async function generateProjectPreview(ctx: HttpContext): Promise<HandlerResult> {
+  try {
+    const projectId = ctx.params?.id;
+
+    if (!projectId) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Project ID is required',
+      });
+    }
+
+    const project = await projectService.getProject(projectId);
+
+    if (!project) {
+      return jsonResponse(404, {
+        success: false,
+        error: 'Project not found',
+      });
+    }
+
+    if (!project.template?.src) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Project has no template assigned',
+      });
+    }
+
+    if (!project.audioSessionId || project.audioSessionId === 'no-session') {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Project has no audio session assigned',
+      });
+    }
+
+    console.log(`🎬 [PROJECT CONTROLLER] Generating preview for project ${projectId}`);
+
+    // Generate preview video
+    const result = await generatePreview(
+      projectId,
+      project.template.src,
+      project.audioSessionId,
+      (percent, message) => {
+        console.log(`[PREVIEW] ${percent}% - ${message}`);
+      }
+    );
+
+    if (!result.success) {
+      return jsonResponse(500, {
+        success: false,
+        error: result.error || 'Failed to generate preview',
+      });
+    }
+
+    return jsonResponse(200, {
+      success: true,
+      previewPath: result.outputPath,
+      message: 'Preview generated successfully',
+    });
+  } catch (error) {
+    console.error('❌ [PROJECT CONTROLLER] Error generating preview:', error);
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to generate preview',
+    });
+  }
+}
+
+/**
+ * Serve preview video
+ * GET /api/project/:id/preview
+ */
+export async function serveProjectPreview(ctx: HttpContext): Promise<HandlerResult> {
+  try {
+    const projectId = ctx.params?.id;
+
+    if (!projectId) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Project ID is required',
+      });
+    }
+
+    const project = await projectService.getProject(projectId);
+
+    if (!project) {
+      return jsonResponse(404, {
+        success: false,
+        error: 'Project not found',
+      });
+    }
+
+    // Check for existing preview in cache
+    const PREVIEW_DIR = path.join(process.cwd(), 'storage', 'previews');
+    const previewFiles = fs.existsSync(PREVIEW_DIR) 
+      ? fs.readdirSync(PREVIEW_DIR).filter(f => f.startsWith(`preview_`))
+      : [];
+
+    if (previewFiles.length === 0) {
+      return jsonResponse(404, {
+        success: false,
+        error: 'Preview not found. Generate it first using POST /api/project/:id/preview',
+      });
+    }
+
+    const previewPath = path.join(PREVIEW_DIR, previewFiles[0]);
+
+    if (!fs.existsSync(previewPath)) {
+      return jsonResponse(404, {
+        success: false,
+        error: 'Preview file not found',
+      });
+    }
+
+    const buf = await fs.promises.readFile(previewPath);
+    return new Response(new Blob([buf]), {
+      status: 200,
+      headers: {
+        'Content-Type': 'video/mp4',
+        'Content-Length': String(buf.length),
+        'Cache-Control': 'public, max-age=3600',
+      },
+    });
+  } catch (error) {
+    console.error('❌ [PROJECT CONTROLLER] Error serving preview:', error);
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to serve preview',
+    });
+  }
+}
+
