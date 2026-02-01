@@ -56,7 +56,6 @@ async function withGeminiFallback<T>(
       throw error;
     }
 
-    console.warn('[GEMINI] Primary key quota exceeded, retrying with secondary key');
     const secondaryModel = googleSecondary(modelName);
     return await runWithModel(secondaryModel);
   }

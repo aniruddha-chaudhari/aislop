@@ -51,6 +51,11 @@ coverage/
 *.swo
 *~
 
+# Windows reserved device names (nul, con, prn, etc.)
+**/nul
+**/con
+**/prn
+
 # OS generated files
 .DS_Store
 .DS_Store?

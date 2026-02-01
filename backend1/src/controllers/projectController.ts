@@ -45,7 +45,6 @@ export async function createProject(ctx: HttpContext): Promise<HandlerResult> {
       project,
     });
   } catch (error) {
-    console.error('❌ [PROJECT CONTROLLER] Error creating project:', error);
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to create project',
@@ -59,9 +58,7 @@ export async function createProject(ctx: HttpContext): Promise<HandlerResult> {
  */
 export async function listProjects(ctx: HttpContext): Promise<HandlerResult> {
   try {
-    console.log('📋 [PROJECT CONTROLLER] listProjects called');
     const projects = await projectService.listProjects();
-    console.log(`✅ [PROJECT CONTROLLER] Found ${projects.length} projects`);
 
     return jsonResponse(200, {
       success: true,
@@ -69,7 +66,6 @@ export async function listProjects(ctx: HttpContext): Promise<HandlerResult> {
       count: projects.length,
     });
   } catch (error) {
-    console.error('❌ [PROJECT CONTROLLER] Error listing projects:', error);
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to list projects',
@@ -106,7 +102,6 @@ export async function getProject(ctx: HttpContext): Promise<HandlerResult> {
       project,
     });
   } catch (error) {
-    console.error('❌ [PROJECT CONTROLLER] Error getting project:', error);
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to get project',
@@ -144,7 +139,6 @@ export async function updateProject(ctx: HttpContext): Promise<HandlerResult> {
       project,
     });
   } catch (error) {
-    console.error('❌ [PROJECT CONTROLLER] Error updating project:', error);
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to update project',
@@ -181,7 +175,6 @@ export async function deleteProject(ctx: HttpContext): Promise<HandlerResult> {
       message: 'Project deleted successfully',
     });
   } catch (error) {
-    console.error('❌ [PROJECT CONTROLLER] Error deleting project:', error);
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to delete project',
@@ -223,8 +216,6 @@ export async function generateAiDraftForProject(ctx: HttpContext): Promise<Handl
 
     const topic = body.topic || project.name || 'Technical conversation';
 
-    console.log(`🎬 [PROJECT CONTROLLER] Generating subtitles & characters for project ${projectId}`);
-
     const result = await generateSubtitlesAndCharacters(project.audioSessionId, topic);
 
     // Merge with existing timeline (keep overlay tracks: template, t_imgs)
@@ -251,7 +242,6 @@ export async function generateAiDraftForProject(ctx: HttpContext): Promise<Handl
       message: 'Subtitles & characters generated successfully',
     });
   } catch (error) {
-    console.error('❌ [PROJECT CONTROLLER] Error generating AI draft:', error);
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to generate AI draft',
@@ -293,8 +283,6 @@ export async function generateImagePlanForProject(ctx: HttpContext): Promise<Han
 
     const topic = body.topic || project.name || 'Technical conversation';
 
-    console.log(`🎬 [PROJECT CONTROLLER] Generating image plan for project ${projectId}`);
-
     const result = await generateImagePlan(project.audioSessionId, topic);
 
     // Merge overlay track into existing timeline (replace t_imgs, keep others)
@@ -317,7 +305,6 @@ export async function generateImagePlanForProject(ctx: HttpContext): Promise<Han
       message: 'Image plan generated successfully',
     });
   } catch (error) {
-    console.error('❌ [PROJECT CONTROLLER] Error generating image plan:', error);
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to generate image plan',
@@ -366,7 +353,6 @@ export async function saveTimeline(ctx: HttpContext): Promise<HandlerResult> {
       message: 'Timeline saved successfully',
     });
   } catch (error) {
-    console.error('❌ [PROJECT CONTROLLER] Error saving timeline:', error);
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to save timeline',
@@ -408,22 +394,17 @@ export async function startExport(ctx: HttpContext): Promise<HandlerResult> {
     // Update status to exporting
     await projectService.updateStatus(projectId, 'exporting');
 
-    console.log(`🎬 [PROJECT CONTROLLER] Starting export for project ${projectId}`);
-
     // Start export in background (don't await)
     compileTimeline(project)
       .then(async (result) => {
         if (result.success) {
           await projectService.updateStatus(projectId, 'exported');
-          console.log(`✅ [PROJECT CONTROLLER] Export complete for project ${projectId}`);
         } else {
           await projectService.updateStatus(projectId, 'ready');
-          console.error(`❌ [PROJECT CONTROLLER] Export failed for project ${projectId}:`, result.error);
         }
       })
-      .catch(async (error) => {
+      .catch(async () => {
         await projectService.updateStatus(projectId, 'ready');
-        console.error(`❌ [PROJECT CONTROLLER] Export error for project ${projectId}:`, error);
       });
 
     // Return immediately with job info
@@ -434,7 +415,6 @@ export async function startExport(ctx: HttpContext): Promise<HandlerResult> {
       message: 'Export started. Connect to stream endpoint for progress updates.',
     });
   } catch (error) {
-    console.error('❌ [PROJECT CONTROLLER] Error starting export:', error);
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to start export',
@@ -472,7 +452,6 @@ export async function getExportStatus(ctx: HttpContext): Promise<HandlerResult> 
       projectId: project.id,
     });
   } catch (error) {
-    console.error('❌ [PROJECT CONTROLLER] Error getting export status:', error);
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to get export status',
@@ -532,8 +511,6 @@ export async function uploadImageForClip(ctx: HttpContext): Promise<HandlerResul
       fs.writeFileSync(imagePath, Buffer.from(buffer));
     });
 
-    console.log(`✅ [PROJECT] Uploaded image for clip ${assetId} in project ${projectId}`);
-
     return jsonResponse(200, {
       success: true,
       assetId,
@@ -542,7 +519,6 @@ export async function uploadImageForClip(ctx: HttpContext): Promise<HandlerResul
       message: 'Image uploaded successfully',
     });
   } catch (error) {
-    console.error('❌ [PROJECT CONTROLLER] Error uploading image:', error);
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to upload image',
@@ -608,7 +584,6 @@ export async function listProjectImages(ctx: HttpContext): Promise<HandlerResult
       count: images.length,
     });
   } catch (error) {
-    console.error('❌ [PROJECT CONTROLLER] Error listing images:', error);
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to list images',
@@ -641,11 +616,6 @@ export async function generateProjectPreview(ctx: HttpContext): Promise<HandlerR
     }
 
     if (!project.template?.path) {
-      console.log('❌ [PREVIEW] No template.path found:', {
-        template: project.template,
-        templateType: typeof project.template,
-        templateKeys: project.template ? Object.keys(project.template) : []
-      });
       return jsonResponse(400, {
         success: false,
         error: 'Project has no template assigned',
@@ -653,24 +623,14 @@ export async function generateProjectPreview(ctx: HttpContext): Promise<HandlerR
     }
 
     if (!project.audioSessionId || project.audioSessionId === 'no-session') {
-      console.log('❌ [PREVIEW] No audio session:', {
-        audioSessionId: project.audioSessionId
-      });
       return jsonResponse(400, {
         success: false,
         error: 'Project has no audio session assigned',
       });
     }
 
-    console.log(`🎬 [PROJECT CONTROLLER] Generating preview for project ${projectId}`);
-
     // Use timeline-aware preview (includes subtitles, overlays, characters when present)
-    const result = await generateTimelinePreview(
-      project,
-      (percent, message) => {
-        console.log(`[PREVIEW] ${percent}% - ${message}`);
-      }
-    );
+    const result = await generateTimelinePreview(project);
 
     if (!result.success) {
       return jsonResponse(500, {
@@ -685,7 +645,6 @@ export async function generateProjectPreview(ctx: HttpContext): Promise<HandlerR
       message: 'Preview generated successfully',
     });
   } catch (error) {
-    console.error('❌ [PROJECT CONTROLLER] Error generating preview:', error);
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to generate preview',
@@ -724,11 +683,9 @@ export async function serveProjectPreview(ctx: HttpContext): Promise<HandlerResu
       });
     }
 
-    // Use same cache key as previewGenerator to find the correct preview file
-    const { getPreviewPath } = await import('../service/previewGenerator');
-    const previewPath = getPreviewPath(projectId, project.template.path, project.audioSessionId);
+    const previewPath = path.join(process.cwd(), 'storage', 'previews', `preview_${projectId}.mp4`);
 
-    if (!previewPath) {
+    if (!fs.existsSync(previewPath)) {
       return jsonResponse(404, {
         success: false,
         error: 'Preview not found. Generate it first using POST /api/project/:id/preview',
@@ -741,11 +698,10 @@ export async function serveProjectPreview(ctx: HttpContext): Promise<HandlerResu
       headers: {
         'Content-Type': 'video/mp4',
         'Content-Length': String(buf.length),
-        'Cache-Control': 'public, max-age=3600',
+        'Cache-Control': 'no-store',
       },
     });
   } catch (error) {
-    console.error('❌ [PROJECT CONTROLLER] Error serving preview:', error);
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to serve preview',

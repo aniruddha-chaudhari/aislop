@@ -84,19 +84,7 @@ function findRoute(method: string, pathname: string): { route: Route; params: Re
   for (const route of routes) {
     if (route.method !== method) continue;
     const params = matchPath(route.pattern, pathname);
-    if (params !== null) {
-      // Debug logging for project routes
-      if (pathname.includes('/api/project/')) {
-        console.log(`✅ [ROUTE MATCH] ${method} ${pathname} -> ${route.pattern}`);
-      }
-      return { route, params };
-    }
-  }
-  // Debug logging for unmatched project routes
-  if (pathname.includes('/api/project/')) {
-    console.log(`❌ [ROUTE NOT FOUND] ${method} ${pathname}`);
-    console.log(`   Available project routes:`, 
-      routes.filter(r => r.pattern.includes('/api/project/')).map(r => `${r.method} ${r.pattern}`));
+    if (params !== null) return { route, params };
   }
   return null;
 }
@@ -143,9 +131,6 @@ export async function handleRequest(request: Request, server?: BunServer): Promi
     return new Response(null, { status: 200, headers: cors });
   }
 
-  const ip = server?.requestIP?.(request)?.address ?? 'unknown';
-  console.log(`${new Date().toISOString()} - ${method} ${pathname} - ${ip}`);
-
   let staticRes: Response | null = null;
   try {
     staticRes = await serveStatic(pathname);
@@ -179,7 +164,6 @@ export async function handleRequest(request: Request, server?: BunServer): Promi
   try {
     await parseBody(request, ctx, route.multipart, route.multipartField);
   } catch (e) {
-    console.error('Parse body error:', e);
     return new Response(
       JSON.stringify({ error: 'Bad request', details: String(e) }),
       { status: 400, headers: { 'Content-Type': 'application/json', ...cors } }
@@ -190,7 +174,6 @@ export async function handleRequest(request: Request, server?: BunServer): Promi
   try {
     result = await route.handler(ctx);
   } catch (e) {
-    console.error('Handler error:', e);
     return new Response(
       JSON.stringify({
         error: 'Internal server error',

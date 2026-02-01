@@ -251,38 +251,45 @@ export default function CanvasPreview({
           console.warn('[CanvasPreview] video not seekable yet!');
         }
         
-        // Try seeking multiple times as a workaround
+        // Seek is async: wait for 'seeked' event (with timeout retries), then play.
         let attemptCount = 0;
         const maxAttempts = 5;
-        
+        const seekTimeoutMs = 1500;
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
         const attemptSeek = () => {
           attemptCount++;
           console.log('[CanvasPreview] seek attempt', attemptCount, 'setting currentTime to', t);
-          video.currentTime = t;
-          console.log('[CanvasPreview] currentTime is now', video.currentTime);
-          
-          if (Math.abs(video.currentTime - t) < 0.1) {
-            console.log('[CanvasPreview] seek successful!');
-            // Wait for seeked event then play
-            const onSeeked = () => {
-              console.log('[CanvasPreview] seek completed, now playing from', video.currentTime);
-              video.removeEventListener('seeked', onSeeked);
-              video.play().catch((err) => {
-                console.warn('[CanvasPreview] play() after seek failed:', err);
-              });
-            };
-            video.addEventListener('seeked', onSeeked, { once: true });
-          } else if (attemptCount < maxAttempts) {
-            console.warn('[CanvasPreview] seek failed, retrying in 50ms...');
-            setTimeout(attemptSeek, 50);
-          } else {
-            console.error('[CanvasPreview] seek failed after', maxAttempts, 'attempts, playing from current position');
+
+          const onSeeked = () => {
+            if (timeoutId != null) clearTimeout(timeoutId);
+            timeoutId = null;
+            video.removeEventListener('seeked', onSeeked);
+            console.log('[CanvasPreview] seek completed, now playing from', video.currentTime);
             video.play().catch((err) => {
-              console.warn('[CanvasPreview] play() failed:', err);
+              console.warn('[CanvasPreview] play() after seek failed:', err);
             });
-          }
+          };
+
+          const onSeekTimeout = () => {
+            timeoutId = null;
+            video.removeEventListener('seeked', onSeeked);
+            if (attemptCount < maxAttempts) {
+              console.warn('[CanvasPreview] seeked did not fire in time, retrying...');
+              setTimeout(attemptSeek, 100);
+            } else {
+              console.warn('[CanvasPreview] seek did not complete after', maxAttempts, 'attempts, playing from current position');
+              video.play().catch((err) => {
+                console.warn('[CanvasPreview] play() failed:', err);
+              });
+            }
+          };
+
+          video.addEventListener('seeked', onSeeked, { once: true });
+          timeoutId = setTimeout(onSeekTimeout, seekTimeoutMs);
+          video.currentTime = t;
         };
-        
+
         attemptSeek();
       },
       requestPause: () => {

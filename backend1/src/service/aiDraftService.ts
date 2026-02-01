@@ -20,14 +20,10 @@ export async function generateSubtitlesAndCharacters(
   audioSessionId: string,
   topic: string
 ): Promise<SubtitlesAndCharactersResult> {
-  console.log(`🎬 [AI DRAFT] Generating subtitles & characters for session ${audioSessionId}`);
-
   const session = await loadAudioSession(audioSessionId);
   if (!session) {
     throw new Error(`Audio session ${audioSessionId} not found`);
   }
-
-  console.log(`📊 [AI DRAFT] Session has ${session.dialogues.length} dialogues, total duration: ${session.totalDuration}s`);
 
   const subtitleClips = await generateSubtitleClips(session, audioSessionId);
   const characterClips = await generateCharacterClips(session, audioSessionId);
@@ -60,7 +56,6 @@ export async function generateSubtitlesAndCharacters(
     clips: characterClips,
   };
 
-  console.log(`✅ [AI DRAFT] Subtitles & characters generated: ${subtitleClips.length} subs, ${characterClips.length} chars`);
   return {
     duration: session.totalDuration,
     audioTrack,
@@ -77,8 +72,6 @@ export async function generateImagePlan(
   audioSessionId: string,
   topic: string
 ): Promise<ImagePlanResult> {
-  console.log(`🎬 [AI DRAFT] Generating image plan for session ${audioSessionId}`);
-
   const session = await loadAudioSession(audioSessionId);
   if (!session) {
     throw new Error(`Audio session ${audioSessionId} not found`);
@@ -110,7 +103,6 @@ export async function generateImagePlan(
     clips: overlayClips,
   };
 
-  console.log(`✅ [AI DRAFT] Image plan generated: ${overlayClips.length} overlays`);
   return { overlayTrack };
 }
 
@@ -127,9 +119,7 @@ export async function generateAiDraft(
   try {
     const plan = await generateImagePlan(audioSessionId, topic);
     overlayTrack = plan.overlayTrack;
-  } catch (e) {
-    console.warn('⚠️ [AI DRAFT] Image plan skipped:', e);
-  }
+  } catch (_e) {}
   return {
     duration,
     tracks: [audioTrack, subtitleTrack, overlayTrack, characterTrack],
@@ -166,7 +156,6 @@ async function loadAudioSession(sessionId: string) {
     let totalDuration = 0;
     if (typeof session.totalDuration === 'number' && session.totalDuration > 0) {
       totalDuration = session.totalDuration;
-      console.log(`✅ [AI DRAFT] Using stored session duration: ${totalDuration}s`);
     } else {
       // Fallback: Calculate total duration from audio files
       const fs = require('fs');
@@ -183,7 +172,6 @@ async function loadAudioSession(sessionId: string) {
           totalDuration += duration;
         }
       }
-      console.log(`✅ [AI DRAFT] Calculated session duration: ${totalDuration}s`);
     }
 
     return {

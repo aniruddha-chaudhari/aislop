@@ -29,45 +29,16 @@ const server = Bun.serve({
   },
 });
 
-console.log(`Server is running on http://0.0.0.0:${port}`);
-console.log(`Server is also available on http://localhost:${port}`);
-console.log(`Backend API available at http://localhost:${port}/api/assistant`);
-console.log(
-  `CORS enabled for origins: http://localhost:5376, http://127.0.0.1:5376, http://localhost:3000, http://127.0.0.1:3000, http://192.168.56.1:5376, http://192.168.56.1:3000, and all localhost/127.0.0.1/192.168.x.x origins`
-);
-console.log(`📡 SSE streaming endpoint: http://localhost:${port}/api/stream/:sessionId/files`);
-console.log(`ℹ️  Using in-memory event emitter for real-time updates (no Redis required)`);
-
 setInterval(() => {
   try {
-    console.log('🧹 [SCHEDULED] Running ASS cache cleanup...');
     if (!fs.existsSync(ASS_CACHE_DIR)) return;
-    let deletedCount = 0;
     const files = fs.readdirSync(ASS_CACHE_DIR);
     for (const file of files) {
       if (!file.endsWith('.ass')) continue;
       const filePath = path.join(ASS_CACHE_DIR, file);
       const stats = fs.statSync(filePath);
       const ageInHours = (Date.now() - stats.mtimeMs) / (1000 * 60 * 60);
-      if (ageInHours > ASS_CACHE_DURATION_HOURS) {
-        fs.unlinkSync(filePath);
-        deletedCount++;
-        console.log(`🗑️ [SCHEDULED] Cleaned up expired ASS file: ${file} (${ageInHours.toFixed(2)}h old)`);
-      }
+      if (ageInHours > ASS_CACHE_DURATION_HOURS) fs.unlinkSync(filePath);
     }
-    if (deletedCount > 0) {
-      console.log(`🗑️ [SCHEDULED] Cleaned up ${deletedCount} expired ASS files`);
-    }
-  } catch (error) {
-    console.error('❌ [SCHEDULED] Error during ASS cache cleanup:', error);
-  }
+  } catch (_) {}
 }, CLEANUP_INTERVAL_MS);
-
-console.log(`🧹 ASS cache cleanup scheduled every ${CLEANUP_INTERVAL_MS / (60 * 60 * 1000)} hours`);
-
-process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error);
-});
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-});
