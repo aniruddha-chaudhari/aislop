@@ -19,7 +19,6 @@ const TEMP_DIR = path.join(process.cwd(), 'storage', 'temp');
 
 if (!fs.existsSync(ASS_CACHE_DIR)) {
   fs.mkdirSync(ASS_CACHE_DIR, { recursive: true });
-  console.log(`📁 [INIT] Created ASS cache directory: ${ASS_CACHE_DIR}`);
 }
 
 // ASS Cache Utility Functions
@@ -38,7 +37,6 @@ const generateDialogueHash = (dialogues: any[]): string => {
 };
 
 const checkAssCache = async (sessionId: string, dialogueHash: string): Promise<string | null> => {
-  console.log(`🔍 [ASS CACHE][DB] Checking for cached subtitle for session ${sessionId} and hash ${dialogueHash}`);
 
   try {
     // Redis removed - check database cache only
@@ -48,31 +46,25 @@ const checkAssCache = async (sessionId: string, dialogueHash: string): Promise<s
     });
 
     if (!cacheEntry) {
-      console.log('❌ [ASS CACHE] No cache entry found');
       return null;
     }
 
     const ageInHours = (Date.now() - cacheEntry.createdAt.getTime()) / (1000 * 60 * 60);
 
     if (ageInHours > ASS_CACHE_DURATION_HOURS) {
-      console.log(`🗑️ [ASS CACHE] Cached DB entry expired (${ageInHours.toFixed(2)}h old), deleting`);
       await prisma.subtitleCache.delete({ where: { id: cacheEntry.id } });
       return null;
     }
 
     const cachePath = cacheEntry.assFilePath;
-    console.log(`🔍 [ASS CACHE] Found DB entry, verifying file exists at: ${cachePath}`);
 
     if (fs.existsSync(cachePath)) {
-      console.log('✅ [ASS CACHE] Using cached ASS file from DB entry');
       return cachePath;
     }
 
-    console.log('⚠️ [ASS CACHE] DB entry found but file missing, cleaning up entry');
     await prisma.subtitleCache.delete({ where: { id: cacheEntry.id } });
     return null;
   } catch (error) {
-    console.error('❌ [ASS CACHE] Error while checking cache:', error);
     return null;
   }
 };
@@ -86,11 +78,9 @@ const saveAssToCache = async (sessionId: string, dialogueHash: string, assConten
   const cacheDir = path.dirname(cachePath);
   if (!fs.existsSync(cacheDir)) {
     fs.mkdirSync(cacheDir, { recursive: true });
-    console.log(`📁 [ASS CACHE] Created cache directory: ${cacheDir}`);
   }
 
   fs.writeFileSync(cachePath, assContent, 'utf8');
-  console.log(`💾 [ASS CACHE] Saved ASS file to cache on disk: ${cacheKey}`);
 
   try {
     // Upsert database record pointing to this cache path (for backward compatibility)
@@ -111,9 +101,7 @@ const saveAssToCache = async (sessionId: string, dialogueHash: string, assConten
       }
     });
 
-    console.log('💾 [ASS CACHE][DB] Stored ASS cache path in database');
   } catch (error) {
-    console.error('❌ [ASS CACHE][DB] Failed to store ASS cache path in database:', error);
   }
 
   return cachePath;
@@ -135,7 +123,6 @@ const cleanupExpiredAssFiles = (): number => {
     if (ageInHours > ASS_CACHE_DURATION_HOURS) {
       fs.unlinkSync(filePath);
       deletedCount++;
-      console.log(`🗑️ [ASS CACHE] Cleaned up expired ASS file: ${file} (${ageInHours.toFixed(2)}h old)`);
     }
   }
 
@@ -146,17 +133,14 @@ const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
 // Ensure directories exist
 if (!fs.existsSync(VIDEO_OUTPUT_DIR)) {
   fs.mkdirSync(VIDEO_OUTPUT_DIR, { recursive: true });
-  console.log(`📁 [INIT] Created directory: ${VIDEO_OUTPUT_DIR}`);
 }
 
 if (!fs.existsSync(TEMP_DIR)) {
   fs.mkdirSync(TEMP_DIR, { recursive: true });
-  console.log(`📁 [INIT] Created directory: ${TEMP_DIR}`);
 }
 
 if (!fs.existsSync(IMAGE_UPLOAD_DIR)) {
   fs.mkdirSync(IMAGE_UPLOAD_DIR, { recursive: true });
-  console.log(`📁 [INIT] Created directory: ${IMAGE_UPLOAD_DIR}`);
 }
 
 // Main video generation function with enhanced timing
@@ -176,19 +160,19 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
       videoStyle = 'standard' // Video style preset (standard, reel_dynamic)
     } = (ctx.body as any);
 
-    console.log('🎬 [CONTROLLER] Received video generation request for session:', sessionId);
-    console.log('🎬 [CONTROLLER] Generate ASS only:', generateAssOnly);
-    console.log('🎬 [CONTROLLER] User images provided:', userImages?.length || 0);
-    console.log('🎬 [CONTROLLER] Approved user image placements:', approvedUserImagePlacements?.length || 0);
-    console.log('🚀 [CONTROLLER] Background video speed:', backgroundVideoSpeed);
-    console.log('🎨 [CONTROLLER] Video style:', videoStyle);
 
     // If we have an image plan, this is the final video generation with images
     if (imagePlan && !generateAssOnly) {
-      console.log('🎨 [CONTROLLER] FINAL VIDEO GENERATION with embedded images');
-      console.log('🎨 [CONTROLLER] Session ID:', sessionId);
-      console.log('🎨 [CONTROLLER] Image plan has', imagePlan.imageRequirements?.length || 0, 'requirements');
-      console.log('🎨 [CONTROLLER] Background video path:', backgroundVideoPath);
+      const reqs = imagePlan.imageRequirements || [];
+      console.log('🎨 [CONTROLLER] Using image plan for video generation', {
+        sessionId: imagePlan.sessionId,
+        totalDuration: imagePlan.totalDuration,
+        requirementCount: reqs.length,
+        summary: imagePlan.summary,
+      });
+      reqs.forEach((req: { id?: string; title?: string; timestamp?: number; contextualDuration?: number; duration?: number; uploaded?: boolean; imagePath?: string }, i: number) => {
+        console.log(`[IMAGE PLAN]   req #${i + 1} id=${req.id} title="${req.title}" at ${req.timestamp?.toFixed(1)}s duration=${(req.contextualDuration ?? req.duration ?? 8).toFixed(1)}s uploaded=${!!req.uploaded} path=${req.imagePath ?? 'none'}`);
+      });
 
       // Use the new image embedding service
       const result = await ImageEmbeddingService.generateVideoWithEmbeddedImages(
@@ -209,9 +193,6 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
 
     // Handle user-provided images for video generation
     if (userImages && userImages.length > 0 && !generateAssOnly) {
-      console.log('🎨 [CONTROLLER] VIDEO GENERATION with user-provided images');
-      console.log('🎨 [CONTROLLER] Session ID:', sessionId);
-      console.log('🎨 [CONTROLLER] User images:', userImages.length);
 
       try {
         // Get session data to generate ASS content
@@ -237,10 +218,8 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
 
         let assFilePath: string;
         if (cachedAssPath) {
-          console.log('✅ [CONTROLLER] Using cached WhisperX ASS file for image analysis');
           assFilePath = cachedAssPath;
         } else {
-          console.log('🎯 [CONTROLLER] Generating accurate WhisperX ASS file for image analysis');
 
           // Import the video generator service functions
           const { getWhisperXAlignment, generateASSSubtitles } = await import('../service/videoGenerator');
@@ -253,7 +232,6 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
             const dialogue = session.dialogues[i];
 
             if (dialogue.audioFile) {
-              console.log(`🎯 [CONTROLLER] Processing dialogue ${i + 1}/${session.dialogues.length}: "${dialogue.text.substring(0, 50)}..."`);
 
               // Get audio duration first
               const audioDuration = await new Promise<number>((resolve, reject) => {
@@ -288,7 +266,6 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
               });
 
               cumulativeTime += audioDuration;
-              console.log(`✅ [CONTROLLER] Processed dialogue ${i + 1}, cumulative time: ${cumulativeTime.toFixed(2)}s`);
             }
           }
 
@@ -307,13 +284,10 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
             fs.unlinkSync(tempAssPath);
           }
 
-          console.log('✅ [CONTROLLER] WhisperX ASS file generated and cached for image analysis');
         }
 
         // Handle approved user image placements
         if (approvedUserImagePlacements && approvedUserImagePlacements.length > 0) {
-          console.log('🎯 [CONTROLLER] Using approved user image placements for video generation');
-          console.log('📊 [CONTROLLER] Approved placements:', approvedUserImagePlacements.length);
 
           // Load existing image plan to include AI-generated images
           let existingAiImages: any[] = [];
@@ -322,7 +296,12 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
             try {
               const existingPlan = JSON.parse(fs.readFileSync(imagePlanFile, 'utf8'));
               existingAiImages = existingPlan.imageRequirements.filter((req: any) => req.uploaded && req.imagePath);
-              console.log(`✅ [CONTROLLER] Found ${existingAiImages.length} AI-generated images to include`);
+              console.log('[IMAGE PLAN] Loaded existing image plan for user images video', {
+                sessionId,
+                file: imagePlanFile,
+                totalRequirements: existingPlan.imageRequirements?.length ?? 0,
+                uploadedIncluded: existingAiImages.length,
+              });
             } catch (error) {
               console.warn('⚠️ [CONTROLLER] Could not load existing image plan:', error);
             }
@@ -336,8 +315,6 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
               // Include approved user image placements
               ...approvedUserImagePlacements.map((placement: any) => {
                 const userImage = userImages.find((img: any) => img.id === placement.userImageId);
-                console.log(`🎯 [CONTROLLER] Processing approved placement: ${placement.userImageId} -> ${placement.userImageLabel}`);
-                console.log(`🎯 [CONTROLLER] Found user image: ${userImage ? userImage.imagePath : 'NOT FOUND'}`);
                 return {
                   id: placement.userImageId,
                   timestamp: placement.suggestedTimestamp,
@@ -440,7 +417,6 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
         }
 
       } catch (error) {
-        console.error('❌ [CONTROLLER] Error in user images video generation:', error);
         return jsonResponse(500,{
           success: false,
           error: 'Failed to generate video with user images',
@@ -451,9 +427,6 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
 
     // If generateAssOnly is true, generate ASS file for analysis
     if (generateAssOnly) {
-      console.log('📝 [CONTROLLER] Generating ASS file for analysis ONLY (no video generation)');
-      console.log('📝 [CONTROLLER] Session ID:', sessionId);
-      console.log('📝 [CONTROLLER] Background video path:', backgroundVideoPath);
 
       try {
         // Get session data to generate ASS content
@@ -478,7 +451,6 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
         const cachedAssPath = await checkAssCache(sessionId, dialogueHash);
 
         if (cachedAssPath) {
-          console.log('✅ [CONTROLLER] Using cached WhisperX ASS file for analysis');
           return jsonResponse(200,{
             success: true,
             message: 'ASS file retrieved from cache',
@@ -488,7 +460,6 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
           });
         }
 
-        console.log('🎯 [CONTROLLER] Generating accurate WhisperX ASS file for analysis');
 
         // Import the video generator service functions
         const { getWhisperXAlignment, generateASSSubtitles } = await import('../service/videoGenerator');
@@ -501,7 +472,6 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
           const dialogue = session.dialogues[i];
 
           if (dialogue.audioFile) {
-            console.log(`🎯 [CONTROLLER] Processing dialogue ${i + 1}/${session.dialogues.length}: "${dialogue.text.substring(0, 50)}..."`);
 
             // Get audio duration first
             const audioDuration = await new Promise<number>((resolve, reject) => {
@@ -536,7 +506,6 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
             });
 
             cumulativeTime += audioDuration;
-            console.log(`✅ [CONTROLLER] Processed dialogue ${i + 1}, cumulative time: ${cumulativeTime.toFixed(2)}s`);
           }
         }
 
@@ -555,7 +524,6 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
           fs.unlinkSync(tempAssPath);
         }
 
-        console.log('✅ [CONTROLLER] WhisperX ASS file generated and cached for analysis');
 
         return jsonResponse(200,{
           success: true,
@@ -568,7 +536,6 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
         });
 
       } catch (error) {
-        console.error('❌ [CONTROLLER] Error generating ASS file with WhisperX:', error);
         return jsonResponse(500,{
           success: false,
           error: 'Failed to generate ASS file with WhisperX API',
@@ -578,10 +545,6 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
     }
 
     // Normal video generation without image embedding
-    console.log('🎬 [CONTROLLER] NORMAL VIDEO GENERATION (with subtitles and images)');
-    console.log('🎬 [CONTROLLER] Session ID:', sessionId);
-    console.log('🎬 [CONTROLLER] Background video path:', backgroundVideoPath);
-    console.log('🎬 [CONTROLLER] Device:', device);
 
     // Create a minimal image plan for videos without specific image requirements
     const minimalImagePlan = {
@@ -615,7 +578,6 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
     }
 
   } catch (error) {
-    console.error('💥 [CONTROLLER] Video generation controller error:', error);
 
     const totalDuration = (Date.now() - startTime) / 1000;
     return jsonResponse(500,{
@@ -651,7 +613,6 @@ export const downloadVideo = async (ctx: HttpContext): Promise<HandlerResult> =>
       },
     });
   } catch (error) {
-    console.error('Error downloading video:', error);
     return jsonResponse(500,{
       success: false,
       error: 'Failed to download video file'
@@ -685,7 +646,6 @@ export const getGeneratedVideos = async (ctx: HttpContext): Promise<HandlerResul
     return jsonResponse(200,{ success: true, videos: videoFiles });
 
   } catch (error) {
-    console.error('Error getting generated videos:', error);
     return jsonResponse(500,{
       success: false,
       error: 'Failed to get generated videos'
@@ -715,7 +675,6 @@ export const deleteVideo = async (ctx: HttpContext): Promise<HandlerResult> => {
     });
 
   } catch (error) {
-    console.error('Error deleting video:', error);
     return jsonResponse(500,{
       success: false,
       error: 'Failed to delete video file'
@@ -746,7 +705,6 @@ export const cleanupVideoFiles = async (ctx: HttpContext): Promise<HandlerResult
       if (ageInHours > 24) {
         fs.unlinkSync(filePath);
         deletedCount++;
-        console.log(`Deleted old video file: ${file}`);
       }
     }
 
@@ -757,7 +715,6 @@ export const cleanupVideoFiles = async (ctx: HttpContext): Promise<HandlerResult
     });
 
   } catch (error) {
-    console.error('Error cleaning up video files:', error);
     return jsonResponse(500,{
       success: false,
       error: 'Failed to clean up video files'
@@ -793,7 +750,6 @@ export const getTemplateVideos = async (ctx: HttpContext): Promise<HandlerResult
     return jsonResponse(200,{ success: true, videos: videoFiles });
 
   } catch (error) {
-    console.error('Error getting template videos:', error);
     return jsonResponse(500,{
       success: false,
       error: 'Failed to get template videos'
@@ -847,7 +803,6 @@ export const uploadTemplateVideo = async (ctx: HttpContext): Promise<HandlerResu
     });
 
   } catch (error) {
-    console.error('Error uploading template video:', error);
     return jsonResponse(500,{
       success: false,
       error: 'Failed to upload video'
@@ -939,7 +894,6 @@ export const serveTemplateVideo = async (ctx: HttpContext): Promise<HandlerResul
       },
     });
   } catch (error) {
-    console.error('Error serving template video:', error);
     return jsonResponse(500, {
       success: false,
       error: 'Failed to serve template video'
@@ -961,8 +915,6 @@ export const analyzeAssForImages = async (ctx: HttpContext): Promise<HandlerResu
       });
     }
 
-    console.log('🎨 [CONTROLLER] Starting clean timestamp-based image analysis for session:', sessionId);
-    console.log('🎨 [CONTROLLER] Using WhisperX clean alignment for better accuracy');
 
     // Clean up old session files before starting new image plan generation
     console.log('🧹 [CONTROLLER] Cleaning up old session files before image plan generation...');
@@ -983,7 +935,6 @@ export const analyzeAssForImages = async (ctx: HttpContext): Promise<HandlerResu
       return jsonResponse(404,{ success: false, error: 'Session not found' });
     }
 
-    console.log(`🎯 [CONTROLLER] Found ${session.dialogues.length} dialogues for clean timestamp analysis`);
 
     // Filter dialogues that have audio files and map them to the expected format
     const validDialogues = session.dialogues
@@ -1001,9 +952,9 @@ export const analyzeAssForImages = async (ctx: HttpContext): Promise<HandlerResu
       });
     }
 
-    console.log(`🎯 [CONTROLLER] Processing ${validDialogues.length} dialogues with audio files`);
 
     // Use the new clean timestamp method for better image analysis accuracy
+    console.log('[IMAGE PLAN] Generating image plan (analyzeAssForImages)', { sessionId, topic, dialogueCount: validDialogues.length });
     const imagePlan = await ImageEmbeddingService.generateImageEmbeddingPlanFromCleanTimestamps(
       sessionId,
       validDialogues,
@@ -1011,6 +962,16 @@ export const analyzeAssForImages = async (ctx: HttpContext): Promise<HandlerResu
       undefined, // No user images in this endpoint
       'ultra'
     );
+
+    console.log('[IMAGE PLAN] Analyze response plan detail', {
+      sessionId: imagePlan.sessionId,
+      totalDuration: imagePlan.totalDuration,
+      requirementCount: imagePlan.imageRequirements?.length ?? 0,
+      summary: imagePlan.summary,
+    });
+    (imagePlan.imageRequirements || []).forEach((req: { id?: string; title?: string; timestamp?: number }, i: number) => {
+      console.log(`[IMAGE PLAN]   #${i + 1} id=${req.id} title="${req.title}" timestamp=${req.timestamp?.toFixed(1)}s`);
+    });
 
     // Format response for user
     const formattedPlan = ImageEmbeddingService.formatPlanForUser(imagePlan);
@@ -1062,6 +1023,15 @@ export const getImagePlanStatus = async (ctx: HttpContext): Promise<HandlerResul
     const progress = ImageEmbeddingAnalyzer.getUploadProgress(imagePlan);
     const formattedPlan = ImageEmbeddingService.formatPlanForUser(imagePlan);
 
+    console.log('[IMAGE PLAN] getImagePlanStatus', {
+      sessionId,
+      planFilePath,
+      requirementCount: imagePlan.imageRequirements?.length ?? 0,
+      uploaded: progress.uploaded,
+      total: progress.total,
+      percentage: progress.percentage,
+    });
+
     return jsonResponse(200,{
       success: true,
       imagePlan,
@@ -1100,7 +1070,6 @@ export const uploadImageForRequirement = async (ctx: HttpContext): Promise<Handl
       });
     }
 
-    console.log('📤 [CONTROLLER] Uploading image for requirement:', imageId);
 
     // Load current image plan
     const planFilePath = path.join(TEMP_DIR, `${sessionId}_image_plan.json`);
@@ -1163,7 +1132,6 @@ export const uploadImageForRequirement = async (ctx: HttpContext): Promise<Handl
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error uploading image:', error);
     return jsonResponse(500,{
       success: false,
       error: 'Failed to upload image',
@@ -1199,7 +1167,6 @@ export const uploadUserProvidedImage = async (ctx: HttpContext): Promise<Handler
       });
     }
 
-    console.log('📤 [CONTROLLER] Uploading user-provided image:', label);
 
     // Create session-specific user images directory
     const userImagesDir = path.join(IMAGE_UPLOAD_DIR, sessionId, 'user_provided');
@@ -1236,14 +1203,12 @@ export const uploadUserProvidedImage = async (ctx: HttpContext): Promise<Handler
       try {
         existingImages = JSON.parse(fs.readFileSync(userImagesFile, 'utf8'));
       } catch (error) {
-        console.warn('⚠️ [CONTROLLER] Could not parse existing user images file, starting fresh');
       }
     }
 
     existingImages.push(userImage);
     fs.writeFileSync(userImagesFile, JSON.stringify(existingImages, null, 2));
 
-    console.log('✅ [CONTROLLER] User-provided image uploaded and saved:', userImage.id);
 
     return jsonResponse(200,{
       success: true,
@@ -1253,7 +1218,6 @@ export const uploadUserProvidedImage = async (ctx: HttpContext): Promise<Handler
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error uploading user-provided image:', error);
     return jsonResponse(500,{
       success: false,
       error: 'Failed to upload user-provided image',
@@ -1291,7 +1255,6 @@ export const getUserProvidedImages = async (ctx: HttpContext): Promise<HandlerRe
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error getting user-provided images:', error);
     return jsonResponse(500,{
       success: false,
       error: 'Failed to get user-provided images',
@@ -1347,7 +1310,6 @@ export const deleteUserProvidedImage = async (ctx: HttpContext): Promise<Handler
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error deleting user-provided image:', error);
     return jsonResponse(500,{
       success: false,
       error: 'Failed to delete user-provided image',
@@ -1398,7 +1360,6 @@ export const getUploadedImages = async (ctx: HttpContext): Promise<HandlerResult
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error getting uploaded images:', error);
     return jsonResponse(500,{
       success: false,
       error: 'Failed to get uploaded images',
@@ -1459,7 +1420,6 @@ export const deleteUploadedImage = async (ctx: HttpContext): Promise<HandlerResu
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error deleting uploaded image:', error);
     return jsonResponse(500,{
       success: false,
       error: 'Failed to delete uploaded image',
@@ -1506,7 +1466,6 @@ export const uploadAssFile = async (ctx: HttpContext): Promise<HandlerResult> =>
     const cachePath = getAssCachePath(cacheKey);
 
     if (fs.existsSync(cachePath)) {
-      console.log('✅ [ASS UPLOAD] Using existing cached ASS file');
 
       // Clean up the uploaded temp file
       fs.unlinkSync(file.path);
@@ -1527,7 +1486,6 @@ export const uploadAssFile = async (ctx: HttpContext): Promise<HandlerResult> =>
     // Clean up the uploaded temp file
     fs.unlinkSync(file.path);
 
-    console.log('💾 [ASS UPLOAD] Saved ASS file to cache:', cacheKey);
 
     return jsonResponse(200,{
       success: true,
@@ -1539,7 +1497,6 @@ export const uploadAssFile = async (ctx: HttpContext): Promise<HandlerResult> =>
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error uploading ASS file:', error);
     return jsonResponse(500,{
       success: false,
       error: 'Failed to upload ASS file',
@@ -1592,7 +1549,6 @@ export const updateUserProvidedImage = async (ctx: HttpContext): Promise<Handler
     // Save updated metadata
     fs.writeFileSync(userImagesFile, JSON.stringify(userImages, null, 2));
 
-    console.log(`✅ [CONTROLLER] Updated user image metadata: ${imageId}`);
 
     return jsonResponse(200,{
       success: true,
@@ -1601,7 +1557,6 @@ export const updateUserProvidedImage = async (ctx: HttpContext): Promise<Handler
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error updating user-provided image:', error);
     return jsonResponse(500,{
       success: false,
       error: 'Failed to update user-provided image',
@@ -1654,7 +1609,6 @@ export const getUserImagePlacementSuggestions = async (ctx: HttpContext): Promis
       userImages
     );
 
-    console.log(`✅ [CONTROLLER] Generated ${suggestions.length} user image placement suggestions`);
 
     return jsonResponse(200,{
       success: true,
@@ -1662,7 +1616,6 @@ export const getUserImagePlacementSuggestions = async (ctx: HttpContext): Promis
     });
 
   } catch (error) {
-    console.error('❌ [CONTROLLER] Error getting user image placement suggestions:', error);
     return jsonResponse(500,{
       success: false,
       error: 'Failed to get user image placement suggestions',
@@ -1683,8 +1636,6 @@ export const analyzeUserImages = async (ctx: HttpContext): Promise<HandlerResult
       });
     }
 
-    console.log('🔍 [CONTROLLER] Analyzing user images for session:', sessionId);
-    console.log('🔍 [CONTROLLER] Topic:', topic);
 
     // Get conversation data for this session
     const session = await prisma.session.findUnique({
@@ -1707,7 +1658,6 @@ export const analyzeUserImages = async (ctx: HttpContext): Promise<HandlerResult
     const userImagesPath = path.join(TEMP_DIR, `${sessionId}_user_images.json`);
     
     if (!fs.existsSync(userImagesPath)) {
-      console.log('❌ [CONTROLLER] User images file not found:', userImagesPath);
       return jsonResponse(400,{
         success: false,
         error: 'No user images found for this session'
@@ -1719,12 +1669,8 @@ export const analyzeUserImages = async (ctx: HttpContext): Promise<HandlerResult
     // ANALYZE ALL user images and return best suggestions
     const userImages = allUserImages; // Analyze all user images to find the best ones
     
-    console.log('📊 [CONTROLLER] Total user images in file:', allUserImages.length);
-    console.log('📊 [CONTROLLER] Analyzing all user images to find the best one:', userImages.length);
-    console.log('📋 [CONTROLLER] Image details:', userImages.map((img: any) => ({ id: img.id, label: img.label, imagePath: img.imagePath })));
 
     if (!userImages || userImages.length === 0) {
-      console.log('❌ [CONTROLLER] No user images to analyze');
       return jsonResponse(400,{
         success: false,
         error: 'No user images to analyze'
@@ -1736,7 +1682,6 @@ export const analyzeUserImages = async (ctx: HttpContext): Promise<HandlerResult
     
     if (!fs.existsSync(tempAssPath)) {
       // Generate ASS file ONLY for analysis (not full video generation)
-      console.log('🎯 [CONTROLLER] Generating ASS file for timing analysis');
       
       // Get session data
       const session = await prisma.session.findUnique({
@@ -1759,10 +1704,8 @@ export const analyzeUserImages = async (ctx: HttpContext): Promise<HandlerResult
       const cachedAssPath = await checkAssCache(sessionId, dialogueHash);
 
       if (cachedAssPath) {
-        console.log('✅ [CONTROLLER] Using cached WhisperX ASS file for analysis');
         fs.copyFileSync(cachedAssPath, tempAssPath);
       } else {
-        console.log('🎯 [CONTROLLER] Generating accurate WhisperX ASS file for analysis');
 
         // Import the video generator service functions
         const { getWhisperXAlignment, generateASSSubtitles } = await import('../service/videoGenerator');
@@ -1775,7 +1718,6 @@ export const analyzeUserImages = async (ctx: HttpContext): Promise<HandlerResult
           const dialogue = session.dialogues[i];
 
           if (dialogue.audioFile) {
-            console.log(`🎯 [CONTROLLER] Processing dialogue ${i + 1}/${session.dialogues.length} for ASS analysis`);
 
             // Get audio duration first
             const audioDuration = await new Promise<number>((resolve, reject) => {
@@ -1820,7 +1762,6 @@ export const analyzeUserImages = async (ctx: HttpContext): Promise<HandlerResult
         const assContent = fs.readFileSync(tempAssPath, 'utf8');
         await saveAssToCache(sessionId, dialogueHash, assContent);
 
-        console.log('✅ [CONTROLLER] WhisperX ASS file generated for analysis');
       }
     }
 
@@ -1846,17 +1787,10 @@ export const analyzeUserImages = async (ctx: HttpContext): Promise<HandlerResult
       lowRelevance: suggestions.filter(s => s.relevanceScore < 0.6).length
     }, null, 2));
 
-    console.log('✅ [CONTROLLER] Image analysis completed:', suggestions.length, 'suggestions generated');
-    console.log('📊 [CONTROLLER] Analysis summary:');
-    console.log(`   - High relevance (>0.8): ${suggestions.filter(s => s.relevanceScore > 0.8).length}`);
-    console.log(`   - Medium relevance (0.6-0.8): ${suggestions.filter(s => s.relevanceScore >= 0.6 && s.relevanceScore <= 0.8).length}`);
-    console.log(`   - Low relevance (<0.6): ${suggestions.filter(s => s.relevanceScore < 0.6).length}`);
-    console.log(`   - Total images analyzed: ${allUserImages.length}`);
 
     // CRITICAL FIX: Apply suggestions back to user images
     // This ensures timestamps are saved for video generation
     if (suggestions.length > 0) {
-      console.log('🔄 [CONTROLLER] Applying suggestion timestamps back to user images...');
       
       let updatedCount = 0;
       suggestions.forEach(suggestion => {
@@ -1867,7 +1801,6 @@ export const analyzeUserImages = async (ctx: HttpContext): Promise<HandlerResult
           allUserImages[userImageIndex].suggestionReasoning = suggestion.reasoning;
           allUserImages[userImageIndex].relevanceScore = suggestion.relevanceScore;
           updatedCount++;
-          console.log(`📍 [CONTROLLER] Updated "${suggestion.userImageLabel}" -> ${suggestion.suggestedTimestamp}s (score: ${suggestion.relevanceScore})`);
         }
         
         // ALSO update any other images with the same label (duplicates)
@@ -1879,14 +1812,12 @@ export const analyzeUserImages = async (ctx: HttpContext): Promise<HandlerResult
             img.suggestionReasoning = `Same as ${suggestion.userImageLabel} (duplicate)`;
             img.relevanceScore = suggestion.relevanceScore;
             updatedCount++;
-            console.log(`📍 [CONTROLLER] Updated duplicate "${img.label}" -> ${suggestion.suggestedTimestamp}s (same label)`);
           }
         });
       });
       
       // Save updated user images back to file
       fs.writeFileSync(userImagesPath, JSON.stringify(allUserImages, null, 2));
-      console.log(`✅ [CONTROLLER] Updated ${updatedCount} user images with timestamps`);
     }
 
     return jsonResponse(200,{
@@ -1910,7 +1841,6 @@ export const analyzeUserImages = async (ctx: HttpContext): Promise<HandlerResult
     });
 
   } catch (error) {
-    console.error('💥 [CONTROLLER] Error analyzing user images:', error);
     return jsonResponse(500,{
       success: false,
       error: 'Failed to analyze user images',
@@ -1948,7 +1878,6 @@ export const getImageAnalysis = async (ctx: HttpContext): Promise<HandlerResult>
     });
 
   } catch (error) {
-    console.error('💥 [CONTROLLER] Error getting image analysis:', error);
     return jsonResponse(500,{
       success: false,
       error: 'Failed to get image analysis',
@@ -1960,7 +1889,6 @@ export const getImageAnalysis = async (ctx: HttpContext): Promise<HandlerResult>
 // ASS Cache cleanup function
 export const cleanupAssCache = async (ctx: HttpContext): Promise<HandlerResult> => {
   try {
-    console.log('🧹 [ASS CACHE] Starting cleanup of expired ASS files');
 
     const deletedCount = cleanupExpiredAssFiles();
 
@@ -1978,7 +1906,6 @@ export const cleanupAssCache = async (ctx: HttpContext): Promise<HandlerResult> 
           if (ageInHours > ASS_CACHE_DURATION_HOURS) {
             fs.unlinkSync(filePath);
             tempCleanupCount++;
-            console.log(`🗑️ [ASS CACHE] Cleaned up old temp ASS file: ${file}`);
           }
         }
       }
@@ -1992,7 +1919,6 @@ export const cleanupAssCache = async (ctx: HttpContext): Promise<HandlerResult> 
     });
 
   } catch (error) {
-    console.error('❌ [ASS CACHE] Error during cleanup:', error);
     return jsonResponse(500,{
       success: false,
       error: 'Failed to cleanup ASS cache',
@@ -2013,7 +1939,6 @@ export const getAssContent = async (ctx: HttpContext): Promise<HandlerResult> =>
       });
     }
 
-    console.log('📄 [ASS CONTENT] Getting ASS content for session:', sessionId);
 
     // Get session data to generate ASS content
     const session = await prisma.session.findUnique({
@@ -2035,16 +1960,13 @@ export const getAssContent = async (ctx: HttpContext): Promise<HandlerResult> =>
 
     // Generate dialogue hash for caching
     const dialogueHash = generateDialogueHash(session.dialogues);
-    console.log('🔍 [ASS CONTENT] Generated dialogue hash:', dialogueHash);
 
     let assContent = '';
     const cachedAssPath = await checkAssCache(sessionId, dialogueHash);
 
     if (cachedAssPath) {
-      console.log('✅ [ASS CONTENT] Using cached ASS file:', cachedAssPath);
       assContent = fs.readFileSync(cachedAssPath, 'utf8');
     } else {
-      console.log('🔄 [ASS CONTENT] Generating fresh ASS content');
       
       // Import the video generator service functions
       const { getWhisperXAlignment, generateASSSubtitles } = await import('../service/videoGenerator');
@@ -2114,7 +2036,6 @@ export const getAssContent = async (ctx: HttpContext): Promise<HandlerResult> =>
     });
 
   } catch (error) {
-    console.error('❌ [ASS CONTENT] Error getting ASS content:', error);
     return jsonResponse(500,{
       success: false,
       error: 'Failed to get ASS content',
@@ -2135,7 +2056,6 @@ export const uploadCustomSuggestions = async (ctx: HttpContext): Promise<Handler
       });
     }
 
-    console.log('📋 [CUSTOM SUGGESTIONS] Processing custom suggestions for session:', sessionId);
 
     // Validate the custom data structure
     if (!customData.suggestions || !Array.isArray(customData.suggestions)) {
@@ -2146,7 +2066,6 @@ export const uploadCustomSuggestions = async (ctx: HttpContext): Promise<Handler
     }
 
     // Log the custom suggestions
-    console.log(`📋 [CUSTOM SUGGESTIONS] Received ${customData.suggestions.length} custom suggestions`);
 
     // You can add additional validation here for suggestion structure
     for (const suggestion of customData.suggestions) {
@@ -2162,7 +2081,6 @@ export const uploadCustomSuggestions = async (ctx: HttpContext): Promise<Handler
     const customSuggestionsPath = path.join(TEMP_DIR, `${sessionId}_custom_suggestions.json`);
     fs.writeFileSync(customSuggestionsPath, JSON.stringify(customData, null, 2), 'utf8');
 
-    console.log('✅ [CUSTOM SUGGESTIONS] Custom suggestions applied successfully');
 
     return jsonResponse(200,{
       success: true,
@@ -2172,7 +2090,6 @@ export const uploadCustomSuggestions = async (ctx: HttpContext): Promise<Handler
     });
 
   } catch (error) {
-    console.error('❌ [CUSTOM SUGGESTIONS] Error processing custom suggestions:', error);
     return jsonResponse(500,{
       success: false,
       error: 'Failed to process custom suggestions',

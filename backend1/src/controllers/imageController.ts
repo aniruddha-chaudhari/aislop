@@ -30,7 +30,6 @@ export async function generateImage(ctx: HttpContext): Promise<HandlerResult> {
       const filepath = path.join(outputDir, filename);
       await fs.promises.writeFile(filepath, file.uint8Array);
       savedImages.push(`/generated_images/${filename}`);
-      console.log(`Saved image to ${filepath}`);
     }
 
     return jsonResponse(200, {
@@ -43,7 +42,6 @@ export async function generateImage(ctx: HttpContext): Promise<HandlerResult> {
       },
     });
   } catch (error) {
-    console.error('Error generating image:', error);
     return jsonResponse(500, {
       error: 'Failed to generate image',
       details: error instanceof Error ? error.message : 'Unknown error',

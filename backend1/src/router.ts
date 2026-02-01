@@ -172,6 +172,9 @@ export async function handleRequest(request: Request, server?: BunServer): Promi
 
   let result: HandlerResult;
   try {
+    if (pathname.includes('image-plan')) {
+      process.stdout.write(`[IMAGE PLAN] Route matched: ${method} ${pathname}\n`);
+    }
     result = await route.handler(ctx);
   } catch (e) {
     return new Response(

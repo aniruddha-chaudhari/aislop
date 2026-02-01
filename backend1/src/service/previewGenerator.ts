@@ -24,6 +24,11 @@ const PREVIEW_HEIGHT = 640;
 const SCALE = PREVIEW_HEIGHT / 1920; // Same proportion as timelineCompiler 1080x1920
 const PREVIEW_BITRATE = '500k'; // Low bitrate for fast generation
 
+// Overlay placement: match imageEmbedder (backend) - center horizontally, fixed from top
+const OVERLAY_SCALE_W = Math.floor(960 * (PREVIEW_WIDTH / 1080)); // 320 at 360px width
+const OVERLAY_SCALE_H = Math.floor(720 * (PREVIEW_HEIGHT / 1920)); // 240 at 640px height
+const OVERLAY_Y_TOP = Math.floor(40 * (PREVIEW_HEIGHT / 1920)); // 13 at 640px height (~40px at 1920)
+
 // Ensure preview directory exists
 if (!fs.existsSync(PREVIEW_DIR)) {
   fs.mkdirSync(PREVIEW_DIR, { recursive: true });
@@ -85,14 +90,10 @@ export async function generatePreview(
         .inputOptions(['-f', 'concat', '-safe', '0'])
         .outputOptions(['-c:a', 'pcm_s16le'])
         .output(concatenatedAudioPath);
-      concatCmd.on('start', (cmd: string) => console.log('[FFMPEG] Audio concat:', cmd));
-      concatCmd.on('stderr', (l: string) => console.log('[FFMPEG] stderr:', l));
+      concatCmd.on('start', () => {});
+      concatCmd.on('stderr', () => {});
       concatCmd.on('end', () => resolve());
-      concatCmd.on('error', (err: Error, _s?: string, stderr?: string) => {
-        console.error('[FFMPEG] Audio concat error:', err.message);
-        if (stderr) console.error('[FFMPEG] stderr:', stderr);
-        reject(err);
-      });
+      concatCmd.on('error', (err: Error) => reject(err));
       concatCmd.run();
     });
 
@@ -148,8 +149,8 @@ export async function generatePreview(
       }
     });
 
-    command.on('start', (cmd: string) => console.log('[FFMPEG] Preview encode:', cmd));
-    command.on('stderr', (l: string) => console.log('[FFMPEG] stderr:', l));
+    command.on('start', () => {});
+    command.on('stderr', () => {});
     await new Promise<void>((resolve, reject) => {
       command
         .on('end', () => {
@@ -159,11 +160,7 @@ export async function generatePreview(
           } catch (_) {}
           resolve();
         })
-        .on('error', (err: Error, _s?: string, stderr?: string) => {
-          console.error('[FFMPEG] Preview encode error:', err.message);
-          if (stderr) console.error('[FFMPEG] stderr:', stderr);
-          reject(err);
-        })
+        .on('error', (err: Error) => reject(err))
         .run();
     });
 
@@ -189,8 +186,9 @@ function formatAssTime(seconds: number): string {
 /**
  * Enrich subtitle clips with word-level timestamps (for karaoke) when missing.
  * Fetches WhisperX alignment per dialogue, matching backend videoGenerator behavior.
+ * Exported for use by timelineCompiler export.
  */
-async function enrichSubtitleClipsWithWords(
+export async function enrichSubtitleClipsWithWords(
   session: { dialogues: Array<{ id: string; text: string; character?: string; audioFile?: { filePath: string } | null }> },
   subtitleClips: SubtitleClip[]
 ): Promise<SubtitleClip[]> {
@@ -410,14 +408,10 @@ export async function generateTimelinePreview(
         .inputOptions(['-f', 'concat', '-safe', '0'])
         .outputOptions(['-c:a', 'pcm_s16le'])
         .output(concatenatedAudioPath);
-      concatCmd.on('start', (cmd: string) => console.log('[FFMPEG] Audio concat:', cmd));
-      concatCmd.on('stderr', (l: string) => console.log('[FFMPEG] stderr:', l));
+      concatCmd.on('start', () => {});
+      concatCmd.on('stderr', () => {});
       concatCmd.on('end', () => resolve());
-      concatCmd.on('error', (err: Error, _s?: string, stderr?: string) => {
-        console.error('[FFMPEG] Audio concat error:', err.message);
-        if (stderr) console.error('[FFMPEG] stderr:', stderr);
-        reject(err);
-      });
+      concatCmd.on('error', (err: Error) => reject(err));
       concatCmd.run();
     });
 
@@ -428,6 +422,18 @@ export async function generateTimelinePreview(
     const overlayClips = (overlayTrack?.clips?.filter((c: any) => c.kind === 'overlay') || []) as OverlayClip[];
     const characterClips = (characterTrack?.clips?.filter((c: any) => c.kind === 'character') || []) as CharacterClip[];
     let subtitleClips = (subtitleTrack?.clips?.filter((c: any) => c.kind === 'subtitle') || []) as SubtitleClip[];
+
+    console.log('[IMAGE PLAN] Preview using image plan (overlay track)', {
+      projectId,
+      trackId: overlayTrack?.id ?? 'none',
+      totalOverlayClips: overlayClips.length,
+      duration,
+    });
+    overlayClips.forEach((clip: OverlayClip, i: number) => {
+      const imagePath = clip.path ?? path.join(IMAGE_UPLOAD_DIR, audioSessionId, `${clip.assetId}.png`);
+      const exists = fs.existsSync(imagePath);
+      console.log(`[IMAGE PLAN]   overlay #${i + 1} id=${clip.id} assetId=${clip.assetId} label="${clip.label}" start=${clip.start.toFixed(1)}s duration=${clip.duration.toFixed(1)}s path=${exists ? imagePath : 'MISSING'}`);
+    });
 
     onProgress?.(15, 'Fetching word timings for karaoke...');
     subtitleClips = await enrichSubtitleClipsWithWords(session, subtitleClips);
@@ -448,12 +454,20 @@ export async function generateTimelinePreview(
     command.input(concatenatedAudioPath).inputOptions(['-t', duration.toString()]);
 
     const overlayInputs: { clip: OverlayClip; inputIndex: number }[] = [];
-    overlayClips.forEach((clip: OverlayClip, index: number) => {
+    overlayClips.forEach((clip: OverlayClip) => {
       const imagePath = clip.path ?? path.join(IMAGE_UPLOAD_DIR, audioSessionId, `${clip.assetId}.png`);
       if (fs.existsSync(imagePath)) {
         command.input(imagePath);
-        overlayInputs.push({ clip, inputIndex: 2 + index });
+        // Use actual FFmpeg input order: 0=template, 1=audio, 2+=overlays (so first overlay = 2, second = 3, ...)
+        overlayInputs.push({ clip, inputIndex: 2 + overlayInputs.length });
       }
+    });
+
+    console.log('[IMAGE PLAN] Preview overlay inputs (images actually used)', {
+      totalInPlan: overlayClips.length,
+      withImageFile: overlayInputs.length,
+      skipped: overlayClips.length - overlayInputs.length,
+      inputs: overlayInputs.map(({ clip, inputIndex }) => ({ id: clip.id, assetId: clip.assetId, inputIndex })),
     });
 
     let nextIdx = 2 + overlayInputs.length;
@@ -488,11 +502,9 @@ export async function generateTimelinePreview(
     }
 
     overlayInputs.forEach(({ clip, inputIndex }, index) => {
-      const sw = Math.floor(PREVIEW_WIDTH * clip.scale);
-      const xPos = `(W-w)*${clip.x}`;
-      const yPos = `(H-h)*${clip.y}`;
-      filterComplex += `;[${inputIndex}:v]scale=${sw}:-1[ov${index}]`;
-      filterComplex += `;[${lastLabel}][ov${index}]overlay=${xPos}:${yPos}:enable='between(t,${clip.start},${clip.start + clip.duration})'[vo${index}]`;
+      // Match imageEmbedder placement: scale to fixed size, center x, fixed y from top
+      filterComplex += `;[${inputIndex}:v]scale=${OVERLAY_SCALE_W}:${OVERLAY_SCALE_H}:force_original_aspect_ratio=decrease[ov${index}]`;
+      filterComplex += `;[${lastLabel}][ov${index}]overlay=(W-w)/2:${OVERLAY_Y_TOP}:enable='between(t,${clip.start},${clip.start + clip.duration})'[vo${index}]`;
       lastLabel = `vo${index}`;
     });
 
@@ -551,19 +563,11 @@ export async function generateTimelinePreview(
         path: getCharacterImagePath(clip.character)
       }))
     ];
-    console.log('[FFMPEG] Inputs:');
-    allInputs.forEach(({ index, type, path: p }) => {
-      const exists = p ? fs.existsSync(p) : false;
-      console.log(`  [${index}] ${type} exists=${exists} ${p || ''}`);
-    });
-    if (assPath) console.log(`  [ASS] exists=${fs.existsSync(assPath)} ${assPath}`);
-    console.log('[FFMPEG] Filter complex:', filterComplex);
-    console.log('[FFMPEG] Output:', outputPath, 'duration:', duration);
 
     const timeout = setTimeout(() => {}, 60000);
 
-    command.on('start', (cmd: string) => console.log('[FFMPEG] Command:', cmd));
-    command.on('stderr', (line: string) => console.log('[FFMPEG] stderr:', line));
+    command.on('start', () => {});
+    command.on('stderr', () => {});
 
     command
       .complexFilter(filterComplex)
@@ -590,26 +594,24 @@ export async function generateTimelinePreview(
       command
         .on('end', () => {
           clearTimeout(timeout);
-          console.log('[FFMPEG] Done');
           try {
             fs.unlinkSync(audioListPath);
             fs.unlinkSync(concatenatedAudioPath);
           } catch (_) {}
           resolve();
         })
-        .on('error', (err: Error, stdout?: string | null, stderr?: string | null) => {
+        .on('error', (err: Error) => {
           clearTimeout(timeout);
-          console.error('[FFMPEG] Error:', err.message, (err as any).code);
-          if (stdout) console.error('[FFMPEG] stdout:', stdout);
-          if (stderr) console.error('[FFMPEG] stderr:', stderr);
           reject(err);
         })
         .run();
     });
 
     onProgress?.(100, 'Preview ready!');
+    console.log('[IMAGE PLAN] Preview generated successfully', { projectId, outputPath, overlayCount: overlayInputs.length });
     return { success: true, outputPath };
   } catch (error) {
+    console.log('[IMAGE PLAN] Preview generation failed', { projectId, error: error instanceof Error ? error.message : String(error) });
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'

@@ -296,6 +296,10 @@ export async function generateAiDraftForProject(ctx: HttpContext): Promise<Handl
  * POST /api/project/:id/image-plan
  */
 export async function generateImagePlanForProject(ctx: HttpContext): Promise<HandlerResult> {
+  // Log immediately so you see output in the terminal where the backend is running (not browser console)
+  process.stdout.write('[IMAGE PLAN] POST /api/project/:id/image-plan hit\n');
+  console.log('[IMAGE PLAN] ========== Image plan request started ==========');
+
   try {
     const projectId = ctx.params?.id;
     const body = ctx.body as any;
@@ -325,7 +329,26 @@ export async function generateImagePlanForProject(ctx: HttpContext): Promise<Han
 
     const topic = body.topic || project.name || 'Technical conversation';
 
+    console.log('[IMAGE PLAN] Generating image plan for project', {
+      projectId,
+      projectName: project.name,
+      audioSessionId: project.audioSessionId,
+      topic,
+    });
+
     const result = await generateImagePlan(project.audioSessionId, topic);
+
+    console.log('[IMAGE PLAN] Image plan generated for project', projectId, {
+      overlayTrackId: result.overlayTrack.id,
+      clipCount: result.overlayTrack.clips.length,
+      clips: result.overlayTrack.clips.map((c: { id: string; label?: string; start: number; duration: number; assetId?: string }) => ({
+        id: c.id,
+        label: c.label,
+        start: c.start.toFixed(1) + 's',
+        duration: c.duration.toFixed(1) + 's',
+        assetId: c.assetId,
+      })),
+    });
 
     // Merge overlay track into existing timeline: replace t_imgs in place to preserve track order
     const existing = project.timeline;
@@ -440,19 +463,37 @@ export async function startExport(ctx: HttpContext): Promise<HandlerResult> {
       });
     }
 
+    const body = (ctx.body as { step?: number }) ?? {};
+    const exportStep = Math.min(4, Math.max(1, Number(body.step ?? ctx.query?.step ?? 4))) as 1 | 2 | 3 | 4;
+
+    console.log('[EXPORT] Starting export', {
+      projectId,
+      projectName: project.name,
+      audioSessionId: project.audioSessionId,
+      exportStep,
+      timelineDuration: project.timeline?.duration,
+      tracksCount: project.timeline?.tracks?.length ?? 0,
+      trackTypes: project.timeline?.tracks?.map(t => ({ id: t.id, type: t.type, clipsCount: t.clips?.length ?? 0 })) ?? [],
+    });
+
     // Update status to exporting
     await projectService.updateStatus(projectId, 'exporting');
 
     // Start export in background (don't await)
-    compileTimeline(project)
+    compileTimeline(project, { exportStep })
       .then(async (result) => {
-        if (result.success) {
+        const success = result && typeof result === 'object' && result.success;
+        console.log('[EXPORT] compileTimeline finished', { projectId, success, outputPath: result?.outputPath, error: result?.error });
+        if (success) {
           await projectService.updateStatus(projectId, 'exported');
+          console.log('[EXPORT] Export complete', { projectId });
         } else {
           await projectService.updateStatus(projectId, 'ready');
+          console.error('[EXPORT] Export failed', { projectId, error: result?.error });
         }
       })
-      .catch(async () => {
+      .catch(async (err) => {
+        console.error('[EXPORT] Export error', { projectId, error: err?.message ?? err });
         await projectService.updateStatus(projectId, 'ready');
       });
 
@@ -748,6 +789,20 @@ export async function generateProjectPreview(ctx: HttpContext): Promise<HandlerR
         error: 'Project has no audio session assigned',
       });
     }
+
+    const overlayTrack = project.timeline?.tracks?.find((t: { type: string; id: string }) => t.type === 'overlay' && t.id === 't_imgs');
+    const overlayClips = overlayTrack?.clips?.filter((c: { kind?: string }) => c.kind === 'overlay') ?? [];
+    console.log('[IMAGE PLAN] Generating preview for project', projectId, {
+      imagePlanInTimeline: !!overlayTrack,
+      overlayClipCount: overlayClips.length,
+      overlayClips: overlayClips.map((c: { id: string; label?: string; assetId?: string; start: number; duration: number }) => ({
+        id: c.id,
+        label: c.label,
+        assetId: c.assetId,
+        start: c.start.toFixed(1) + 's',
+        duration: c.duration.toFixed(1) + 's',
+      })),
+    });
 
     // Use timeline-aware preview (includes subtitles, overlays, characters when present)
     const result = await generateTimelinePreview(project);

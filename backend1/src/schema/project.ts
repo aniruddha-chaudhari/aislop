@@ -68,6 +68,8 @@ export const TrackSchema = z.object({
   clips: z.array(ClipSchema),
   locked: z.boolean().optional(),
   muted: z.boolean().optional(),
+  /** When true, track was auto-created (e.g. drag clip over another); empty ones can be auto-removed. User-added tracks omit this. */
+  isAutoCreated: z.boolean().optional(),
 });
 
 /**

@@ -21,9 +21,7 @@ export class TTSService {
       await axios.get(`${TTS_CONFIG.apiBaseUrl}/set_gpt_weights`, {
         params: { weights_path: weightsPath }
       });
-      console.log(`Successfully set GPT weights: ${weightsPath}`);
     } catch (error) {
-      console.error('Failed to set GPT weights:', error);
       throw new Error(`Failed to set GPT weights: ${weightsPath}`);
     }
   }
@@ -33,9 +31,7 @@ export class TTSService {
       await axios.get(`${TTS_CONFIG.apiBaseUrl}/set_sovits_weights`, {
         params: { weights_path: weightsPath }
       });
-      console.log(`Successfully set SoVITS weights: ${weightsPath}`);
     } catch (error) {
-      console.error('Failed to set SoVITS weights:', error);
       throw new Error(`Failed to set SoVITS weights: ${weightsPath}`);
     }
   }
@@ -45,9 +41,7 @@ export class TTSService {
       await axios.get(`${TTS_CONFIG.apiBaseUrl}/set_refer_audio`, {
         params: { refer_audio_path: audioPath }
       });
-      console.log(`Successfully set reference audio: ${audioPath}`);
     } catch (error) {
-      console.error('Failed to set reference audio:', error);
       throw new Error(`Failed to set reference audio: ${audioPath}`);
     }
   }
@@ -78,13 +72,11 @@ export class TTSService {
 
       return new Promise((resolve, reject) => {
         writer.on('finish', () => {
-          console.log(`Audio saved: ${outputPath}`);
           resolve();
         });
         writer.on('error', reject);
       });
     } catch (error) {
-      console.error('Failed to generate audio:', error);
       throw new Error(`Failed to generate audio for ${character}: ${text}`);
     }
   }
@@ -92,14 +84,12 @@ export class TTSService {
   private async setupModelsForCharacter(character: CharacterName): Promise<void> {
     const config = TTS_CONFIG.characters[character];
     
-    console.log(`Setting up models for ${character}...`);
     
     // Set models in sequence
     await this.setGPTWeights(config.gpt);
     await this.setSoVITSWeights(config.sovits);
     await this.setReferenceAudio(config.referenceAudio);
     
-    console.log(`Models setup complete for ${character}`);
   }
 
   public async generateConversationAudio(
@@ -131,7 +121,6 @@ export class TTSService {
         const outputPath = path.join(sessionDir, filename);
 
         // Generate audio
-        console.log(`Generating audio for ${character}: ${dialogue.substring(0, 50)}...`);
         await this.generateAudio(dialogue, character, outputPath);
         
         audioFiles.push(outputPath);
@@ -140,11 +129,9 @@ export class TTSService {
         await new Promise(resolve => setTimeout(resolve, TTS_CONFIG.settings.delayBetweenCalls));
       }
 
-      console.log(`Generated ${audioFiles.length} audio files for session ${sessionId}`);
       return audioFiles;
       
     } catch (error) {
-      console.error('Error generating conversation audio:', error);
       throw error;
     }
   }
@@ -158,7 +145,6 @@ export class TTSService {
       const response = await axios.get(`${TTS_CONFIG.apiBaseUrl}/models`);
       return response.data;
     } catch (error) {
-      console.error('Failed to get models list:', error);
       throw new Error('Failed to fetch models from GPT-SoVITS API');
     }
   }

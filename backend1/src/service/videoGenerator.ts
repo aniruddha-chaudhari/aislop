@@ -57,7 +57,6 @@ const ffmpegPath = customFfmpegPath || ffmpegInstaller.path;
 if (ffmpegPath) {
   ffmpeg.setFfmpegPath(ffmpegPath);
   if (customFfmpegPath) {
-    console.log('🎬 [INIT] Using custom FFmpeg path:', ffmpegPath);
     
     // Check FFmpeg version
     const { exec } = require('child_process');
@@ -65,15 +64,12 @@ if (ffmpegPath) {
       if (!error) {
         const versionMatch = stdout.match(/ffmpeg version ([^\s]+)/);
         if (versionMatch) {
-          console.log('✅ [INIT] FFmpeg version:', versionMatch[1]);
         }
       }
     });
   } else {
-    console.log('🎬 [INIT] FFmpeg path set to:', ffmpegPath);
   }
 } else {
-  console.log('⚠️ [INIT] FFmpeg path not found, using system default');
 }
 
 // Video generation configuration
@@ -85,7 +81,6 @@ const TEMP_DIR = path.join(process.cwd(), 'storage', 'temp', 'alignment');
 [VIDEO_OUTPUT_DIR, TEMP_DIR].forEach(dir => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
-    console.log(`📁 [INIT] Created directory: ${dir}`);
   }
 });
 
@@ -115,9 +110,6 @@ const CHARACTER_IMAGES = {
   Peter: path.join(CHARACTER_IMAGE_DIR, 'peter.png'),
 };
 
-console.log(
-  `🧍 [CHAR_IMG] dir=${CHARACTER_IMAGE_DIR} | cwd=${process.cwd()} | stewieExists=${bool01(fs.existsSync(CHARACTER_IMAGES.Stewie))} | peterExists=${bool01(fs.existsSync(CHARACTER_IMAGES.Peter))}`
-);
 
 // Pre-scaled character image cache for better performance
 const PRESCALED_CHARACTER_CACHE_DIR = path.join(CHARACTER_IMAGE_DIR, 'prescaled');
@@ -125,7 +117,6 @@ const PRESCALED_CHARACTER_CACHE_DIR = path.join(CHARACTER_IMAGE_DIR, 'prescaled'
 // Ensure prescaled cache directory exists
 if (!fs.existsSync(PRESCALED_CHARACTER_CACHE_DIR)) {
   fs.mkdirSync(PRESCALED_CHARACTER_CACHE_DIR, { recursive: true });
-  console.log(`📁 [INIT] Created prescaled character cache directory: ${PRESCALED_CHARACTER_CACHE_DIR}`);
 }
 
 // Function to get or create prescaled character images
@@ -133,7 +124,6 @@ if (!fs.existsSync(PRESCALED_CHARACTER_CACHE_DIR)) {
 async function getOrCreatePrescaledCharacterImage(characterName: string, width: number, height: number): Promise<string | null> {
   const originalPath = CHARACTER_IMAGES[characterName as keyof typeof CHARACTER_IMAGES];
   if (!originalPath || !fs.existsSync(originalPath)) {
-    console.log(`🧍 [CHAR_IMG] original missing | name=${characterName} | path=${originalPath ?? '(undefined path)'}`);
     return null;
   }
 
@@ -146,13 +136,11 @@ async function getOrCreatePrescaledCharacterImage(characterName: string, width: 
     const prescaledStats = fs.statSync(prescaledPath);
     
     if (prescaledStats.mtime > originalStats.mtime) {
-      console.log(`🧍 [CHAR_IMG] using cached prescaled | name=${characterName} | path=${prescaledPath}`);
       return prescaledPath;
     }
   }
 
   // Create prescaled version
-  console.log(`🧍 [CHAR_IMG] prescaling | name=${characterName} | from=${originalPath} | to=${prescaledPath} | size=${width}x${height}`);
   
   await new Promise<void>((resolve, reject) => {
     ffmpeg(originalPath)
@@ -163,7 +151,6 @@ async function getOrCreatePrescaledCharacterImage(characterName: string, width: 
       .output(prescaledPath)
       .on('end', () => resolve())
       .on('error', (err: any) => {
-        console.log(`❌ [CHAR_IMG] prescale failed | name=${characterName} | err=${String(err?.message ?? err)}`);
         reject(err);
       })
       .run();
@@ -242,15 +229,12 @@ function bool01(v: unknown): '1' | '0' {
 
 // WhisperX alignment function using FastAPI
 export async function getWhisperXAlignment(audioPath: string, text: string): Promise<WordTimestamp[]> {
-  console.log('🎯 [ALIGNMENT] Starting WhisperX alignment via API for:', path.basename(audioPath));
 
   try {
     // First, check if WhisperX API is available
     try {
       const healthCheck = await axios.get(`${WHISPERX_API_URL}/health`, { timeout: 5000 });
-      console.log('✅ [ALIGNMENT] WhisperX API is healthy:', healthCheck.data.status);
     } catch (healthError) {
-      console.warn('⚠️ [ALIGNMENT] WhisperX API health check failed, falling back to basic timing');
       return await generateBasicWordTimestamps(audioPath, text);
     }
 
@@ -271,7 +255,6 @@ export async function getWhisperXAlignment(audioPath: string, text: string): Pro
     formData.append('language', 'en');
     formData.append('clean', 'false'); // Word-level timestamps for karaoke
 
-    console.log('📤 [ALIGNMENT] Sending request to WhisperX API...');
 
     // Make request to WhisperX API
     const response = await axios.post(`${WHISPERX_API_URL}/align`, formData, {
@@ -284,7 +267,6 @@ export async function getWhisperXAlignment(audioPath: string, text: string): Pro
 
     if (response.data.success && response.data.word_timestamps) {
       const wordTimestamps = response.data.word_timestamps;
-      console.log(`✅ [ALIGNMENT] WhisperX API returned ${wordTimestamps.length} word timestamps`);
 
       // Validate and clean the timestamps
       const validTimestamps = wordTimestamps
@@ -296,26 +278,17 @@ export async function getWhisperXAlignment(audioPath: string, text: string): Pro
           confidence: word.confidence || 1.0
         }));
 
-      console.log(`✅ [ALIGNMENT] Processed ${validTimestamps.length} valid word timestamps`);
       return validTimestamps;
     } else {
-      console.warn('⚠️ [ALIGNMENT] WhisperX API returned unsuccessful response, falling back to basic timing');
       return await generateBasicWordTimestamps(audioPath, text);
     }
 
   } catch (error) {
-    console.error('❌ [ALIGNMENT] WhisperX API error:', error instanceof Error ? error.message : String(error));
 
     if (axios.isAxiosError(error)) {
-      console.error('❌ [ALIGNMENT] Axios error details:', {
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        data: error.response?.data
-      });
     }
 
     // Fallback to basic timing estimation
-    console.log('⚠️ [ALIGNMENT] Falling back to basic timing estimation');
     return await generateBasicWordTimestamps(audioPath, text);
   }
 }
@@ -357,8 +330,6 @@ function groupWordsIntoSentences(words: WordTimestamp[], originalText: string): 
     sentences.push(originalText.trim());
   }
 
-  console.log(`📝 [GROUP WORDS] Found ${sentences.length} sentences from text`);
-  console.log(`🔤 [GROUP WORDS] Available ${words.length} word timestamps`);
 
   // Group words into sentences based on sentence boundaries
   const result: Array<{ text: string; start: number; end: number; }> = [];
@@ -375,7 +346,6 @@ function groupWordsIntoSentences(words: WordTimestamp[], originalText: string): 
       .split(/\s+/)
       .filter(w => w.length > 0);
 
-    console.log(`📝 [GROUP WORDS] Processing sentence ${i + 1}: "${sentenceText}" (${cleanSentenceWords.length} words)`);
 
     // Match words from the word timestamps to this sentence
     let wordsMatched = 0;
@@ -421,13 +391,10 @@ function groupWordsIntoSentences(words: WordTimestamp[], originalText: string): 
         end: end
       });
 
-      console.log(`✅ [GROUP WORDS] Sentence ${i + 1}: ${sentenceWords.length} words, ${start.toFixed(2)}s - ${end.toFixed(2)}s`);
     } else {
-      console.warn(`⚠️ [GROUP WORDS] Could not match words for sentence: "${sentenceText}"`);
     }
   }
 
-  console.log(`📊 [GROUP WORDS] Generated ${result.length} sentence timestamps from ${words.length} words`);
   return result;
 }
 
@@ -442,15 +409,12 @@ export async function getWhisperXCleanAlignment(audioPath: string, text: string)
   total_duration?: number;
   error?: string;
 }> {
-  console.log('🖼️ [CLEAN ALIGNMENT] Starting WhisperX clean sentence-level alignment for image analysis:', path.basename(audioPath));
 
   try {
     // First, check if WhisperX API is available
     try {
       const healthCheck = await axios.get(`${WHISPERX_API_URL}/health`, { timeout: 5000 });
-      console.log('✅ [CLEAN ALIGNMENT] WhisperX API is healthy:', healthCheck.data.status);
     } catch (healthError) {
-      console.warn('⚠️ [CLEAN ALIGNMENT] WhisperX API health check failed');
       return {
         success: false,
         error: 'WhisperX API not available'
@@ -474,7 +438,6 @@ export async function getWhisperXCleanAlignment(audioPath: string, text: string)
     formData.append('language', 'en');
     formData.append('clean', 'true'); // Clean sentence-level timestamps for image analysis
 
-    console.log('📤 [CLEAN ALIGNMENT] Sending request to WhisperX API for clean timestamps...');
 
     // Make request to WhisperX API
     const response = await axios.post(`${WHISPERX_API_URL}/align`, formData, {
@@ -486,13 +449,9 @@ export async function getWhisperXCleanAlignment(audioPath: string, text: string)
     });
 
     if (response.data.success) {
-      console.log(`✅ [CLEAN ALIGNMENT] WhisperX API returned clean sentence timestamps`);
-      console.log(`📊 [CLEAN ALIGNMENT] Sentences found:`, response.data.sentences?.length || 0);
-      console.log(`⏱️ [CLEAN ALIGNMENT] Total duration: ${response.data.total_duration?.toFixed(2) || 'unknown'}s`);
 
       // If no sentences returned, fall back to word timestamps and group them
       if (!response.data.sentences || response.data.sentences.length === 0) {
-        console.log('🔄 [CLEAN ALIGNMENT] No sentences returned, falling back to word timestamps grouping');
         
         // Get regular word timestamps
         const wordResult = await getWhisperXAlignment(audioPath, text);
@@ -500,7 +459,6 @@ export async function getWhisperXCleanAlignment(audioPath: string, text: string)
         if (wordResult && wordResult.length > 0) {
           // Group words into sentences
           const sentences = groupWordsIntoSentences(wordResult, text);
-          console.log(`📊 [CLEAN ALIGNMENT] Generated ${sentences.length} sentences from word timestamps`);
           
           return {
             success: true,
@@ -508,7 +466,6 @@ export async function getWhisperXCleanAlignment(audioPath: string, text: string)
             total_duration: response.data.total_duration
           };
         } else {
-          console.warn('⚠️ [CLEAN ALIGNMENT] Could not get word timestamps either');
           return {
             success: false,
             error: 'Could not generate any timestamps'
@@ -522,7 +479,6 @@ export async function getWhisperXCleanAlignment(audioPath: string, text: string)
         total_duration: response.data.total_duration
       };
     } else {
-      console.warn('⚠️ [CLEAN ALIGNMENT] WhisperX API returned unsuccessful response');
       return {
         success: false,
         error: response.data.error || 'Unknown error from WhisperX API'
@@ -530,11 +486,8 @@ export async function getWhisperXCleanAlignment(audioPath: string, text: string)
     }
 
   } catch (error) {
-    console.error('❌ [CLEAN ALIGNMENT] WhisperX API error:', error instanceof Error ? error.message : String(error));
 
     if (axios.isAxiosError(error)) {
-      console.error('❌ [CLEAN ALIGNMENT] Response status:', error.response?.status);
-      console.error('❌ [CLEAN ALIGNMENT] Response data:', error.response?.data);
     }
 
     return {
@@ -546,7 +499,6 @@ export async function getWhisperXCleanAlignment(audioPath: string, text: string)
 
 // Fallback basic timing function
 export async function generateBasicWordTimestamps(audioPath: string, text: string): Promise<WordTimestamp[]> {
-  console.log('⏱️ [BASIC] Generating basic timestamps for:', audioPath);
 
   return new Promise((resolve, reject) => {
     ffmpeg.ffprobe(audioPath, (err: any, metadata: any) => {
@@ -579,7 +531,6 @@ export async function generateBasicWordTimestamps(audioPath: string, text: strin
 
 // Generate SRT subtitle file with character names and timing
 export function generateSRTSubtitles(dialogueTimestamps: DialogueTimestamp[], outputPath: string): void {
-  console.log('📝 [SRT] Generating SRT subtitle file at:', outputPath);
 
   let srtContent = '';
 
@@ -609,12 +560,10 @@ export function generateSRTSubtitles(dialogueTimestamps: DialogueTimestamp[], ou
   });
 
   fs.writeFileSync(outputPath, srtContent, 'utf8');
-  console.log('✅ [SRT] Enhanced SRT subtitle file generated successfully');
 }
 
 // Generate ASS subtitle file with mobile-optimized 3-word rolling display
 export function generateASSSubtitles(dialogueTimestamps: DialogueTimestamp[], outputPath: string): void {
-  console.log('📝 [ASS] Generating mobile-optimized ASS subtitle file at:', outputPath);
 
   let assContent = `[Script Info]
 Title: Mobile-Optimized Dialogue with 3-Word Rolling Display
@@ -767,11 +716,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   const outputDir = path.dirname(outputPath);
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
-    console.log(`📁 [ASS] Created directory: ${outputDir}`);
   }
 
   fs.writeFileSync(outputPath, assContent, 'utf8');
-  console.log('✅ [ASS] Mobile-optimized ASS subtitle file generated successfully');
 }
 
 // Main video generation function with burned-in subtitles
@@ -841,16 +788,12 @@ export async function generateVideoWithSubtitles(
     }
 
     // Pre-create scaled character images for better performance
-    console.log(`🧍 [CHAR_IMG] Preparing overlays for ${successfulDialogues.length} dialogues...`);
     const prescaledStewieImage = await getOrCreatePrescaledCharacterImage('Stewie', 500, 600);
     const prescaledPeterImage = await getOrCreatePrescaledCharacterImage('Peter', 550, 800);
     
     const hasStewieImage = prescaledStewieImage !== null;
     const hasPeterImage = prescaledPeterImage !== null;
 
-    console.log(
-      `🧍 [CHAR_IMG] ready | stewie=${hasStewieImage ? prescaledStewieImage : 'missing'} | peter=${hasPeterImage ? prescaledPeterImage : 'missing'}`
-    );
 
     // Generate word-level timestamps using WhisperX
     const dialogueTimestamps: DialogueTimestamp[] = [];
@@ -920,10 +863,7 @@ export async function generateVideoWithSubtitles(
     
     // Check if ASS file already exists (copied from analysis)
     if (fs.existsSync(assSubtitlePath)) {
-      console.log('🎯 [SUBTITLES] Found existing ASS file, skipping generation');
-      console.log('🎯 [SUBTITLES] Existing ASS path:', assSubtitlePath);
     } else {
-      console.log('📝 [SUBTITLES] Generating new ASS subtitle file');
       generateASSSubtitles(dialogueTimestamps, assSubtitlePath);
     }
     
@@ -936,14 +876,12 @@ export async function generateVideoWithSubtitles(
     if (!fs.existsSync(assSubtitlePath)) {
       throw new Error(`ASS subtitle file not found at: ${assSubtitlePath}`);
     }
-    console.log('✅ [SUBTITLES] Styled subtitle files verified successfully');
 
     // Prepare background media (support images by converting to video)
     let backgroundMediaPath = backgroundVideoPath;
     let tempImageVideo: string | null = null;
 
     if (isImageFile(backgroundVideoPath)) {
-      console.log('🖼️ [GENERATOR] Background is an image, creating video from image...');
       tempImageVideo = path.join(VIDEO_OUTPUT_DIR, `${sessionId}_bg_from_image.mp4`);
       const targetDuration = Math.max(cumulativeTime, 60); // ensure a reasonable minimum
       await createVideoFromImage(
@@ -955,7 +893,6 @@ export async function generateVideoWithSubtitles(
         stylePreset.fps
       );
       backgroundMediaPath = tempImageVideo;
-      console.log('✅ [GENERATOR] Image converted to background video:', tempImageVideo);
     }
 
     // Get background video duration to determine if we need to loop or trim
@@ -973,7 +910,6 @@ export async function generateVideoWithSubtitles(
     let tempLoopedVideo: string | null = null;
 
     if (cumulativeTime > backgroundDuration) {
-      console.log('🔄 [GENERATOR] Audio longer than background - creating looped background video');
       tempLoopedVideo = path.join(VIDEO_OUTPUT_DIR, `${sessionId}_temp_looped.mp4`);
 
       await new Promise<void>((resolveLoop, rejectLoop) => {
@@ -990,7 +926,6 @@ export async function generateVideoWithSubtitles(
           ])
           .output(tempLoopedVideo!)
           .on('end', () => {
-            console.log('✅ [GENERATOR] Looped background video created');
             resolveLoop();
           })
           .on('error', rejectLoop)
@@ -1016,7 +951,6 @@ export async function generateVideoWithSubtitles(
           const { exec } = require('child_process');
           exec(`"${ffmpegPath}" -hide_banner -encoders`, (error: any, stdout: string) => {
             if (error) {
-              console.warn('⚠️ [GPU] Could not check encoder availability');
               resolve(false);
               return;
             }
@@ -1026,11 +960,9 @@ export async function generateVideoWithSubtitles(
         });
         
         if (!encoderCheck) {
-          console.warn('⚠️ [GPU] NVIDIA encoder not available, falling back to CPU encoding');
           useActualHardwareAccel = false;
         }
       } catch (checkError) {
-        console.warn('⚠️ [GPU] Error checking encoder availability:', checkError);
         useActualHardwareAccel = false;
       }
     }
@@ -1074,9 +1006,6 @@ export async function generateVideoWithSubtitles(
           peterInputIndex = inputIndex++;
         }
         
-        console.log(
-          `🧍 [CHAR_IMG] ffmpeg inputs | stewieIdx=${stewieInputIndex} | peterIdx=${peterInputIndex} | hasStewie=${bool01(hasStewieImage)} | hasPeter=${bool01(hasPeterImage)}`
-        );
 
         // Build character overlay enable expressions (optimized)
         const stewieRanges: string[] = [];
@@ -1100,9 +1029,6 @@ export async function generateVideoWithSubtitles(
         const stewieEnable = stewieRanges.length > 0 && hasStewieImage ? stewieRanges.join('+') : '0';
         const peterEnable = peterRanges.length > 0 && hasPeterImage ? peterRanges.join('+') : '0';
 
-        console.log(
-          `🧍 [CHAR_IMG] overlay windows | stewie=${stewieRanges.length} | peter=${peterRanges.length} | stewieEnable=${stewieEnable === '0' ? '0' : '1'} | peterEnable=${peterEnable === '0' ? '0' : '1'}`
-        );
 
         // OPTIMIZED FILTER CHAIN - Using pre-scaled images eliminates scaling in filterchain
         // Single pass: speed adjustment, scale background, overlay pre-scaled characters (if available), add subtitles
@@ -1175,7 +1101,6 @@ export async function generateVideoWithSubtitles(
 
         // Add timeout to prevent hanging
         const timeout = setTimeout(() => {
-          console.error('⏰ [GENERATOR] Optimized video generation timeout (10 minutes)');
           reject(new Error('Video generation timeout - process took longer than 10 minutes'));
         }, 10 * 60 * 1000); // 10 minutes timeout
 
@@ -1187,7 +1112,6 @@ export async function generateVideoWithSubtitles(
           })
           .on('error', (err: any) => {
             clearTimeout(timeout);
-            console.log(`❌ [FFMPEG] video generation failed: ${String(err?.message ?? err)}`);
             reject(err);
           })
           .run();
@@ -1196,12 +1120,10 @@ export async function generateVideoWithSubtitles(
       // Check if GPU encoding failed and we should retry with CPU
       if (useActualHardwareAccel && error instanceof Error && 
           (error.message.includes('h264_nvenc') || error.message.includes('preset') || error.message.includes('hardware'))) {
-        console.warn('⚠️ [GPU] Hardware encoding failed, falling back to CPU encoding...');
         
         // Retry without hardware acceleration
         try {
           await new Promise<void>((resolve, reject) => {
-            console.log('🖥️ [FALLBACK] Retrying with CPU-optimized encoding...');
             
             // Build the subtitle force_style options for fallback
             const forceStyleOptions = [
@@ -1243,9 +1165,6 @@ export async function generateVideoWithSubtitles(
             const stewieEnable = stewieRanges.length > 0 && hasStewieImage ? stewieRanges.join('+') : '0';
             const peterEnable = peterRanges.length > 0 && hasPeterImage ? peterRanges.join('+') : '0';
 
-            console.log(
-              `🧍 [CHAR_IMG][CPU] overlay windows | stewie=${stewieRanges.length} | peter=${peterRanges.length} | stewieEnable=${stewieEnable === '0' ? '0' : '1'} | peterEnable=${peterEnable === '0' ? '0' : '1'}`
-            );
 
             // CPU filter chain that's the same but uses CPU encoding
             let filterChain = `[0:v]setpts=PTS/${backgroundVideoSpeed},scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p[bg]`;
@@ -1304,7 +1223,6 @@ export async function generateVideoWithSubtitles(
 
             // Add timeout to prevent hanging
             const timeout = setTimeout(() => {
-              console.error('⏰ [CPU FALLBACK] Video generation timeout (10 minutes)');
               reject(new Error('CPU fallback video generation timeout - process took longer than 10 minutes'));
             }, 10 * 60 * 1000); // 10 minutes timeout
 
@@ -1316,19 +1234,15 @@ export async function generateVideoWithSubtitles(
               })
               .on('error', (err: any) => {
                 clearTimeout(timeout);
-                console.log(`❌ [FFMPEG][CPU] video generation failed: ${String(err?.message ?? err)}`);
                 reject(err);
               })
               .run();
           });
         } catch (fallbackError) {
-          console.error('❌ [CPU FALLBACK] CPU fallback also failed:', fallbackError);
-          console.error('❌ [OPTIMIZED] Original GPU error:', error);
           const errorMessage = `Video generation failed (tried both GPU and CPU): GPU: ${error instanceof Error ? error.message : String(error)}, CPU: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`;
           throw new Error(errorMessage);
         }
       } else {
-        console.error('❌ [OPTIMIZED] Video generation failed:', error);
         // Throw error instead of fallback
         const errorMessage = `Video generation with character overlays and subtitles failed: ${error instanceof Error ? error.message : String(error)}`;
         throw new Error(errorMessage);
@@ -1347,7 +1261,6 @@ export async function generateVideoWithSubtitles(
       if (assSubtitlePath && !assSubtitlePath.startsWith(assCacheDir)) {
         filesToCleanup.push(assSubtitlePath);
       } else if (assSubtitlePath) {
-        console.log('💾 [GENERATOR] Preserving cached ASS file:', path.basename(assSubtitlePath));
       }
 
       filesToCleanup.forEach(file => {
@@ -1355,7 +1268,6 @@ export async function generateVideoWithSubtitles(
       });
       // (noisy) removed
     } catch (err) {
-      console.warn('⚠️ [GENERATOR] Warning: Could not clean up some temporary files:', err);
     }
 
     // Get file stats and return response
@@ -1395,11 +1307,9 @@ export async function generateVideoWithSubtitles(
     };
 
     // (noisy) removed
-    console.log(`🚀 [OPTIMIZED] Used ${device === 'cuda' ? 'GPU acceleration' : 'CPU optimization'} with combined filterchain for faster processing`);
     return response;
 
   } catch (error) {
-    console.error('💥 [GENERATOR] Video generation with burned subtitles error:', error);
 
     const totalDuration = (Date.now() - startTime) / 1000;
     return {

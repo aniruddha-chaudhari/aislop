@@ -1,8 +1,12 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import type { Clip, ClipRef, OverlayClip } from '../../../features/editor/types';
-import { API_ENDPOINTS, API_BASE_URL } from '../../../config/api';
+import { API_ENDPOINTS } from '../../../config/api';
+
+export type TextPropertiesPanelHandle = {
+  openFileDialog: () => void;
+};
 
 type Props = {
   width: number;
@@ -11,24 +15,33 @@ type Props = {
   selectedRef: ClipRef | null;
   onUpdateClip: (patch: Partial<Clip>) => void;
   projectId: string;
+  /** Called after overlay image upload so parent can refetch project and refresh preview */
+  onProjectUpdate?: () => void;
 };
 
 function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n));
 }
 
-export default function TextPropertiesPanel({
+const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(function TextPropertiesPanel({
   width,
   onWidthChange,
   selected,
   selectedRef,
   onUpdateClip,
   projectId,
-}: Props) {
+  onProjectUpdate,
+}, ref) {
   const [isResizing, setIsResizing] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useImperativeHandle(ref, () => ({
+    openFileDialog: () => {
+      if (selected?.kind === 'overlay') fileInputRef.current?.click();
+    },
+  }), [selected?.kind]);
 
   const handleMouseDown = () => {
     setIsResizing(true);
@@ -54,20 +67,16 @@ export default function TextPropertiesPanel({
     };
   }, [isResizing, onWidthChange]);
 
-  // Load image preview when overlay clip is selected
+  // Load image preview when overlay clip is selected (use API URL so img src works in browser)
   useEffect(() => {
-    if (selected?.kind === 'overlay') {
+    if (selected?.kind === 'overlay' && projectId) {
       const overlay = selected as OverlayClip;
-      if (overlay.path) {
-        setImagePreview(overlay.path);
-      } else {
-        // Try to load from storage/images/{sessionId}/{assetId}.png via API
-        setImagePreview(null);
-      }
+      const url = API_ENDPOINTS.serveProjectImage(projectId, overlay.assetId);
+      setImagePreview(url);
     } else {
       setImagePreview(null);
     }
-  }, [selected]);
+  }, [selected?.kind, selected?.id, (selected as OverlayClip)?.assetId, projectId]);
 
   const handleUploadImage = async (file: File) => {
     if (!selected || selected.kind !== 'overlay') return;
@@ -90,10 +99,10 @@ export default function TextPropertiesPanel({
       const data = await response.json();
       
       if (data.success) {
-        // Update clip with image path
-        const fullPath = `${API_BASE_URL}/api/audio/download/${data.filename}?sessionId=${projectId}`;
         onUpdateClip({ path: data.imagePath } as Partial<Clip>);
-        setImagePreview(data.imagePath);
+        // Use API URL for preview (cache-bust so new image shows)
+        setImagePreview(`${API_ENDPOINTS.serveProjectImage(projectId, (selected as OverlayClip).assetId)}?t=${Date.now()}`);
+        onProjectUpdate?.();
       }
     } catch (error) {
       console.error('Error uploading image:', error);
@@ -126,10 +135,62 @@ export default function TextPropertiesPanel({
 
       {!selected || !selectedRef ? (
         <div className="text-xs text-muted-foreground">
-          Select a clip in the timeline (or an overlay in the preview) to edit its properties.
+          Click a clip in the timeline (or an overlay in the preview) to edit. For image overlays, click the image clip in the Images track to upload or replace the image.
         </div>
       ) : (
         <div className="space-y-4">
+          {/* When overlay clip is selected (e.g. from timeline), show Image Asset / upload first */}
+          {selected.kind === 'overlay' && (
+            <div className="rounded border border-border bg-muted/30 p-3">
+              <div className="text-xs font-semibold mb-3">Image Asset</div>
+              
+              {imagePreview ? (
+                <div className="space-y-2">
+                  <img 
+                    src={imagePreview} 
+                    alt="Overlay preview" 
+                    className="w-full rounded border border-border bg-black/5"
+                    onError={() => setImagePreview(null)}
+                  />
+                  <div className="text-[10px] text-muted-foreground">Image uploaded</div>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploadingImage}
+                    className="w-full px-3 py-2 text-xs bg-muted hover:bg-accent/10 border border-border rounded transition"
+                  >
+                    {uploadingImage ? 'Uploading...' : 'Replace Image'}
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="w-full h-32 rounded border-2 border-dashed border-border bg-muted/20 flex items-center justify-center text-muted-foreground text-xs">
+                    No image uploaded
+                  </div>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploadingImage}
+                    className="w-full px-3 py-2 text-xs bg-accent hover:bg-accent/90 text-white rounded transition disabled:opacity-50"
+                  >
+                    {uploadingImage ? 'Uploading...' : '📤 Upload Image'}
+                  </button>
+                </div>
+              )}
+              
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+              
+              <div className="mt-3 text-[10px] text-muted-foreground">
+                <div className="font-semibold mb-1">Asset ID: {(selected as OverlayClip).assetId}</div>
+                <div>Label: {(selected as OverlayClip).label}</div>
+              </div>
+            </div>
+          )}
+
           <div className="rounded border border-border bg-muted/30 p-3">
             <div className="text-xs font-semibold mb-2">Timing</div>
             <div className="grid grid-cols-2 gap-2">
@@ -197,57 +258,6 @@ export default function TextPropertiesPanel({
             </div>
           )}
 
-          {selected.kind === 'overlay' && (
-            <div className="rounded border border-border bg-muted/30 p-3">
-              <div className="text-xs font-semibold mb-3">Image Asset</div>
-              
-              {imagePreview ? (
-                <div className="space-y-2">
-                  <img 
-                    src={imagePreview} 
-                    alt="Overlay preview" 
-                    className="w-full rounded border border-border bg-black/5"
-                    onError={() => setImagePreview(null)}
-                  />
-                  <div className="text-[10px] text-muted-foreground truncate">{imagePreview}</div>
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={uploadingImage}
-                    className="w-full px-3 py-2 text-xs bg-muted hover:bg-accent/10 border border-border rounded transition"
-                  >
-                    {uploadingImage ? 'Uploading...' : 'Replace Image'}
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <div className="w-full h-32 rounded border-2 border-dashed border-border bg-muted/20 flex items-center justify-center text-muted-foreground text-xs">
-                    No image uploaded
-                  </div>
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={uploadingImage}
-                    className="w-full px-3 py-2 text-xs bg-accent hover:bg-accent/90 text-white rounded transition disabled:opacity-50"
-                  >
-                    {uploadingImage ? 'Uploading...' : '📤 Upload Image'}
-                  </button>
-                </div>
-              )}
-              
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleFileChange}
-                className="hidden"
-              />
-              
-              <div className="mt-3 text-[10px] text-muted-foreground">
-                <div className="font-semibold mb-1">Asset ID: {(selected as OverlayClip).assetId}</div>
-                <div>Label: {(selected as OverlayClip).label}</div>
-              </div>
-            </div>
-          )}
-
           {selected.kind === 'subtitle' && (
             <div className="rounded border border-border bg-muted/30 p-3">
               <div className="text-xs font-semibold mb-2">Subtitle</div>
@@ -265,4 +275,6 @@ export default function TextPropertiesPanel({
       )}
     </div>
   );
-}
+});
+
+export default TextPropertiesPanel;

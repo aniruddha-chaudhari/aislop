@@ -20,7 +20,6 @@ export async function generateScript(ctx: HttpContext): Promise<HandlerResult> {
 
     return jsonResponse(200, { success: true, data: conversation });
   } catch (error) {
-    console.error('Error in generateScript controller:', error);
     return jsonResponse(500, { success: false, error: 'Internal server error occurred while generating script' });
   }
 }
@@ -44,11 +43,8 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
 
     let audioFiles: string[] = [];
     try {
-      console.log('Starting audio generation for approved script...');
       audioFiles = await ttsService.generateConversationAudio(conversation as { character: CharacterName; dialogue: string }[], sessionId);
-      console.log(`Audio generation completed. Generated ${audioFiles.length} files.`);
     } catch (audioError) {
-      console.error('Error generating audio:', audioError);
       return jsonResponse(500, {
         success: false,
         error: 'Failed to generate audio files',
@@ -65,7 +61,6 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
       })),
     });
   } catch (error) {
-    console.error('Error in generateAudioFromScript controller:', error);
     return jsonResponse(500, { success: false, error: 'Internal server error occurred while generating audio' });
   }
 }
@@ -86,11 +81,8 @@ export async function generateConversation(ctx: HttpContext): Promise<HandlerRes
     let audioFiles: string[] = [];
     if (generateAudio === true) {
       try {
-        console.log('Starting audio generation...');
         audioFiles = await ttsService.generateConversationAudio(conversation.conversation);
-        console.log(`Audio generation completed. Generated ${audioFiles.length} files.`);
       } catch (audioError) {
-        console.error('Error generating audio:', audioError);
         return jsonResponse(200, {
           success: true,
           data: conversation,
@@ -111,7 +103,6 @@ export async function generateConversation(ctx: HttpContext): Promise<HandlerRes
       })),
     });
   } catch (error) {
-    console.error('Error in generateConversation controller:', error);
     return jsonResponse(500, { success: false, error: 'Internal server error occurred while generating conversation' });
   }
 }
@@ -138,7 +129,6 @@ export async function getAudioFiles(_ctx: HttpContext): Promise<HandlerResult> {
 
     return jsonResponse(200, { success: true, sessions });
   } catch (error) {
-    console.error('Error getting audio files:', error);
     return jsonResponse(500, { success: false, error: 'Failed to get audio files' });
   }
 }
@@ -187,7 +177,6 @@ export async function downloadAudio(ctx: HttpContext): Promise<HandlerResult> {
       },
     });
   } catch (error) {
-    console.error('Error downloading audio:', error);
     return jsonResponse(500, { success: false, error: 'Failed to download audio file' });
   }
 }
@@ -206,7 +195,6 @@ export async function testTTS(ctx: HttpContext): Promise<HandlerResult> {
     }
 
     const testConversation = [{ character: character as CharacterName, dialogue: text as string }];
-    console.log(`Testing TTS for ${character}: ${text}`);
     const audioFiles = await ttsService.generateConversationAudio(testConversation, `test_${Date.now()}`);
 
     return jsonResponse(200, {
@@ -218,18 +206,15 @@ export async function testTTS(ctx: HttpContext): Promise<HandlerResult> {
       })),
     });
   } catch (error) {
-    console.error('Error in testTTS controller:', error);
     return jsonResponse(500, { success: false, error: 'Failed to test TTS functionality' });
   }
 }
 
 export async function getModels(_ctx: HttpContext): Promise<HandlerResult> {
   try {
-    console.log('Fetching available models from GPT-SoVITS API...');
     const models = await ttsService.getModels();
     return jsonResponse(200, { success: true, data: models });
   } catch (error) {
-    console.error('Error in getModels controller:', error);
     return jsonResponse(500, {
       success: false,
       error: 'Failed to get models list',
@@ -244,11 +229,9 @@ export async function setGPTWeights(ctx: HttpContext): Promise<HandlerResult> {
     if (!weights_path || typeof weights_path !== 'string') {
       return jsonResponse(400, { error: 'weights_path query parameter is required' });
     }
-    console.log(`Setting GPT weights to: ${weights_path}`);
     await ttsService.setGPTWeightsPublic(weights_path);
     return jsonResponse(200, { message: 'success' });
   } catch (error) {
-    console.error('Error in setGPTWeights controller:', error);
     return jsonResponse(400, {
       message: 'change gpt weight failed',
       Exception: error instanceof Error ? error.message : 'Unknown error',
@@ -262,11 +245,9 @@ export async function setSoVITSWeights(ctx: HttpContext): Promise<HandlerResult>
     if (!weights_path || typeof weights_path !== 'string') {
       return jsonResponse(400, { error: 'weights_path query parameter is required' });
     }
-    console.log(`Setting SoVITS weights to: ${weights_path}`);
     await ttsService.setSoVITSWeightsPublic(weights_path);
     return jsonResponse(200, { message: 'success' });
   } catch (error) {
-    console.error('Error in setSoVITSWeights controller:', error);
     return jsonResponse(400, {
       message: 'change sovits weight failed',
       Exception: error instanceof Error ? error.message : 'Unknown error',
@@ -285,7 +266,6 @@ export async function testAssistants(ctx: HttpContext): Promise<HandlerResult> {
     const conversationResult = await generateConversation(topic);
     return jsonResponse(200, { success: true, data: { topic, conversation: conversationResult } });
   } catch (error) {
-    console.error('Error in testAssistants controller:', error);
     return jsonResponse(500, {
       success: false,
       error: 'Internal server error occurred while testing assistants',
@@ -305,7 +285,6 @@ export async function testResearch(ctx: HttpContext): Promise<HandlerResult> {
     const researchResult = await researchontopicwithlinks(topic);
     return jsonResponse(200, { success: true, data: { topic, research: researchResult } });
   } catch (error) {
-    console.error('Error in testResearch controller:', error);
     return jsonResponse(500, {
       success: false,
       error: 'Internal server error occurred while testing research',

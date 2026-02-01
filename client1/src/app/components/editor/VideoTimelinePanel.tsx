@@ -37,6 +37,8 @@ type Props = {
   hasSubtitlesAndChars?: boolean;
   hasImagePlan?: boolean;
   message?: { type: 'info' | 'error' | 'success'; text: string } | null;
+  exportedVideoFilename?: string | null;
+  onDownloadExported?: () => void;
   onHeightChange: (height: number) => void;
   onPlayPause: () => void;
   onPlayheadChange: (time: number) => void;
@@ -44,10 +46,86 @@ type Props = {
   selected: ClipRef | null;
   onSelectClip: (ref: ClipRef | null) => void;
   onUpdateClip: (ref: ClipRef, patch: Partial<Clip>) => void;
+  onAddTrack?: () => void;
+  onMoveClipToNewTrack?: (ref: ClipRef, start: number, onNewRef: (newRef: ClipRef) => void) => void;
+  onMoveClipBackToTrack?: (
+    ref: ClipRef,
+    originalTrackId: string,
+    start: number,
+    onBackRef: (backRef: ClipRef) => void
+  ) => void;
+  onMoveClipToTrack?: (
+    ref: ClipRef,
+    targetTrackId: string,
+    start: number,
+    onNewRef: (newRef: ClipRef) => void
+  ) => void;
 };
+
+const SNAP_THRESHOLD_SEC = 0.2;
+const RULER_HEIGHT_PX = 32; // h-8
+const TRACK_ROW_HEIGHT_PX = 48; // h-12
 
 function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n));
+}
+
+/** All time positions we can snap to: playhead, clip edges (all tracks), ruler ticks. */
+function getSnapTargets(
+  project: EditorProject,
+  excludeClipRef: ClipRef | null,
+  playheadTime: number
+): number[] {
+  const targets = new Set<number>();
+  targets.add(playheadTime);
+  const step = project.duration <= 60 ? 5 : 10;
+  for (let t = 0; t <= project.duration + 0.0001; t += step) targets.add(t);
+  for (const track of project.tracks) {
+    for (const c of track.clips) {
+      if (excludeClipRef && track.id === excludeClipRef.trackId && c.id === excludeClipRef.clipId) continue;
+      targets.add(c.start);
+      targets.add(c.start + c.duration);
+    }
+  }
+  return [...targets];
+}
+
+function snapToTargets(value: number, targets: number[], threshold: number): number {
+  let best = value;
+  let bestDist = threshold + 1;
+  for (const t of targets) {
+    const d = Math.abs(value - t);
+    if (d <= threshold && d < bestDist) {
+      bestDist = d;
+      best = t;
+    }
+  }
+  return best;
+}
+
+/** Constrain start so [start, start+duration] does not overlap any of the other clips on the same track. */
+function constrainStartNoOverlap(
+  rawStart: number,
+  duration: number,
+  otherClips: Clip[],
+  projectDuration: number
+): number {
+  let nextStart = clamp(rawStart, 0, projectDuration - Math.max(0.01, duration));
+  for (let i = 0; i < 15; i++) {
+    let overlapped = false;
+    for (const c of otherClips) {
+      const cEnd = c.start + c.duration;
+      if (nextStart < cEnd && nextStart + duration > c.start) {
+        overlapped = true;
+        const before = c.start - duration;
+        const after = cEnd;
+        nextStart = nextStart <= (c.start + cEnd - duration) / 2 ? before : after;
+        break;
+      }
+    }
+    if (!overlapped) break;
+  }
+  return clamp(nextStart, 0, projectDuration - Math.max(0.01, duration));
 }
 
 function trackColor(type: Track['type']): string {
@@ -82,6 +160,8 @@ export default function VideoTimelinePanel({
   hasSubtitlesAndChars,
   hasImagePlan,
   message,
+  exportedVideoFilename,
+  onDownloadExported,
   onHeightChange,
   onPlayPause,
   onPlayheadChange,
@@ -89,8 +169,16 @@ export default function VideoTimelinePanel({
   selected,
   onSelectClip,
   onUpdateClip,
+  onAddTrack,
+  onMoveClipToNewTrack,
+  onMoveClipBackToTrack,
+  onMoveClipToTrack,
 }: Props) {
   const [isResizing, setIsResizing] = useState(false);
+  const playheadTimeRef = useRef(playheadTime);
+  playheadTimeRef.current = playheadTime;
+  const movedToNewTrackThisDragRef = useRef(false);
+  const originalTrackIdRef = useRef<string | null>(null);
   const dragRef = useRef<{
     ref: ClipRef;
     mode: 'move' | 'trim-left' | 'trim-right';
@@ -177,6 +265,8 @@ export default function VideoTimelinePanel({
   };
 
   const onLaneClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    // Only clear selection when clicking the lane background, not when clicking a clip (clip click bubbles)
+    if (e.target !== e.currentTarget) return;
     const t = getTimeFromClientX(e.clientX);
     onPlayheadChange(t);
     onSelectClip(null);
@@ -187,28 +277,138 @@ export default function VideoTimelinePanel({
     if (!drag) return;
     const dx = e.clientX - drag.startX;
     const dt = dx / pxPerSecond;
+    const track = project.tracks.find((t) => t.id === drag.ref.trackId);
+    const otherClipsSameTrack = track ? track.clips.filter((c) => c.id !== drag.ref.clipId) : [];
+    const snapTargets = getSnapTargets(project, drag.ref, playheadTimeRef.current);
 
     if (drag.mode === 'move') {
-      const nextStart = clamp(drag.startStart + dt, 0, project.duration - Math.max(0.01, drag.startDuration));
+      const rawStart = clamp(
+        drag.startStart + dt,
+        0,
+        project.duration - Math.max(0.01, drag.startDuration)
+      );
+      const candidateStart = snapToTargets(rawStart, snapTargets, SNAP_THRESHOLD_SEC);
+      const wouldOverlap = otherClipsSameTrack.some(
+        (c) =>
+          candidateStart < c.start + c.duration &&
+          candidateStart + drag.startDuration > c.start
+      );
+      if (wouldOverlap && onMoveClipToNewTrack && !movedToNewTrackThisDragRef.current) {
+        originalTrackIdRef.current = drag.ref.trackId;
+        onMoveClipToNewTrack(drag.ref, candidateStart, (newRef) => {
+          if (dragRef.current) dragRef.current = { ...dragRef.current, ref: newRef };
+          movedToNewTrackThisDragRef.current = true;
+          onSelectClip(newRef);
+        });
+        return;
+      }
+      if (movedToNewTrackThisDragRef.current && originalTrackIdRef.current && onMoveClipBackToTrack) {
+        const origTrack = project.tracks.find((t) => t.id === originalTrackIdRef.current);
+        const otherClipsOnOriginal = origTrack
+          ? origTrack.clips.filter((c) => c.id !== drag.ref.clipId)
+          : [];
+        const wouldOverlapOther = otherClipsOnOriginal.some(
+          (c) =>
+            candidateStart < c.start + c.duration &&
+            candidateStart + drag.startDuration > c.start
+        );
+        if (!wouldOverlapOther) {
+          const startOnOriginal = constrainStartNoOverlap(
+            candidateStart,
+            drag.startDuration,
+            otherClipsOnOriginal,
+            project.duration
+          );
+          onMoveClipBackToTrack(
+            drag.ref,
+            originalTrackIdRef.current,
+            startOnOriginal,
+            (backRef) => {
+              if (dragRef.current) dragRef.current = { ...dragRef.current, ref: backRef };
+              movedToNewTrackThisDragRef.current = false;
+              originalTrackIdRef.current = null;
+              onSelectClip(backRef);
+            }
+          );
+          return;
+        }
+      }
+      const nextStart = constrainStartNoOverlap(
+        candidateStart,
+        drag.startDuration,
+        otherClipsSameTrack,
+        project.duration
+      );
+      const sortedTracks = sortTracks(project.tracks);
+      const el = timelineContentRef.current;
+      let trackIndexUnderCursor: number | null = null;
+      if (el && sortedTracks.length > 0) {
+        const rect = el.getBoundingClientRect();
+        const yRelative = e.clientY - rect.top - RULER_HEIGHT_PX;
+        if (yRelative >= 0) {
+          const index = Math.floor(yRelative / TRACK_ROW_HEIGHT_PX);
+          if (index < sortedTracks.length) trackIndexUnderCursor = index;
+        }
+      }
+      if (
+        trackIndexUnderCursor !== null &&
+        onMoveClipToTrack &&
+        sortedTracks[trackIndexUnderCursor].id !== drag.ref.trackId
+      ) {
+        const targetTrackId = sortedTracks[trackIndexUnderCursor].id;
+        const targetTrack = project.tracks.find((t) => t.id === targetTrackId);
+        const clipsOnTarget = targetTrack ? targetTrack.clips : [];
+        const validStart = constrainStartNoOverlap(
+          nextStart,
+          drag.startDuration,
+          clipsOnTarget,
+          project.duration
+        );
+        onMoveClipToTrack(drag.ref, targetTrackId, validStart, (newRef) => {
+          if (dragRef.current) dragRef.current = { ...dragRef.current, ref: newRef };
+          onSelectClip(newRef);
+        });
+        return;
+      }
       onUpdateClip(drag.ref, { start: nextStart } as Partial<Clip>);
       return;
     }
 
     if (drag.mode === 'trim-left') {
-      const newStart = clamp(drag.startStart + dt, 0, drag.startStart + drag.startDuration - 0.1);
-      const newEnd = drag.startStart + drag.startDuration;
-      const newDuration = Math.max(0.1, newEnd - newStart);
+      const originalEnd = drag.startStart + drag.startDuration;
+      let newStart = clamp(drag.startStart + dt, 0, originalEnd - 0.1);
+      newStart = snapToTargets(newStart, snapTargets, SNAP_THRESHOLD_SEC);
+      const minStart = otherClipsSameTrack.reduce((min, c) => {
+        const cEnd = c.start + c.duration;
+        if (cEnd <= originalEnd && cEnd > min) return cEnd;
+        return min;
+      }, 0);
+      newStart = clamp(newStart, minStart, originalEnd - 0.1);
+      const newDuration = Math.max(0.1, originalEnd - newStart);
       onUpdateClip(drag.ref, { start: newStart, duration: newDuration } as Partial<Clip>);
       return;
     }
 
     if (drag.mode === 'trim-right') {
-      const newDuration = clamp(drag.startDuration + dt, 0.1, project.duration - drag.startStart);
-      onUpdateClip(drag.ref, { duration: newDuration } as Partial<Clip>);
+      const maxDurationByOverlap = otherClipsSameTrack.reduce((max, c) => {
+        if (c.start > drag.startStart) {
+          const allowed = c.start - drag.startStart;
+          return allowed < max ? allowed : max;
+        }
+        return max;
+      }, project.duration - drag.startStart);
+      let newDuration = clamp(drag.startDuration + dt, 0.1, maxDurationByOverlap);
+      const newEnd = drag.startStart + newDuration;
+      const snappedEnd = snapToTargets(newEnd, snapTargets, SNAP_THRESHOLD_SEC);
+      newDuration = snappedEnd - drag.startStart;
+      const finalDuration = clamp(newDuration, 0.1, maxDurationByOverlap);
+      onUpdateClip(drag.ref, { duration: finalDuration } as Partial<Clip>);
     }
   };
 
   const onPointerUp = () => {
+    movedToNewTrackThisDragRef.current = false;
+    originalTrackIdRef.current = null;
     dragRef.current = null;
     window.removeEventListener('pointermove', onPointerMove);
     window.removeEventListener('pointerup', onPointerUp);
@@ -231,6 +431,7 @@ export default function VideoTimelinePanel({
         <div className="flex items-center gap-2 min-w-0">
           {onBack && (
             <button
+              type="button"
               onClick={onBack}
               className="p-1.5 rounded-md hover:bg-accent transition text-foreground"
               title="Back to Projects"
@@ -239,6 +440,7 @@ export default function VideoTimelinePanel({
             </button>
           )}
           <button
+            type="button"
             onClick={onPlayPause}
             className="p-1.5 rounded hover:bg-accent transition text-foreground"
             title={isPlaying ? 'Pause' : 'Play'}
@@ -256,6 +458,7 @@ export default function VideoTimelinePanel({
         <div className="flex-1 flex justify-center items-center gap-2">
           {!hasSubtitlesAndChars && onGenerateSubtitlesAndChars && (
             <button
+              type="button"
               onClick={onGenerateSubtitlesAndChars}
               disabled={isGeneratingDraft}
               className="px-3 py-1.5 text-xs font-semibold bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 text-white rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed shadow"
@@ -265,6 +468,7 @@ export default function VideoTimelinePanel({
           )}
           {!hasImagePlan && onGenerateImagePlan && (
             <button
+              type="button"
               onClick={onGenerateImagePlan}
               disabled={isGeneratingImagePlan}
               className="px-3 py-1.5 text-xs font-semibold bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed shadow"
@@ -284,16 +488,19 @@ export default function VideoTimelinePanel({
               {message.text}
             </div>
           )}
-          {(hasSubtitlesAndChars || hasImagePlan) && onSaveTimeline && (
+          {onSaveTimeline && (
             <button
+              type="button"
               onClick={onSaveTimeline}
               className="h-7 px-2.5 rounded-md bg-muted text-xs font-medium hover:opacity-90 transition"
+              title="Save timeline (keeps added tracks and edits after reload)"
             >
               Save
             </button>
           )}
           <div className="flex items-center gap-1">
-            <button 
+            <button
+              type="button"
               onClick={() => onZoomChange(Math.max(0.5, timelineZoom - 0.1))}
               className="p-1 rounded hover:bg-accent transition text-xs text-foreground" 
               title="Zoom Out"
@@ -310,7 +517,8 @@ export default function VideoTimelinePanel({
               className="w-20 h-1"
               style={{ accentColor: 'currentColor' }}
             />
-            <button 
+            <button
+              type="button"
               onClick={() => onZoomChange(Math.min(2, timelineZoom + 0.1))}
               className="p-1 rounded hover:bg-accent transition text-xs text-foreground" 
               title="Zoom In"
@@ -319,15 +527,29 @@ export default function VideoTimelinePanel({
             </button>
           </div>
           <span className="text-xs text-muted-foreground">{(timelineZoom * 100).toFixed(0)}%</span>
-          <button
-            onClick={onExport}
-            disabled={!onExport || isExporting}
-            className="h-7 px-2.5 rounded-md bg-accent text-card text-xs font-medium hover:opacity-90 transition disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
-            title="Export"
-          >
-            <Download className="w-3.5 h-3.5" />
-            {isExporting ? `Exporting ${exportProgress || 0}%` : 'Export'}
-          </button>
+          {onExport && (
+            <button
+              type="button"
+              onClick={onExport}
+              disabled={isExporting}
+              className="h-7 px-2.5 rounded-md bg-accent text-card text-xs font-medium hover:opacity-90 transition disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
+              title="Export"
+            >
+              <Download className="w-3.5 h-3.5" />
+              {isExporting ? `Exporting ${exportProgress || 0}%` : 'Export'}
+            </button>
+          )}
+          {exportedVideoFilename && onDownloadExported && (
+            <button
+              type="button"
+              onClick={onDownloadExported}
+              className="h-7 px-2.5 rounded-md bg-green-600 text-white text-xs font-medium hover:opacity-90 transition inline-flex items-center gap-1.5"
+              title="Download exported video"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Download
+            </button>
+          )}
         </div>
       </div>
 
@@ -399,6 +621,7 @@ export default function VideoTimelinePanel({
                             isSelected ? 'ring-2 ring-accent' : '',
                           ].join(' ')}
                           style={{ left: `${left}px`, width: `${width}px` }}
+                          onClick={(e) => e.stopPropagation()}
                           onPointerDown={(e) => {
                             e.stopPropagation();
                             onSelectClip(ref);
@@ -462,8 +685,14 @@ export default function VideoTimelinePanel({
           >
             {isPlaying ? <Pause size={16} /> : <Play size={16} />}
           </button>
-          <button className="p-1.5 rounded hover:bg-accent transition text-foreground" title="Add Track">
+          <button
+            type="button"
+            onClick={() => onAddTrack?.()}
+            className="p-1.5 rounded hover:bg-accent transition text-foreground inline-flex items-center gap-1.5"
+            title="Add Track"
+          >
             <Plus size={16} />
+            <span className="text-xs font-medium">Add Track</span>
           </button>
           <button className="p-1.5 rounded hover:bg-accent transition text-foreground" title="Settings">
             <Settings size={16} />

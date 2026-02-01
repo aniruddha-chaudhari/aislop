@@ -35,8 +35,9 @@ export default function EditorPage() {
 
   const fetchProject = async () => {
     console.log('[EditorPage] fetchProject called for projectId:', projectId);
+    const isRefresh = !!project;
     try {
-      setLoading(true);
+      if (!isRefresh) setLoading(true);
       setError('');
 
       const response = await fetch(API_ENDPOINTS.getProject(projectId));

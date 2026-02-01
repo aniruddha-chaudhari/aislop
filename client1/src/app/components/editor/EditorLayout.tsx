@@ -5,7 +5,7 @@ import type { Clip, ClipRef, EditorProject, Track } from '../../../features/edit
 import { useRouter } from 'next/navigation';
 import EditorSidebar from './EditorSidebar';
 import CanvasPreview, { type PreviewPlayerApi } from './CanvasPreview';
-import TextPropertiesPanel from './TextPropertiesPanel';
+import TextPropertiesPanel, { type TextPropertiesPanelHandle } from './TextPropertiesPanel';
 import VideoTimelinePanel from './VideoTimelinePanel';
 import { API_ENDPOINTS, API_BASE_URL } from '../../../config/api';
 
@@ -51,6 +51,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const [isGeneratingImagePlan, setIsGeneratingImagePlan] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
+  const [exportedVideoFilename, setExportedVideoFilename] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: 'info' | 'error' | 'success'; text: string } | null>(null);
   const [draftProject, setDraftProject] = useState<EditorProject>(project);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -64,6 +65,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const rafRef = useRef<number | null>(null);
   const lastTsRef = useRef<number | null>(null);
   const previewPlayerRef = useRef<PreviewPlayerApi | null>(null);
+  const propertiesPanelRef = useRef<TextPropertiesPanelHandle | null>(null);
   
   // Preview generation
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
@@ -153,14 +155,16 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const [changingAudioSession, setChangingAudioSession] = useState(false);
   const [uploadingTemplate, setUploadingTemplate] = useState(false);
 
-  // When the route changes to a new project, reset local draft state.
+  // When we navigate to a different project (id changes), reset local draft state.
+  // Use project.id so adding a track (draft change) or parent re-renders don't overwrite the draft.
   useEffect(() => {
     setDraftProject(project);
     setSelected(null);
     setPlayheadTime(0);
     setIsPlaying(false);
     setPreviewVideoSrc(null); // Clear preview when project/template/session changes
-  }, [project]);
+    setExportedVideoFilename(null);
+  }, [project.id]);
 
   // Fetch templates and audio sessions on mount
   useEffect(() => {
@@ -587,6 +591,131 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     });
   };
 
+  const addTrack = () => {
+    setDraftProject((p) => {
+      const overlayCount = p.tracks.filter((t) => t.type === 'overlay').length;
+      const name = `Overlay ${overlayCount + 1}`;
+      const newTrack: Track = {
+        id: `track-${crypto.randomUUID?.() ?? Date.now()}`,
+        type: 'overlay',
+        name,
+        clips: [],
+      };
+      return { ...p, tracks: [...p.tracks, newTrack] };
+    });
+  };
+
+  /** Create a new track below and move the clip there at the given start time (used when dragging over another clip). */
+  const moveClipToNewTrack = (
+    ref: ClipRef,
+    start: number,
+    onNewRef?: (newRef: ClipRef) => void
+  ) => {
+    setDraftProject((p) => {
+      const trackIndex = p.tracks.findIndex((t) => t.id === ref.trackId);
+      if (trackIndex === -1) return p;
+      const track = p.tracks[trackIndex];
+      const clipIndex = track.clips.findIndex((c) => c.id === ref.clipId);
+      if (clipIndex === -1) return p;
+      const clip = { ...track.clips[clipIndex], start } as Clip;
+      const newTrackId = `track-${crypto.randomUUID?.() ?? Date.now()}`;
+      const sameTypeCount = p.tracks.filter((t) => t.type === track.type).length;
+      const newTrack: Track = {
+        id: newTrackId,
+        type: track.type,
+        name: `${track.type === 'overlay' ? 'Overlay' : track.type} ${sameTypeCount + 1}`,
+        clips: [clip],
+        isAutoCreated: true,
+      };
+      const tracksWithoutClip = p.tracks.map((t) =>
+        t.id !== ref.trackId
+          ? t
+          : { ...t, clips: t.clips.filter((c) => c.id !== ref.clipId) }
+      );
+      const insertIndex = trackIndex + 1;
+      const newTracks = [
+        ...tracksWithoutClip.slice(0, insertIndex),
+        newTrack,
+        ...tracksWithoutClip.slice(insertIndex),
+      ];
+      queueMicrotask(() => onNewRef?.({ trackId: newTrackId, clipId: ref.clipId }));
+      return { ...p, tracks: newTracks };
+    });
+  };
+
+  /** Move clip from its current track (the temp new track) back to the original track and remove the empty track. */
+  const moveClipBackToTrack = (
+    ref: ClipRef,
+    originalTrackId: string,
+    start: number,
+    onBackRef: (backRef: ClipRef) => void
+  ) => {
+    setDraftProject((p) => {
+      const currentTrackIndex = p.tracks.findIndex((t) => t.id === ref.trackId);
+      if (currentTrackIndex === -1) return p;
+      const currentTrack = p.tracks[currentTrackIndex];
+      const clipIndex = currentTrack.clips.findIndex((c) => c.id === ref.clipId);
+      if (clipIndex === -1) return p;
+      const clip = { ...currentTrack.clips[clipIndex], start } as Clip;
+      const originalTrackIndex = p.tracks.findIndex((t) => t.id === originalTrackId);
+      if (originalTrackIndex === -1) return p;
+      const tracksWithoutClipFromCurrent = p.tracks.map((t) =>
+        t.id !== ref.trackId ? t : { ...t, clips: t.clips.filter((c) => c.id !== ref.clipId) }
+      );
+      const tracksWithClipOnOriginal = tracksWithoutClipFromCurrent.map((t) =>
+        t.id !== originalTrackId ? t : { ...t, clips: [...t.clips, clip] }
+      );
+      const currentTrackAfterRemove = tracksWithClipOnOriginal.find((t) => t.id === ref.trackId);
+      const newTracks =
+        currentTrackAfterRemove &&
+        currentTrackAfterRemove.clips.length === 0 &&
+        currentTrackAfterRemove.isAutoCreated
+          ? tracksWithClipOnOriginal.filter((t) => t.id !== ref.trackId)
+          : tracksWithClipOnOriginal;
+      queueMicrotask(() => onBackRef({ trackId: originalTrackId, clipId: ref.clipId }));
+      return { ...p, tracks: newTracks };
+    });
+  };
+
+  /** Move clip from its current track to another existing track at the given start time. */
+  const moveClipToTrack = (
+    ref: ClipRef,
+    targetTrackId: string,
+    start: number,
+    onNewRef?: (newRef: ClipRef) => void
+  ) => {
+    if (ref.trackId === targetTrackId) {
+      updateClip(ref, { start });
+      queueMicrotask(() => onNewRef?.(ref));
+      return;
+    }
+    setDraftProject((p) => {
+      const currentTrackIndex = p.tracks.findIndex((t) => t.id === ref.trackId);
+      if (currentTrackIndex === -1) return p;
+      const currentTrack = p.tracks[currentTrackIndex];
+      const clipIndex = currentTrack.clips.findIndex((c) => c.id === ref.clipId);
+      if (clipIndex === -1) return p;
+      const clip = { ...currentTrack.clips[clipIndex], start } as Clip;
+      const targetTrackIndex = p.tracks.findIndex((t) => t.id === targetTrackId);
+      if (targetTrackIndex === -1) return p;
+      const tracksWithoutClipFromCurrent = p.tracks.map((t) =>
+        t.id !== ref.trackId ? t : { ...t, clips: t.clips.filter((c) => c.id !== ref.clipId) }
+      );
+      const tracksWithClipOnTarget = tracksWithoutClipFromCurrent.map((t) =>
+        t.id !== targetTrackId ? t : { ...t, clips: [...t.clips, clip] }
+      );
+      const currentTrackAfterRemove = tracksWithClipOnTarget.find((t) => t.id === ref.trackId);
+      const newTracks =
+        currentTrackAfterRemove &&
+        currentTrackAfterRemove.clips.length === 0 &&
+        currentTrackAfterRemove.isAutoCreated
+          ? tracksWithClipOnTarget.filter((t) => t.id !== ref.trackId)
+          : tracksWithClipOnTarget;
+      queueMicrotask(() => onNewRef?.({ trackId: targetTrackId, clipId: ref.clipId }));
+      return { ...p, tracks: newTracks };
+    });
+  };
+
   // When playing, playhead is driven by the video (onTimeUpdate in CanvasPreview).
   // Do NOT run a RAF clock here — it raced with video time and caused immediate pause/AbortError.
   useEffect(() => {
@@ -734,6 +863,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       // Connect to SSE for progress
       const streamEndpoint = data.streamEndpoint || `/api/stream/${project.id}/files`;
       const eventSource = new EventSource(`${API_BASE_URL}${streamEndpoint}`);
+      let completed = false;
 
       eventSource.onmessage = (event) => {
         try {
@@ -743,8 +873,11 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             setExportProgress(update.percent || 0);
             setMessage({ type: 'info', text: update.message || `Exporting: ${update.percent}%` });
           } else if (update.type === 'complete') {
+            completed = true;
             setExportProgress(100);
             setMessage({ type: 'success', text: 'Export complete! Video is ready.' });
+            const filename = update.videoPath ? String(update.videoPath).split(/[/\\]/).pop() : null;
+            if (filename) setExportedVideoFilename(filename);
             eventSource.close();
             setIsExporting(false);
             if (onProjectUpdate) {
@@ -761,8 +894,9 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       };
 
       eventSource.onerror = () => {
-        console.error('SSE connection error');
         eventSource.close();
+        if (completed) return; // Ignore: we already got success, onerror fires when closing
+        console.error('SSE connection error');
         setIsExporting(false);
         setMessage({ type: 'error', text: 'Lost connection to server' });
       };
@@ -816,6 +950,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
 
           {/* Right Properties Panel */}
           <TextPropertiesPanel
+            ref={propertiesPanelRef}
             width={rightPanelWidth}
             onWidthChange={setRightPanelWidth}
             selected={selectedClip}
@@ -825,6 +960,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
               updateClip(selected, patch);
             }}
             projectId={project.id}
+            onProjectUpdate={onProjectUpdate}
           />
         </div>
 
@@ -838,12 +974,21 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
           projectName={project.name}
           onBack={() => router.back()}
           onExport={handleExport}
+          onSaveTimeline={handleSaveTimeline}
           onGenerateSubtitlesAndChars={handleGenerateSubtitlesAndChars}
           onGenerateImagePlan={handleGenerateImagePlan}
           isGeneratingDraft={isGeneratingDraft}
           isGeneratingImagePlan={isGeneratingImagePlan}
+          isExporting={isExporting}
+          exportProgress={exportProgress}
           hasSubtitlesAndChars={hasSubtitlesAndChars}
           hasImagePlan={hasImagePlan}
+          message={message}
+          exportedVideoFilename={exportedVideoFilename}
+          onDownloadExported={exportedVideoFilename ? () => {
+            const url = `${API_BASE_URL}/api/video/download/${encodeURIComponent(exportedVideoFilename)}`;
+            window.open(url, '_blank');
+          } : undefined}
           onHeightChange={setTimelineHeight}
           onPlayPause={handlePlayToggle}
           onPlayheadChange={setPlayheadTime}
@@ -851,6 +996,10 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
           selected={selected}
           onSelectClip={setSelected}
           onUpdateClip={updateClip}
+          onAddTrack={addTrack}
+          onMoveClipToNewTrack={moveClipToNewTrack}
+          onMoveClipBackToTrack={moveClipBackToTrack}
+          onMoveClipToTrack={moveClipToTrack}
         />
       </div>
     </div>

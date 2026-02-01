@@ -133,7 +133,6 @@ function getWavDurationSeconds(filePath: string): number {
 export function cleanupOldUserImageFiles(): void {
   try {
     if (!fs.existsSync(TEMP_DIR)) {
-      console.log(`🧹 [CLEANUP] Temp directory doesn't exist, skipping cleanup`);
       return;
     }
 
@@ -147,7 +146,6 @@ export function cleanupOldUserImageFiles(): void {
       if (file.endsWith('_user_images.json')) {
         fs.unlinkSync(filePath);
         cleanedCount++;
-        console.log(`🧹 [CLEANUP] Removed old user images file: ${file}`);
       }
 
       // Clean up image plan files
@@ -161,7 +159,6 @@ export function cleanupOldUserImageFiles(): void {
       if (file.endsWith('_image_analysis.json')) {
         fs.unlinkSync(filePath);
         cleanedCount++;
-        console.log(`🧹 [CLEANUP] Removed old image analysis file: ${file}`);
       }
 
       // Clean up subtitle files (older than 1 hour)
@@ -174,10 +171,9 @@ export function cleanupOldUserImageFiles(): void {
           if (fileAge > oneHour) {
             fs.unlinkSync(filePath);
             cleanedCount++;
-            console.log(`🧹 [CLEANUP] Removed old subtitles file: ${file}`);
           }
         } catch (error) {
-          console.warn(`⚠️ [CLEANUP] Error checking age of ${file}:`, error);
+          // skip
         }
       }
     }
@@ -191,10 +187,9 @@ export function cleanupOldUserImageFiles(): void {
           const cacheFilePath = path.join(assCacheDir, cacheFile);
           fs.unlinkSync(cacheFilePath);
           cleanedCount++;
-          console.log(`🧹 [CLEANUP] Removed old ASS cache file: ${cacheFile}`);
         }
       } catch (error) {
-        console.warn(`⚠️ [CLEANUP] Error cleaning ASS cache directory:`, error);
+        // skip
       }
     }
 
@@ -210,21 +205,15 @@ export function cleanupOldUserImageFiles(): void {
           if (fs.statSync(sessionDirPath).isDirectory()) {
             fs.rmSync(sessionDirPath, { recursive: true, force: true });
             cleanedCount++;
-            console.log(`🧹 [CLEANUP] Removed old generated images session: ${sessionDir}`);
           }
         }
       } catch (error) {
-        console.warn(`⚠️ [CLEANUP] Error cleaning generated images directory:`, error);
+        // skip
       }
     }
 
-    if (cleanedCount > 0) {
-      console.log(`🧹 [CLEANUP] Cleaned up ${cleanedCount} old temp files and directories`);
-    } else {
-      console.log(`🧹 [CLEANUP] No old temp files to clean`);
-    }
   } catch (error) {
-    console.warn(`⚠️ [CLEANUP] Error cleaning up old temp files:`, error);
+    // skip
   }
 }
 
@@ -234,7 +223,6 @@ async function testTTSApiConnection(): Promise<boolean> {
     const response = await axios.get(`${CHATTERBOX_TTS_API}/health`);
     return response.status === 200;
   } catch (error) {
-    console.error('Chatterbox TTS API connection test failed:', error);
     return false;
   }
 }
@@ -277,14 +265,6 @@ async function generateAudioWithChatterbox(
     // Truncate text if too long (API limit is 1000 characters)
     const truncatedText = text.length > 1000 ? text.substring(0, 1000) : text;
 
-    if (text.length > 1000) {
-      console.warn(`Text truncated from ${text.length} to 1000 characters for ${character}`);
-    }
-
-    console.log(`Generating audio for ${character} with text: "${truncatedText.substring(0, 50)}..."`);
-    console.log(`Reference audio path: ${referenceAudioPath}`);
-    console.log(`Output path: ${outputPath}`);
-
     // Create form data with request parameters and audio file
     const formData = new FormData();
 
@@ -305,17 +285,6 @@ async function generateAudioWithChatterbox(
     });
 
     const url = `${CHATTERBOX_TTS_API}/generate`;
-    console.log(`Making POST request to: ${url}`);
-    console.log(`Request parameters:`, {
-      text: truncatedText,
-      exaggeration: params.exaggeration,
-      temperature: params.temperature,
-      seed_num: params.seedNum,
-      cfg_weight: params.cfgWeight,
-      min_p: params.minP,
-      top_p: params.topP,
-      repetition_penalty: params.repetitionPenalty
-    });
 
     // Generate the audio
     const generateResponse = await axios.post(url, formData, {
@@ -328,8 +297,6 @@ async function generateAudioWithChatterbox(
       maxBodyLength: Infinity
     });
 
-    console.log(`✅ TTS API response status: ${generateResponse.status}`);
-    console.log(`TTS API response:`, generateResponse.data);
 
     if (!generateResponse.data || !generateResponse.data.audio_file_path) {
       throw new Error('Invalid response from TTS API - no audio file path returned');
@@ -338,10 +305,8 @@ async function generateAudioWithChatterbox(
     const generatedAudioPath = generateResponse.data.audio_file_path;
     const audioFilename = path.basename(generatedAudioPath);
 
-    console.log(`Generated audio file: ${audioFilename}`);
 
     // Download the generated audio file
-    console.log(`Downloading audio from: ${CHATTERBOX_TTS_API}/audio/${audioFilename}`);
     const downloadResponse = await axios.get(`${CHATTERBOX_TTS_API}/audio/${audioFilename}`, {
       responseType: 'stream',
       timeout: 180000 // 3 minutes (slow disks / large files)
@@ -353,46 +318,29 @@ async function generateAudioWithChatterbox(
 
     return new Promise((resolve, reject) => {
       writer.on('finish', () => {
-        console.log(`✅ Audio saved successfully: ${outputPath}`);
         resolve();
       });
       writer.on('error', (err) => {
-        console.error(`❌ Error writing audio file: ${err.message}`);
         reject(err);
       });
     });
 
   } catch (error: any) {
-    console.error(`❌ Error generating audio with Chatterbox TTS for ${character}:`, error.message);
 
     // Enhanced debugging for 422 errors
     if (error.response) {
-      console.error('Response Status:', error.response.status);
-      console.error('Response Headers:', error.response.headers);
-      console.error('Response Data:', JSON.stringify(error.response.data, null, 2));
 
       if (error.response.status === 422 && error.response.data?.detail) {
-        console.error('🔍 FastAPI Validation Errors:');
         if (Array.isArray(error.response.data.detail)) {
           error.response.data.detail.forEach((err: any, index: number) => {
-            console.error(`  ${index + 1}. Field: ${err.loc.join('.')} | Type: ${err.type} | Message: ${err.msg}`);
             if (err.input !== undefined) {
-              console.error(`     Input received: ${JSON.stringify(err.input)}`);
             }
           });
         } else {
-          console.error('  Detail:', error.response.data.detail);
         }
       }
     } else if (error.request) {
-      console.error('❌ No response received from server');
-      console.error('Request config:', {
-        url: error.config?.url,
-        method: error.config?.method,
-        timeout: error.config?.timeout
-      });
     } else {
-      console.error('❌ Request setup error:', error.message);
     }
 
     // Format error message
@@ -426,7 +374,6 @@ export async function generateConversationWithAudio(ctx: HttpContext): Promise<H
     const topP = (b?.topP as number) ?? 1.0;
     const repetitionPenalty = (b?.repetitionPenalty as number) ?? 1.2;
 
-    console.log('🚀 Starting conversation generation with parameters:', { textLength: (text as string)?.length, exaggeration, temperature, seedNum, cfgWeight, minP, topP, repetitionPenalty });
 
     if (!text || typeof text !== 'string' || (text as string).trim() === '') {
       return jsonResponse(400, { error: 'Text is required and must be a non-empty string' });
@@ -441,12 +388,10 @@ export async function generateConversationWithAudio(ctx: HttpContext): Promise<H
     if (topP < 0.0 || topP > 1.0) return jsonResponse(400, { error: 'top_p must be between 0.0 and 1.0' });
     if (repetitionPenalty < 1.0 || repetitionPenalty > 2.0) return jsonResponse(400, { error: 'Repetition penalty must be between 1.0 and 2.0' });
 
-    console.log('🤖 Generating conversation script...');
     const conversation = await generateConversation(text as string);
     if (!conversation?.conversation?.length) {
       return jsonResponse(500, { success: false, error: 'Failed to generate conversation script' });
     }
-    console.log(`✅ Generated conversation with ${conversation.conversation.length} dialogue items`);
 
     return jsonResponse(200, {
       success: true,
@@ -455,7 +400,6 @@ export async function generateConversationWithAudio(ctx: HttpContext): Promise<H
       parameters: { exaggeration, temperature, seedNum, cfgWeight, minP, topP, repetitionPenalty },
     });
   } catch (error) {
-    console.error('💥 Error in generateScript controller:', error);
     return jsonResponse(500, { success: false, error: 'Internal server error occurred while generating conversation script', details: error instanceof Error ? error.message : 'Unknown error' });
   }
 }
@@ -472,7 +416,6 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
     const topP = (b?.topP as number) ?? 1.0;
     const repetitionPenalty = (b?.repetitionPenalty as number) ?? 1.2;
 
-    console.log('🎵 Starting audio generation from script with parameters:', { dialogueCount: conversation?.conversation?.length, exaggeration, temperature, seedNum, cfgWeight, minP, topP, repetitionPenalty });
 
     if (!conversation?.conversation || !Array.isArray(conversation.conversation) || conversation.conversation.length === 0) {
       return jsonResponse(400, { error: 'Valid conversation script is required' });
@@ -484,19 +427,15 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
     if (topP < 0.0 || topP > 1.0) return jsonResponse(400, { error: 'top_p must be between 0.0 and 1.0' });
     if (repetitionPenalty < 1.0 || repetitionPenalty > 2.0) return jsonResponse(400, { error: 'Repetition penalty must be between 1.0 and 2.0' });
 
-    console.log('🔍 Testing TTS API connection...');
     const apiConnected = await testTTSApiConnection();
     if (!apiConnected) {
       return jsonResponse(503, { success: false, error: 'TTS API is not available. Please ensure the Chatterbox TTS server is running on port 8000.' });
     }
-    console.log('✅ TTS API connection successful');
 
-    console.log('🔍 Checking reference audio files...');
     for (const [char, audioPath] of Object.entries(REFERENCE_AUDIO_PATHS)) {
       if (!fs.existsSync(audioPath)) {
         return jsonResponse(500, { success: false, error: `Reference audio file missing for ${char}: ${audioPath}` });
       }
-      console.log(`✅ ${char} audio file exists: ${audioPath}`);
     }
 
     const sessionName = generateSessionName(conversation);
@@ -517,7 +456,6 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
     });
 
     const sessionId = session.id;
-    console.log(`📝 Created database session: ${sessionId}`);
 
     // Clean up old user image files from previous sessions
     cleanupOldUserImageFiles();
@@ -532,7 +470,6 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
     // Save conversation data for regeneration
     const conversationPath = path.join(sessionDir, 'conversation.json');
     fs.writeFileSync(conversationPath, JSON.stringify(conversation, null, 2));
-    console.log(`Saved conversation data to: ${conversationPath}`);
 
     const dialogueRecords: { id: string }[] = [];
     for (let i = 0; i < conversation.conversation.length; i++) {
@@ -551,9 +488,6 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
       dialogueRecords.push(dialogueRecord);
     }
 
-    console.log(`📝 Created ${dialogueRecords.length} dialogue records in database`);
-    console.log('🎵 Starting audio generation...');
-    console.log(`Session: ${sessionId}`);
 
     // Publish start event immediately (SSE controller buffers recent messages)
     publishFileUpdate(sessionId, {
@@ -571,12 +505,9 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
       const dialogueRecord = dialogueRecords[i];
       const { character: convCharacter, dialogue } = item as { character: string; dialogue: string };
 
-      console.log(`\n📢 [${i + 1}/${totalFiles}] Processing dialogue for ${convCharacter}`);
-      console.log(`Text: "${dialogue.substring(0, 80)}${dialogue.length > 80 ? '...' : ''}"`);
 
       // Validate character
       if (!['Stewie', 'Peter'].includes(convCharacter)) {
-        console.warn(`⚠️ Skipping invalid character: ${convCharacter}`);
         const fileId = `${sessionId}_${i + 1}`;
         completedFiles.add(fileId);
         publishFileUpdate(sessionId, {
@@ -638,7 +569,6 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
           }
         });
 
-        console.log(`✅ Audio ${i + 1} completed: ${filename}`);
 
         // Track completion atomically
         completedFiles.add(fileId);
@@ -657,7 +587,6 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
         });
 
       } catch (audioError) {
-        console.error(`❌ Failed to generate audio ${i + 1} for ${convCharacter}:`, audioError);
 
         // Track completion even on error
         completedFiles.add(fileId);
@@ -698,7 +627,6 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
 
       // Calculate and store total duration
       const totalDuration = await updateSessionDuration(sessionId);
-      console.log(`📊 [AUDIO GENERATION] Total session duration: ${totalDuration.toFixed(2)}s`);
 
       // Update session with final stats
       await prisma.session.update({
@@ -718,9 +646,7 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
         allSuccessful: allGenerated
       });
 
-      console.log(`🏁 Audio generation complete: ${finalCount}/${totalFiles} files generated`);
     }).catch(error => {
-      console.error('Error in parallel audio generation:', error);
       publishFileUpdate(sessionId, {
         type: 'error',
         error: 'Generation failed',
@@ -738,7 +664,6 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
       note: 'Files are being generated asynchronously. Connect to the stream endpoint to receive real-time updates.'
     });
   } catch (error) {
-    console.error('💥 Error in generateScript controller:', error);
     return jsonResponse(500, { success: false, error: 'Internal server error occurred while generating conversation script', details: error instanceof Error ? error.message : 'Unknown error' });
   }
 }
@@ -759,7 +684,6 @@ export async function regenerateAudioFile(ctx: HttpContext): Promise<HandlerResu
     const topP = (b?.topP as number) ?? 1.0;
     const repetitionPenalty = (b?.repetitionPenalty as number) ?? 1.2;
 
-    console.log('🔄 Starting audio regeneration for:', { sessionId, filename, text, exaggeration, temperature, seedNum, cfgWeight, minP, topP, repetitionPenalty });
 
     if (exaggeration < 0.25 || exaggeration > 2.0) return jsonResponse(400, { error: 'Exaggeration must be between 0.25 and 2.0' });
     if (temperature < 0.05 || temperature > 5.0) return jsonResponse(400, { error: 'Temperature must be between 0.05 and 5.0' });
@@ -774,7 +698,6 @@ export async function regenerateAudioFile(ctx: HttpContext): Promise<HandlerResu
     const order = parseInt(filenameParts[1], 10);
     if (isNaN(order)) return jsonResponse(400, { error: 'Invalid order in filename' });
 
-    console.log('🔍 Parsed filename:', { urlSessionId: sessionId, actualSessionId, filename, order });
 
     const dialogueRecord = await prisma.dialogue.findFirst({
       where: {
@@ -791,7 +714,6 @@ export async function regenerateAudioFile(ctx: HttpContext): Promise<HandlerResu
     }
 
     let finalText = dialogueRecord.text;
-    console.log('📝 Dialogue record found:', { id: dialogueRecord.id, originalText: dialogueRecord.text, character: dialogueRecord.character, order: dialogueRecord.order });
 
     if (text !== undefined && String(text).trim() !== '') {
       finalText = String(text).trim();
@@ -800,9 +722,7 @@ export async function regenerateAudioFile(ctx: HttpContext): Promise<HandlerResu
         where: { id: dialogueRecord.id },
         data: { text: finalText }
       });
-      console.log(`📝 Updated dialogue text from "${dialogueRecord.text}" to "${finalText}"`);
     } else {
-      console.log(`📝 Using original text: "${finalText}"`);
     }
 
     const outputPath = path.join(AUDIO_OUTPUT_DIR, actualSessionId, filename);
@@ -859,9 +779,6 @@ export async function regenerateAudioFile(ctx: HttpContext): Promise<HandlerResu
       });
     }
 
-    console.log(`✅ Audio generation completed for: ${filename}`);
-    console.log(`✅ File saved to: ${outputPath}`);
-    console.log(`✅ File size: ${fileSize} bytes`);
 
     // Recalculate and update session duration
     await updateSessionDuration(actualSessionId);
@@ -875,11 +792,8 @@ export async function regenerateAudioFile(ctx: HttpContext): Promise<HandlerResu
       fileSize,
     });
   } catch (error) {
-    console.error('💥 Error regenerating audio:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     const errorType = error instanceof Error ? error.constructor.name : 'Unknown';
-    console.error('💥 Error type:', errorType);
-    console.error('💥 Error message:', errorMessage);
     return jsonResponse(500, {
       success: false,
       error: 'Failed to regenerate audio',
@@ -968,14 +882,11 @@ export async function getSessionDetails(ctx: HttpContext): Promise<HandlerResult
 
     return jsonResponse(200, { success: true, session: formattedSession });
   } catch (error) {
-    console.error('Error getting session details:', error);
     return jsonResponse(500, { success: false, error: 'Failed to get session details' });
   }
 }
 
 export async function getAudioFiles(_ctx: HttpContext): Promise<HandlerResult> {
-  console.log('🎵 [getAudioFiles] Endpoint hit!');
-  console.log('🎵 [getAudioFiles] DATABASE_URL:', process.env.DATABASE_URL);
   try {
     const sessions = await prisma.session.findMany({
       include: {
@@ -1101,7 +1012,6 @@ export async function getAudioFiles(_ctx: HttpContext): Promise<HandlerResult> {
 
     return jsonResponse(200, { success: true, sessions: formattedSessions });
   } catch (error) {
-    console.error('💥 [getAudioFiles] Error getting audio files:', error);
     return jsonResponse(500, { success: false, error: 'Failed to get audio files', details: error instanceof Error ? error.message : String(error) });
   }
 }
@@ -1144,7 +1054,6 @@ export async function downloadAudio(ctx: HttpContext): Promise<HandlerResult> {
       },
     });
   } catch (error) {
-    console.error('Error downloading audio:', error);
     return jsonResponse(500, { success: false, error: 'Failed to download audio file' });
   }
 }
@@ -1154,26 +1063,22 @@ export async function deleteAudioFile(ctx: HttpContext): Promise<HandlerResult> 
     const filename = ctx.params?.filename;
     const sessionId = ctx.query?.sessionId;
 
-    console.log('Delete request:', { filename, sessionId, sessionIdType: typeof sessionId });
 
     if (!filename) return jsonResponse(400, { error: 'Filename is required' });
 
     const audioFile = await prisma.audioFile.findFirst({
       where: sessionId ? { sessionId: String(sessionId), filename } : { filename },
     });
-    console.log('Database query result:', { found: !!audioFile, audioFile });
 
     if (!audioFile) return jsonResponse(404, { error: 'Audio file not found in database' });
 
     await prisma.audioFile.delete({ where: { id: audioFile.id } });
     if (fs.existsSync(audioFile.filePath)) {
       fs.unlinkSync(audioFile.filePath);
-      console.log(`Deleted audio file: ${audioFile.filePath}`);
     }
 
     return jsonResponse(200, { success: true, message: `Audio file ${filename} deleted successfully` });
   } catch (error) {
-    console.error('Error deleting audio file:', error);
     return jsonResponse(500, { success: false, error: 'Failed to delete audio file' });
   }
 }
@@ -1192,28 +1097,24 @@ export async function deleteAudioSession(ctx: HttpContext): Promise<HandlerResul
     for (const audioFile of session.audioFiles) {
       if (fs.existsSync(audioFile.filePath)) {
         fs.unlinkSync(audioFile.filePath);
-        console.log(`Deleted audio file: ${audioFile.filePath}`);
       }
     }
 
     const sessionDir = path.join(AUDIO_OUTPUT_DIR, sessionId);
     if (fs.existsSync(sessionDir)) {
       fs.rmSync(sessionDir, { recursive: true, force: true });
-      console.log(`Deleted session directory: ${sessionDir}`);
     }
 
     await prisma.session.delete({ where: { id: sessionId } });
 
     return jsonResponse(200, { success: true, message: `Session ${sessionId} and all associated files deleted successfully` });
   } catch (error) {
-    console.error('Error deleting audio session:', error);
     return jsonResponse(500, { success: false, error: 'Failed to delete audio session' });
   }
 }
 
 export async function testTTSConnection(_ctx: HttpContext): Promise<HandlerResult> {
   try {
-    console.log('Testing TTS API connection...');
     const connected = await testTTSApiConnection();
 
     if (connected) {
@@ -1226,7 +1127,6 @@ export async function testTTSConnection(_ctx: HttpContext): Promise<HandlerResul
       suggestion: 'Please ensure the Chatterbox TTS FastAPI server is running on port 8000',
     });
   } catch (error) {
-    console.error('Error testing TTS connection:', error);
     return jsonResponse(500, { success: false, error: 'Failed to test TTS connection', details: error instanceof Error ? error.message : 'Unknown error' });
   }
 }
@@ -1252,10 +1152,8 @@ export async function cleanupAudioFiles(_ctx: HttpContext): Promise<HandlerResul
       }
     }
 
-    console.log(`Cleaned up ${deletedCount} audio files`);
     return jsonResponse(200, { success: true, message: `Cleaned up ${deletedCount} temporary audio files`, deletedCount });
   } catch (error) {
-    console.error('Error cleaning up audio files:', error);
     return jsonResponse(500, { success: false, error: 'Failed to clean up audio files' });
   }
 }

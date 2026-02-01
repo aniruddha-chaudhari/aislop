@@ -49,12 +49,10 @@ export function publishFileUpdate(sessionId: string, update: {
       try {
         callback(update);
       } catch (error) {
-        console.error(`[EventEmitter] Error in callback for ${channel}:`, error);
       }
     });
   }
   
-  console.log(`[EventEmitter] Published ${update.type} event for session ${sessionId}`);
 }
 
 /**
@@ -68,7 +66,6 @@ export function subscribe(sessionId: string, callback: EventCallback): () => voi
   }
   
   listeners.get(channel)!.add(callback);
-  console.log(`[EventEmitter] Subscribed to ${channel} (${listeners.get(channel)!.size} listeners)`);
   
   // Return unsubscribe function
   return () => {
@@ -78,7 +75,6 @@ export function subscribe(sessionId: string, callback: EventCallback): () => voi
       if (sessionListeners.size === 0) {
         listeners.delete(channel);
       }
-      console.log(`[EventEmitter] Unsubscribed from ${channel} (${listeners.get(channel)?.size || 0} listeners remaining)`);
     }
   };
 }

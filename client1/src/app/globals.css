@@ -71,6 +71,11 @@
   --app-header-h: 3.5rem;
 }
 
+/* Hide Next.js dev error overlay (only affects dev; overlay isn't used in prod) */
+nextjs-portal {
+  display: none !important;
+}
+
 * {
   border-color: var(--border);
 }

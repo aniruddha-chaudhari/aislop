@@ -54,6 +54,8 @@ export type Track = {
   clips: Clip[];
   locked?: boolean;
   muted?: boolean;
+  /** When true, this track was auto-created (e.g. by dragging a clip over another); empty tracks with this flag are removed when the clip is moved. User-added tracks are not removed when empty. */
+  isAutoCreated?: boolean;
 };
 
 export type EditorProject = {

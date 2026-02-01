@@ -30,17 +30,14 @@ export async function streamFileUpdates(ctx: HttpContext): Promise<HandlerResult
         // Send initial connection message
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'connected', sessionId })}\n\n`));
         isConnected = true;
-        console.log(`[SSE] Client connected for session ${sessionId}`);
         
         // Send any recent messages that were published before connection
         const recent = getRecentMessages(sessionId);
         if (recent && recent.length > 0) {
-          console.log(`[SSE] Sending ${recent.length} recent messages to client`);
           for (const msg of recent) {
             try {
               controller.enqueue(encoder.encode(`data: ${JSON.stringify(msg.data)}\n\n`));
             } catch (error) {
-              console.error('[SSE] Error sending recent message:', error);
             }
           }
         }
@@ -48,23 +45,19 @@ export async function streamFileUpdates(ctx: HttpContext): Promise<HandlerResult
         // Subscribe to events for this session
         unsubscribe = subscribe(sessionId, (data) => {
           try {
-            console.log(`[SSE] Received message for session ${sessionId}:`, (data as { type?: string }).type);
             
             // Send to connected client
             if (isConnected) {
               try {
                 controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
               } catch (error) {
-                console.error('[SSE] Error sending message to client:', error);
                 isConnected = false;
               }
             }
           } catch (error) {
-            console.error('[SSE] Error processing message:', error);
           }
         });
         
-        console.log(`[SSE] Subscribed to events for session ${sessionId}`);
         
         // Keep connection alive with heartbeat
         heartbeatInterval = setInterval(() => {
@@ -73,7 +66,6 @@ export async function streamFileUpdates(ctx: HttpContext): Promise<HandlerResult
               controller.enqueue(encoder.encode(`: heartbeat\n\n`));
             }
           } catch (error) {
-            console.error('[SSE] Error sending heartbeat:', error);
             if (heartbeatInterval) {
               clearInterval(heartbeatInterval);
               heartbeatInterval = null;
@@ -82,13 +74,11 @@ export async function streamFileUpdates(ctx: HttpContext): Promise<HandlerResult
           }
         }, 30000); // Every 30 seconds
       } catch (error) {
-        console.error(`[SSE] Error setting up stream for session ${sessionId}:`, error);
         isConnected = false;
       }
     },
     
     cancel() {
-      console.log(`[SSE] Client disconnected for session ${sessionId}`);
       isConnected = false;
       
       if (heartbeatInterval) {

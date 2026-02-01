@@ -77,13 +77,35 @@ export async function generateImagePlan(
     throw new Error(`Audio session ${audioSessionId} not found`);
   }
 
+  console.log('[IMAGE PLAN] Calling ImageEmbeddingService for session', audioSessionId, {
+    topic: topic || session.name || 'Technical conversation',
+    dialogueCount: session.dialogues?.length ?? 0,
+    totalDuration: session.totalDuration,
+  });
+
   const imagePlan = await ImageEmbeddingService.generateImageEmbeddingPlanFromCleanTimestamps(
     audioSessionId,
     session.dialogues,
     topic || session.name || 'Technical conversation'
   );
 
-  const overlayClips = (imagePlan.imageRequirements || []).map((req: { id?: string; timestamp?: number; contextualDuration?: number; duration?: number; title?: string; imagePath?: string }, index: number) => ({
+  const requirements = imagePlan.imageRequirements || [];
+  console.log('[IMAGE PLAN] Image plan from service', {
+    sessionId: imagePlan.sessionId,
+    totalDuration: imagePlan.totalDuration,
+    requirementCount: requirements.length,
+    summary: imagePlan.summary,
+    requirements: requirements.map((req: { id?: string; title?: string; timestamp?: number; contextualDuration?: number; duration?: number; imagePath?: string }, i: number) => ({
+      index: i + 1,
+      id: req.id,
+      title: req.title,
+      timestamp: req.timestamp?.toFixed(1) + 's',
+      duration: (req.contextualDuration ?? req.duration ?? 8) + 's',
+      hasImagePath: !!req.imagePath,
+    })),
+  });
+
+  const overlayClips = requirements.map((req: { id?: string; timestamp?: number; contextualDuration?: number; duration?: number; title?: string; imagePath?: string }, index: number) => ({
     id: `img_${req.id ?? index}`,
     kind: 'overlay' as const,
     start: req.timestamp ?? 0,
@@ -102,6 +124,12 @@ export async function generateImagePlan(
     name: 'Images',
     clips: overlayClips,
   };
+
+  console.log('[IMAGE PLAN] Overlay track built', {
+    trackId: overlayTrack.id,
+    clipCount: overlayClips.length,
+    clipIds: overlayClips.map(c => c.id),
+  });
 
   return { overlayTrack };
 }

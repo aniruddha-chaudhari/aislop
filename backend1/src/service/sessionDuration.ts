@@ -52,7 +52,6 @@ function getWavDurationSeconds(filePath: string): number {
  */
 export async function updateSessionDuration(sessionId: string): Promise<number> {
   try {
-    console.log(`📊 [SESSION DURATION] Calculating total duration for session ${sessionId}`);
 
     // Get all audio files for this session with their dialogues
     const session = await prisma.session.findUnique({
@@ -70,7 +69,6 @@ export async function updateSessionDuration(sessionId: string): Promise<number> 
     });
 
     if (!session) {
-      console.error(`❌ [SESSION DURATION] Session ${sessionId} not found`);
       return 0;
     }
 
@@ -116,10 +114,8 @@ export async function updateSessionDuration(sessionId: string): Promise<number> 
       data: { totalDuration }
     });
 
-    console.log(`✅ [SESSION DURATION] Updated session ${sessionId} with total duration: ${totalDuration.toFixed(2)}s`);
     return totalDuration;
   } catch (error) {
-    console.error(`❌ [SESSION DURATION] Error updating session duration for ${sessionId}:`, error);
     return 0;
   }
 }
@@ -147,7 +143,6 @@ export async function getSessionDuration(sessionId: string): Promise<number> {
     // Otherwise, calculate and store it
     return await updateSessionDuration(sessionId);
   } catch (error) {
-    console.error(`❌ [SESSION DURATION] Error getting session duration for ${sessionId}:`, error);
     return 0;
   }
 }

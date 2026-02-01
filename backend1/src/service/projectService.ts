@@ -7,7 +7,6 @@ const PROJECTS_DIR = path.join(process.cwd(), 'storage', 'projects');
 // Ensure projects directory exists
 if (!fs.existsSync(PROJECTS_DIR)) {
   fs.mkdirSync(PROJECTS_DIR, { recursive: true });
-  console.log(`📁 [INIT] Created projects directory: ${PROJECTS_DIR}`);
 }
 
 /**
@@ -67,7 +66,6 @@ export async function createProject(
   const projectPath = getProjectPath(projectId);
   fs.writeFileSync(projectPath, JSON.stringify(validated, null, 2), 'utf8');
 
-  console.log(`✅ [PROJECT] Created project ${projectId}: ${name}`);
   return validated;
 }
 
@@ -86,7 +84,6 @@ export async function getProject(projectId: string): Promise<Project | null> {
     const project = JSON.parse(data);
     return ProjectSchema.parse(project);
   } catch (error) {
-    console.error(`❌ [PROJECT] Error reading project ${projectId}:`, error);
     return null;
   }
 }
@@ -106,7 +103,7 @@ export async function listProjects(): Promise<Project[]> {
       const project = JSON.parse(data);
       projects.push(ProjectSchema.parse(project));
     } catch (error) {
-      console.error(`❌ [PROJECT] Error reading project file ${file}:`, error);
+      // skip invalid project file
     }
   }
 
@@ -144,7 +141,6 @@ export async function updateProject(
   const projectPath = getProjectPath(projectId);
   fs.writeFileSync(projectPath, JSON.stringify(validated, null, 2), 'utf8');
 
-  console.log(`✅ [PROJECT] Updated project ${projectId}`);
   return validated;
 }
 
@@ -180,10 +176,8 @@ export async function deleteProject(projectId: string): Promise<boolean> {
 
   try {
     fs.unlinkSync(projectPath);
-    console.log(`✅ [PROJECT] Deleted project ${projectId}`);
     return true;
   } catch (error) {
-    console.error(`❌ [PROJECT] Error deleting project ${projectId}:`, error);
     return false;
   }
 }
