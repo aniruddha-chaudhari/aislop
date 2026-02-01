@@ -186,6 +186,23 @@ async function loadAudioSession(sessionId: string) {
 }
 
 /**
+ * Get actual audio file duration (must match concatenated audio used in export/preview)
+ */
+async function getAudioFileDuration(dialogue: { audioFile?: { filePath: string; duration?: number } | null }): Promise<number> {
+  if (!dialogue.audioFile?.filePath) return 3;
+  if (typeof dialogue.audioFile.duration === 'number' && dialogue.audioFile.duration > 0) {
+    return dialogue.audioFile.duration;
+  }
+  const ffmpeg = require('fluent-ffmpeg');
+  return new Promise<number>((resolve) => {
+    ffmpeg.ffprobe(dialogue.audioFile!.filePath, (err: any, metadata: any) => {
+      if (err) resolve(3);
+      else resolve(metadata.format?.duration || 3);
+    });
+  });
+}
+
+/**
  * Generate subtitle clips with WhisperX timings (word-level for karaoke)
  */
 async function generateSubtitleClips(session: any, _audioSessionId: string): Promise<Clip[]> {
@@ -210,10 +227,10 @@ async function generateSubtitleClips(session: any, _audioSessionId: string): Pro
     );
 
     if (alignment.success && alignment.sentences && alignment.sentences.length > 0) {
+      const dialogueDuration = await getAudioFileDuration(dialogue);
       for (let i = 0; i < alignment.sentences.length; i++) {
         const sentence = alignment.sentences[i];
         const clipStart = cumulativeTime + sentence.start;
-        const clipEnd = cumulativeTime + sentence.end;
         const clipDuration = sentence.end - sentence.start;
 
         // Extract words that fall within this sentence (relative to dialogue start)
@@ -235,7 +252,7 @@ async function generateSubtitleClips(session: any, _audioSessionId: string): Pro
           ...(sentenceWords.length > 0 && { words: sentenceWords }),
         });
       }
-      cumulativeTime += alignment.total_duration || 0;
+      cumulativeTime += dialogueDuration;
     } else {
       // Fallback: entire dialogue as one clip, with words if available
       const ffmpeg = require('fluent-ffmpeg');
@@ -266,37 +283,17 @@ async function generateSubtitleClips(session: any, _audioSessionId: string): Pro
 
 /**
  * Generate character clips based on speakers
+ * Uses actual audio file duration (not WhisperX) so clips align with concatenated audio
  */
-async function generateCharacterClips(session: any, audioSessionId: string): Promise<Clip[]> {
-  const { getWhisperXCleanAlignment } = await import('./videoGenerator');
+async function generateCharacterClips(session: any, _audioSessionId: string): Promise<Clip[]> {
   const clips: Clip[] = [];
-
   let cumulativeTime = 0;
 
   for (const dialogue of session.dialogues) {
     if (!dialogue.audioFile?.filePath) continue;
 
-    // Get WhisperX clean alignment for timing
-    const alignment = await getWhisperXCleanAlignment(
-      dialogue.audioFile.filePath,
-      dialogue.text
-    );
-
+    const duration = await getAudioFileDuration(dialogue);
     const character = dialogue.character;
-    let duration: number;
-
-    if (alignment.success && alignment.total_duration) {
-      duration = alignment.total_duration;
-    } else {
-      // Fallback duration
-      const ffmpeg = require('fluent-ffmpeg');
-      duration = await new Promise<number>((resolve) => {
-        ffmpeg.ffprobe(dialogue.audioFile!.filePath, (err: any, metadata: any) => {
-          if (err) resolve(3);
-          else resolve(metadata.format.duration || 3);
-        });
-      });
-    }
 
     // Position character based on speaker
     const x = character === 'Stewie' ? 0.78 : character === 'Peter' ? 0.16 : 0.5;

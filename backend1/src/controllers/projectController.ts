@@ -2,6 +2,7 @@ import type { HttpContext, HandlerResult } from '../utils/http';
 import { jsonResponse } from '../utils/http';
 import * as projectService from '../service/projectService';
 import { generateSubtitlesAndCharacters, generateImagePlan } from '../service/aiDraftService';
+import { getSessionDuration } from '../service/sessionDuration';
 import type { Track } from '../schema/project';
 import { compileTimeline } from '../service/timelineCompiler';
 import { generatePreview, generateTimelinePreview } from '../service/previewGenerator';
@@ -31,13 +32,21 @@ export async function createProject(ctx: HttpContext): Promise<HandlerResult> {
     const finalTemplatePath = templatePath || 'placeholder.mp4';
     const finalTemplateLabel = templateLabel || 'No Template';
 
+    // Set timeline duration from audio session so template is "cut to audio size" from the start
+    let initialDuration: number | undefined;
+    if (finalAudioSessionId && finalAudioSessionId !== 'no-session') {
+      const sessionDur = await getSessionDuration(finalAudioSessionId);
+      if (sessionDur > 0) initialDuration = sessionDur;
+    }
+
     const project = await projectService.createProject(
       name,
       finalAudioSessionId,
       finalTemplatePath,
       finalTemplateLabel,
       templateType || 'video',
-      format || '9:16'
+      format || '9:16',
+      initialDuration
     );
 
     return jsonResponse(200, {
@@ -88,13 +97,46 @@ export async function getProject(ctx: HttpContext): Promise<HandlerResult> {
       });
     }
 
-    const project = await projectService.getProject(projectId);
+    let project = await projectService.getProject(projectId);
 
     if (!project) {
       return jsonResponse(404, {
         success: false,
         error: 'Project not found',
       });
+    }
+
+    // If timeline duration is wrong (0 or longer than session), fix from session so editor shows "template cut to session size"
+    const timelineDuration = project.timeline?.duration;
+    const hasSession = project.audioSessionId && project.audioSessionId !== 'no-session';
+
+    if (hasSession) {
+      const sessionDur = await getSessionDuration(project.audioSessionId);
+      const wrongDuration =
+        typeof timelineDuration !== 'number' ||
+        timelineDuration <= 0 ||
+        timelineDuration > sessionDur;
+      if (sessionDur > 0 && wrongDuration) {
+        const targetDur = sessionDur;
+        const tracks = (project.timeline?.tracks ?? []).map((track: any) => ({
+          ...track,
+          clips: (track.clips ?? []).map((clip: any) => {
+            const start = clip.start ?? 0;
+            const duration = clip.duration ?? 0;
+            const end = start + duration;
+            if (end <= targetDur) return clip;
+            return { ...clip, duration: Math.max(0.01, targetDur - start) };
+          }),
+        }));
+        project = {
+          ...project,
+          timeline: {
+            ...project.timeline,
+            duration: targetDur,
+            tracks,
+          },
+        };
+      }
     }
 
     return jsonResponse(200, {
@@ -285,14 +327,21 @@ export async function generateImagePlanForProject(ctx: HttpContext): Promise<Han
 
     const result = await generateImagePlan(project.audioSessionId, topic);
 
-    // Merge overlay track into existing timeline (replace t_imgs, keep others)
+    // Merge overlay track into existing timeline: replace t_imgs in place to preserve track order
     const existing = project.timeline;
     const existingTracks = (existing?.tracks ?? []) as Track[];
-    const otherOverlays = existingTracks.filter((t) => t.type === 'overlay' && t.id !== 't_imgs');
-    const nonOverlays = existingTracks.filter((t) => t.type !== 'overlay');
-    const tracks: Track[] = [...otherOverlays, result.overlayTrack, ...nonOverlays];
+    const hasImagesTrack = existingTracks.some((t) => t.id === 't_imgs');
+    const tracks: Track[] = hasImagesTrack
+      ? existingTracks.map((t) => (t.id === 't_imgs' ? result.overlayTrack : t))
+      : [...existingTracks, result.overlayTrack];
+    // Keep existing duration if set; otherwise use audio session duration so template stays "cut to audio size"
+    const existingDuration = existing?.duration;
+    const duration =
+      typeof existingDuration === 'number' && existingDuration > 0
+        ? existingDuration
+        : (await getSessionDuration(project.audioSessionId)) || 60;
     const timeline = {
-      duration: existing?.duration ?? 60,
+      duration,
       tracks,
     };
 
@@ -493,7 +542,8 @@ export async function uploadImageForClip(ctx: HttpContext): Promise<HandlerResul
     }
 
     // Get assetId from form data (which clip this image is for)
-    const assetId = ctx.body?.assetId || `asset_${Date.now()}`;
+    const body = ctx.body as { assetId?: string } | undefined;
+    const assetId = body?.assetId || `asset_${Date.now()}`;
 
     // Save image to storage/images/{sessionId}/
     const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
@@ -506,10 +556,8 @@ export async function uploadImageForClip(ctx: HttpContext): Promise<HandlerResul
     const imageFilename = `${assetId}.png`;
     const imagePath = path.join(sessionDir, imageFilename);
 
-    // Save file
-    await file.arrayBuffer().then((buffer) => {
-      fs.writeFileSync(imagePath, Buffer.from(buffer));
-    });
+    // Copy from upload temp path to final location
+    await fs.promises.copyFile(file.path, imagePath);
 
     return jsonResponse(200, {
       success: true,
@@ -592,6 +640,78 @@ export async function listProjectImages(ctx: HttpContext): Promise<HandlerResult
 }
 
 /**
+ * Serve a single project overlay image by assetId
+ * GET /api/project/:id/image/:assetId
+ */
+export async function serveProjectImage(ctx: HttpContext): Promise<HandlerResult> {
+  try {
+    const projectId = ctx.params?.id;
+    const assetId = ctx.params?.assetId;
+
+    if (!projectId || !assetId) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Project ID and assetId are required',
+      });
+    }
+
+    const project = await projectService.getProject(projectId);
+
+    if (!project) {
+      return jsonResponse(404, {
+        success: false,
+        error: 'Project not found',
+      });
+    }
+
+    const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
+    const sessionDir = path.join(IMAGE_UPLOAD_DIR, project.audioSessionId);
+
+    const extensions = ['.png', '.jpg', '.jpeg'];
+    let filePath: string | null = null;
+    for (const ext of extensions) {
+      const candidate = path.join(sessionDir, `${assetId}${ext}`);
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        filePath = candidate;
+        break;
+      }
+    }
+
+    if (!filePath) {
+      return jsonResponse(404, {
+        success: false,
+        error: 'Image not found',
+      });
+    }
+
+    const buf = fs.readFileSync(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    const mime: Record<string, string> = {
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+    };
+    const contentType = mime[ext] ?? 'application/octet-stream';
+
+    return new Response(buf, {
+      status: 200,
+      headers: {
+        'Content-Type': contentType,
+        'Content-Length': String(buf.length),
+        'Cache-Control': 'public, max-age=3600',
+      },
+    });
+  } catch (error) {
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to serve image',
+    });
+  }
+}
+
+/**
  * Generate preview video for a project
  * POST /api/project/:id/preview
  */
@@ -653,7 +773,7 @@ export async function generateProjectPreview(ctx: HttpContext): Promise<HandlerR
 }
 
 /**
- * Serve preview video
+ * Serve preview video - CORRECTED VERSION
  * GET /api/project/:id/preview
  */
 export async function serveProjectPreview(ctx: HttpContext): Promise<HandlerResult> {
@@ -692,12 +812,54 @@ export async function serveProjectPreview(ctx: HttpContext): Promise<HandlerResu
       });
     }
 
-    const buf = await fs.promises.readFile(previewPath);
-    return new Response(new Blob([buf]), {
-      status: 200,
+    const stat = await fs.promises.stat(previewPath);
+    const fileSize = stat.size;
+    const rangeHeader = ctx.headers.get('range');
+
+    // No range requested - send entire file
+    if (!rangeHeader) {
+      const buf = await fs.promises.readFile(previewPath);
+      return new Response(new Blob([buf]), {
+        status: 200,
+        headers: {
+          'Content-Type': 'video/mp4',
+          'Content-Length': String(fileSize),
+          'Accept-Ranges': 'bytes',
+          'Cache-Control': 'no-store',
+        },
+      });
+    }
+
+    // Parse range header
+    const parts = rangeHeader.replace(/bytes=/, '').split('-');
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+    // CRITICAL FIX: Calculate chunk size correctly
+    const chunkSize = (end - start) + 1;
+
+    // Validate range
+    if (start >= fileSize || end >= fileSize || start > end) {
+      return jsonResponse(416, {
+        success: false,
+        error: 'Range not satisfiable',
+      });
+    }
+
+    // Read the requested chunk
+    const fileHandle = await fs.promises.open(previewPath, 'r');
+    const buffer = Buffer.alloc(chunkSize);
+    await fileHandle.read(buffer, 0, chunkSize, start);
+    await fileHandle.close();
+
+    // Return 206 Partial Content with correct headers
+    return new Response(new Blob([buffer]), {
+      status: 206,
       headers: {
         'Content-Type': 'video/mp4',
-        'Content-Length': String(buf.length),
+        'Content-Length': String(chunkSize),
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
         'Cache-Control': 'no-store',
       },
     });

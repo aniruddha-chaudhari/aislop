@@ -90,27 +90,6 @@ export default function VideoTimelinePanel({
   onSelectClip,
   onUpdateClip,
 }: Props) {
-  React.useEffect(() => {
-    console.log('[VideoTimelinePanel] Project data changed:', {
-      projectId: project.id,
-      tracksCount: project.tracks.length,
-      totalClips: project.tracks.reduce((sum, t) => sum + t.clips.length, 0),
-      duration: project.duration,
-      tracks: project.tracks.map(t => ({
-        id: t.id,
-        name: t.name,
-        type: t.type,
-        clipsCount: t.clips.length,
-        clips: t.clips.map(c => ({
-          id: c.id,
-          kind: c.kind,
-          start: c.start,
-          duration: c.duration,
-          label: c.kind === 'subtitle' ? c.speaker : c.kind === 'character' ? c.character : c.kind === 'overlay' ? c.label : c.label
-        }))
-      }))
-    });
-  }, [project]);
   const [isResizing, setIsResizing] = useState(false);
   const dragRef = useRef<{
     ref: ClipRef;

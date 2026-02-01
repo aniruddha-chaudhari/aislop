@@ -3,6 +3,7 @@ import path from 'path';
 import { Project, Timeline, Track, SubtitleClip, OverlayClip, CharacterClip } from '../schema/project';
 import { publishFileUpdate } from './eventEmitter';
 import { getCharacterImagePath } from '../utils/characterImages';
+import { getSessionDuration } from './sessionDuration';
 
 const VIDEO_OUTPUT_DIR = path.join(process.cwd(), 'storage', 'videos');
 const TEMP_DIR = path.join(process.cwd(), 'storage', 'temp');
@@ -59,9 +60,11 @@ export async function compileTimeline(
     let command = ffmpeg();
 
     let duration = 60;
-
-    if (project.timeline && project.timeline.duration) {
+    if (project.timeline && project.timeline.duration > 0) {
       duration = project.timeline.duration;
+    } else if (project.audioSessionId && project.audioSessionId !== 'no-session') {
+      const sessionDur = await getSessionDuration(project.audioSessionId);
+      if (sessionDur > 0) duration = sessionDur;
     }
 
     const overlayClips: OverlayClip[] = [];
@@ -194,12 +197,12 @@ export async function compileTimeline(
       const peterInputIndex = peterClips[0]?.inputIndex;
 
       if (stewieInputIndex !== undefined) {
-        filterComplex += `;[${lastLabel}][${stewieInputIndex}:v]overlay=290:1250:enable='${stewieEnable}'[stewie_overlay]`;
+        filterComplex += `;[${lastLabel}][${stewieInputIndex}:v]overlay=300:1350:enable='${stewieEnable}'[stewie_overlay]`;
         lastLabel = 'stewie_overlay';
       }
 
       if (peterInputIndex !== undefined) {
-        filterComplex += `;[${lastLabel}][${peterInputIndex}:v]overlay=290:1350:enable='${peterEnable}'[with_characters]`;
+        filterComplex += `;[${lastLabel}][${peterInputIndex}:v]overlay=300:1250:enable='${peterEnable}'[with_characters]`;
         lastLabel = 'with_characters';
       }
     }

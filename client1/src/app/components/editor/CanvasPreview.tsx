@@ -49,7 +49,6 @@ export default function CanvasPreview({
   const playerWrapperRef = useRef<HTMLDivElement | null>(null);
   
   const setPlayerRef = useCallback((node: HTMLVideoElement | null) => {
-    console.log('[CanvasPreview] setPlayerRef called', { node, tagName: node?.tagName });
     playerRef.current = node;
   }, []);
   
@@ -99,14 +98,33 @@ export default function CanvasPreview({
 
   const PLACEHOLDER_OVERLAY_SRCS = ['/window.svg', '/file.svg', '/globe.svg'];
 
+  /** Resolve overlay image URL: use project image API when we have a project, else placeholder SVGs for mock data. */
   const resolveOverlaySrc = (assetId: string): string => {
-    // No real assets wired yet; map to built-in public svgs so <img> exists.
+    if (project.id) {
+      return API_ENDPOINTS.serveProjectImage(project.id, assetId);
+    }
     if (assetId.includes('02')) return '/globe.svg';
     if (assetId.includes('01')) return '/file.svg';
     return '/window.svg';
   };
 
   const isPlaceholderOverlaySrc = (src: string) => PLACEHOLDER_OVERLAY_SRCS.includes(src);
+  const [overlayLoadErrors, setOverlayLoadErrors] = useState<Set<string>>(new Set());
+  const onOverlayError = useCallback((clipId: string) => {
+    setOverlayLoadErrors((prev) => new Set(prev).add(clipId));
+  }, []);
+  const onOverlayLoad = useCallback((clipId: string) => {
+    setOverlayLoadErrors((prev) => {
+      const next = new Set(prev);
+      next.delete(clipId);
+      return next;
+    });
+  }, []);
+
+  // Clear overlay load errors when project updates (e.g. after image upload) so we retry loading
+  useEffect(() => {
+    setOverlayLoadErrors(new Set());
+  }, [project.id, project.tracks]);
 
   const resolveCharacterSrc = (character: CharacterClip['character']): string => {
     return character === 'Stewie' ? '/vercel.svg' : '/next.svg';
@@ -175,32 +193,14 @@ export default function CanvasPreview({
 
   const lastSeekedRef = useRef<number>(0);
   const videoReadyRef = useRef(false);
+  const isSyncingFromTimelineRef = useRef(false);
+  const lastIntendedPlayheadRef = useRef(0);
+  const isBufferingToSeekRef = useRef(false);
 
   useEffect(() => {
     videoReadyRef.current = false;
     setMutedForPolicy(true);
   }, [videoSrc]);
-
-  const tryApplyPlayback = () => {
-    const video = getVideoElement();
-    if (!video || typeof video.play !== 'function') {
-      console.warn('[CanvasPreview] video element not ready for playback');
-      return;
-    }
-    console.log('[CanvasPreview] tryApplyPlayback', { isPlaying, playheadTime, videoCurrent: video.currentTime });
-    if (isPlaying) {
-      try {
-        if (Number.isFinite(playheadTime)) video.currentTime = playheadTime;
-      } catch {
-        // ignore
-      }
-      video.play().catch((err) => {
-        console.warn('[CanvasPreview] play() failed:', err);
-      });
-    } else {
-      video.pause();
-    }
-  };
 
   // Expose play/pause so parent can call play() in same stack as user click (required for autoplay policy).
   useEffect(() => {
@@ -208,96 +208,59 @@ export default function CanvasPreview({
     const api: PreviewPlayerApi = {
       requestPlay: (seekToSeconds) => {
         const video = getVideoElement();
-        if (!video) {
-          console.warn('[CanvasPreview] requestPlay called but video is null');
-          return;
-        }
-        
-        console.log('[CanvasPreview] requestPlay - full video state', { 
-          seekToSeconds, 
-          playheadTime, 
-          currentTime: video.currentTime,
-          duration: video.duration,
-          readyState: video.readyState,
-          networkState: video.networkState,
-          paused: video.paused,
-          ended: video.ended,
-          seeking: video.seeking,
-          seekable: video.seekable?.length,
-          buffered: video.buffered?.length
-        });
-        
+        if (!video) return;
         const t = seekToSeconds ?? playheadTime;
         
-        // If already at the target time, just play
-        if (Math.abs(video.currentTime - t) < 0.1) {
-          console.log('[CanvasPreview] already at target time, playing directly');
-          video.play().catch((err) => {
-            console.warn('[CanvasPreview] play() failed:', err);
-          });
-          return;
-        }
+        console.log('[CanvasPreview] requestPlay', {
+          seekToSeconds,
+          playheadTime,
+          used: t,
+          videoCurrentTimeBefore: video.currentTime,
+          readyState: video.readyState,
+          duration: video.duration,
+        });
         
-        // Check if seekable
-        if (video.seekable && video.seekable.length > 0) {
-          const seekableStart = video.seekable.start(0);
-          const seekableEnd = video.seekable.end(0);
-          console.log('[CanvasPreview] video seekable range:', { seekableStart, seekableEnd, targetTime: t });
-          
-          if (t < seekableStart || t > seekableEnd) {
-            console.warn('[CanvasPreview] target time outside seekable range!');
-          }
-        } else {
-          console.warn('[CanvasPreview] video not seekable yet!');
-        }
-        
-        // Seek is async: wait for 'seeked' event (with timeout retries), then play.
-        let attemptCount = 0;
-        const maxAttempts = 5;
-        const seekTimeoutMs = 1500;
-        let timeoutId: ReturnType<typeof setTimeout> | null = null;
+        // Update intended position
+        lastIntendedPlayheadRef.current = t;
+        isSyncingFromTimelineRef.current = true;
 
-        const attemptSeek = () => {
-          attemptCount++;
-          console.log('[CanvasPreview] seek attempt', attemptCount, 'setting currentTime to', t);
-
-          const onSeeked = () => {
-            if (timeoutId != null) clearTimeout(timeoutId);
-            timeoutId = null;
-            video.removeEventListener('seeked', onSeeked);
-            console.log('[CanvasPreview] seek completed, now playing from', video.currentTime);
-            video.play().catch((err) => {
-              console.warn('[CanvasPreview] play() after seek failed:', err);
-            });
-          };
-
-          const onSeekTimeout = () => {
-            timeoutId = null;
-            video.removeEventListener('seeked', onSeeked);
-            if (attemptCount < maxAttempts) {
-              console.warn('[CanvasPreview] seeked did not fire in time, retrying...');
-              setTimeout(attemptSeek, 100);
-            } else {
-              console.warn('[CanvasPreview] seek did not complete after', maxAttempts, 'attempts, playing from current position');
-              video.play().catch((err) => {
-                console.warn('[CanvasPreview] play() failed:', err);
-              });
-            }
-          };
-
-          video.addEventListener('seeked', onSeeked, { once: true });
-          timeoutId = setTimeout(onSeekTimeout, seekTimeoutMs);
-          video.currentTime = t;
+        const doPlay = () => {
+          video.play().catch((err) => console.warn('[CanvasPreview] requestPlay play() failed', err));
         };
 
-        attemptSeek();
+        // Seek is async: wait for 'seeked' before play() so we don't start from 0.
+        const needSeek = Number.isFinite(t) && video.readyState >= 1 && Number.isFinite(video.duration) && Math.abs(video.currentTime - t) > 0.05;
+        if (needSeek) {
+          try {
+            video.currentTime = t;
+            console.log('[CanvasPreview] requestPlay set currentTime to', t, 'waiting for seeked...');
+            const onSeeked = () => {
+              video.removeEventListener('seeked', onSeeked);
+              clearTimeout(timeoutId);
+              isSyncingFromTimelineRef.current = false;
+              console.log('[CanvasPreview] requestPlay seeked, now playing from', video.currentTime);
+              doPlay();
+            };
+            const timeoutId = setTimeout(() => {
+              video.removeEventListener('seeked', onSeeked);
+              isSyncingFromTimelineRef.current = false;
+              console.warn('[CanvasPreview] requestPlay seeked timeout, playing anyway from', video.currentTime);
+              doPlay();
+            }, 2000);
+            video.addEventListener('seeked', onSeeked, { once: true });
+          } catch (err) {
+            console.warn('[CanvasPreview] requestPlay set currentTime threw', err);
+            isSyncingFromTimelineRef.current = false;
+            doPlay();
+          }
+        } else {
+          isSyncingFromTimelineRef.current = false;
+          doPlay();
+        }
       },
       requestPause: () => {
         const video = getVideoElement();
-        if (!video) {
-          console.warn('[CanvasPreview] requestPause called but video ref is null');
-          return;
-        }
+        if (!video) return;
         video.pause();
       },
     };
@@ -305,25 +268,73 @@ export default function CanvasPreview({
     return () => onPreviewReady(null);
   }, [onPreviewReady, playheadTime]);
 
-  // When the player signals ready, apply initial state if needed
   const handleReady = () => {
     videoReadyRef.current = true;
-    console.log('[CanvasPreview] onReady', { src: videoSrc, mutedForPolicy });
-    // Don't auto-play on ready - wait for user to click play
   };
 
-  // Drive play/pause from timeline whenever isPlaying changes.
-  // Don't use tryApplyPlayback here - let requestPlay/requestPause handle it
-  // useEffect(() => {
-  //   console.log('[CanvasPreview] isPlaying changed', { 
-  //     isPlaying, 
-  //     videoReady: videoReadyRef.current,
-  //     playheadTime,
-  //     duration 
-  //   });
-  //   if (!videoReadyRef.current) return;
-  //   tryApplyPlayback();
-  // }, [isPlaying]);
+  // Drive play/pause from timeline: keep video in sync with isPlaying.
+  useEffect(() => {
+    const video = getVideoElement();
+    if (!video || !hasVideoSrc) return;
+    
+    if (!isPlaying) {
+      video.pause();
+      return;
+    }
+    
+    const applyPlay = () => {
+      const targetTime = lastIntendedPlayheadRef.current;
+      
+      console.log('[CanvasPreview] applyPlay', {
+        videoCurrentTime: video.currentTime,
+        targetTime,
+        playheadTime,
+        readyState: video.readyState,
+        willSeek: Number.isFinite(targetTime) && Math.abs(video.currentTime - targetTime) > 0.05,
+      });
+      
+      const needSeek = Number.isFinite(targetTime) &&
+        Math.abs(video.currentTime - targetTime) > 0.05 &&
+        video.readyState >= 1 &&
+        Number.isFinite(video.duration);
+
+      if (needSeek) {
+        isSyncingFromTimelineRef.current = true;
+        try {
+          video.currentTime = targetTime;
+          console.log('[CanvasPreview] applyPlay set currentTime to', targetTime, 'waiting for seeked...');
+          const onSeeked = () => {
+            video.removeEventListener('seeked', onSeeked);
+            clearTimeout(timeoutId);
+            isSyncingFromTimelineRef.current = false;
+            console.log('[CanvasPreview] applyPlay seeked, now playing from', video.currentTime);
+            video.play().catch((err) => console.warn('[CanvasPreview] applyPlay play() failed', err));
+          };
+          const timeoutId = setTimeout(() => {
+            video.removeEventListener('seeked', onSeeked);
+            isSyncingFromTimelineRef.current = false;
+            console.warn('[CanvasPreview] applyPlay seeked timeout, playing from', video.currentTime);
+            video.play().catch(() => {});
+          }, 2000);
+          video.addEventListener('seeked', onSeeked, { once: true });
+        } catch (err) {
+          console.warn('[CanvasPreview] applyPlay set currentTime threw', err);
+          isSyncingFromTimelineRef.current = false;
+          video.play().catch(() => {});
+        }
+      } else {
+        isSyncingFromTimelineRef.current = false;
+        video.play().catch((err) => console.warn('[CanvasPreview] applyPlay play() failed', err));
+      }
+    };
+    
+    if (video.readyState >= 2) {
+      applyPlay();
+    } else {
+      video.addEventListener('canplay', applyPlay, { once: true });
+      return () => video.removeEventListener('canplay', applyPlay);
+    }
+  }, [isPlaying, hasVideoSrc]);
 
   // Sync volume from timeline.
   useEffect(() => {
@@ -334,53 +345,81 @@ export default function CanvasPreview({
 
   // Sync timeline → video: when user clicks ruler/lane or drags playhead (only when PAUSED).
   useEffect(() => {
-    console.log('[CanvasPreview] Sync timeline→video effect', { 
-      isPlaying, 
-      playheadTime, 
-      hasVideoSrc, 
-      isSeekingRef: isSeekingRef.current 
-    });
-    
-    if (isPlaying) {
-      console.log('[CanvasPreview] Skipping sync - video is playing');
-      return;
-    }
-    if (!hasVideoSrc || !Number.isFinite(playheadTime)) {
-      console.log('[CanvasPreview] Skipping sync - no video or invalid playhead');
-      return;
-    }
-    if (isSeekingRef.current) {
-      console.log('[CanvasPreview] Skipping sync - user is seeking');
-      return;
-    }
+    if (isPlaying) return;
+    if (!hasVideoSrc || !Number.isFinite(playheadTime)) return;
 
     const video = getVideoElement();
-    if (!video || typeof video.currentTime !== 'number') {
-      console.log('[CanvasPreview] Skipping sync - no video element');
-      return;
-    }
+    if (!video || typeof video.currentTime !== 'number') return;
 
-    // Only seek if significantly different (avoid micro-adjustments)
+    // Track the intended playhead time - this is what the user scrubbed to
+    lastIntendedPlayheadRef.current = playheadTime;
+
     const diff = Math.abs(video.currentTime - playheadTime);
-    console.log('[CanvasPreview] Sync check', { 
-      videoCurrent: video.currentTime, 
-      playheadTime, 
-      diff 
-    });
-    
-    if (diff < 0.1) {
-      console.log('[CanvasPreview] Skipping sync - already close enough');
+    if (diff < 0.1) return;
+
+    // Check if video is ready for seeking
+    if (video.readyState < 1 || !Number.isFinite(video.duration)) {
+      console.log('[CanvasPreview] Sync timeline→video video not ready', { 
+        readyState: video.readyState, 
+        duration: video.duration 
+      });
       return;
     }
 
-    lastSeekedRef.current = playheadTime;
-    console.log('[CanvasPreview] Syncing video to timeline', { 
-      from: video.currentTime, 
-      to: playheadTime 
+    console.log('[CanvasPreview] Sync timeline→video', {
+      videoTime: video.currentTime,
+      targetTime: playheadTime,
+      diff,
+      readyState: video.readyState,
     });
-    
-    video.currentTime = playheadTime;
-    console.log('[CanvasPreview] After sync, video.currentTime is', video.currentTime);
+
+    // Check if target is buffered
+    const isBuffered = video.buffered.length > 0 && 
+      video.buffered.start(0) <= playheadTime && 
+      video.buffered.end(video.buffered.length - 1) >= playheadTime;
+
+    if (isBuffered) {
+      // Target is buffered, do seek immediately
+      isSyncingFromTimelineRef.current = true;
+      try {
+        video.currentTime = playheadTime;
+        console.log('[CanvasPreview] Sync timeline→video set currentTime to', playheadTime, 'actual:', video.currentTime);
+      } catch (err) {
+        console.warn('[CanvasPreview] Sync timeline→video seek failed:', err);
+      }
+    } else {
+      // Target not buffered - need to play first so video can buffer to that position
+      console.log('[CanvasPreview] Target not buffered, playing to buffer...');
+      isBufferingToSeekRef.current = true;
+      isSyncingFromTimelineRef.current = true;
+      
+      // Play and seek to target, then pause when we reach it
+      try {
+        video.currentTime = playheadTime;
+      } catch (err) {
+        console.warn('[CanvasPreview] Initial seek failed:', err);
+      }
+      
+      video.play().catch(() => {
+        console.warn('[CanvasPreview] Play failed during buffering seek');
+      });
+
+      // Listen for timeupdate to pause when we reach target
+      const onTimeUpdate = () => {
+        const distToTarget = Math.abs(video.currentTime - playheadTime);
+        
+        if (distToTarget < 0.1) {
+          console.log('[CanvasPreview] Reached buffered target, pausing');
+          video.removeEventListener('timeupdate', onTimeUpdate);
+          video.pause();
+          isBufferingToSeekRef.current = false;
+          isSyncingFromTimelineRef.current = false;
+        }
+      };
+
+      video.addEventListener('timeupdate', onTimeUpdate);
+      return () => video.removeEventListener('timeupdate', onTimeUpdate);
+    }
   }, [playheadTime, hasVideoSrc, isPlaying]);
 
   return (
@@ -406,57 +445,58 @@ export default function CanvasPreview({
                 style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', pointerEvents: 'auto' }}
                 playsInline
                 preload="auto"
-                onLoadStart={() => {
-                  console.log('[CanvasPreview] onLoadStart', { src: videoSrc });
-                }}
                 onLoadedMetadata={handleReady}
-                onSeeking={() => { 
-                  console.log('[CanvasPreview] onSeeking fired');
-                  isSeekingRef.current = true; 
-                }}
-                onSeeked={() => { 
-                  const video = getVideoElement();
-                  console.log('[CanvasPreview] onSeeked fired', { 
-                    currentTime: video?.currentTime 
+                onSeeking={() => {
+                  isSeekingRef.current = true;
+                  const v = getVideoElement();
+                  console.log('[CanvasPreview] onSeeking', {
+                    videoCurrentTime: v?.currentTime,
+                    intended: lastIntendedPlayheadRef.current,
+                    readyState: v?.readyState,
                   });
-                  isSeekingRef.current = false; 
+                }}
+                onSeeked={() => {
+                  const wasSyncingFromTimeline = isSyncingFromTimelineRef.current;
+                  isSeekingRef.current = false;
+                  isSyncingFromTimelineRef.current = false;
+                  isBufferingToSeekRef.current = false;
+
+                  const video = getVideoElement();
+                  if (!video || !Number.isFinite(video.currentTime)) return;
+
+                  const diffFromIntended = Math.abs(video.currentTime - lastIntendedPlayheadRef.current);
+                  console.log('[CanvasPreview] onSeeked', {
+                    videoCurrentTime: video.currentTime,
+                    intended: lastIntendedPlayheadRef.current,
+                    diffFromIntended,
+                    wasSyncingFromTimeline,
+                    readyState: video.readyState,
+                  });
+
+                  // Don't sync timeline to video if this was a programmatic seek
+                  if (wasSyncingFromTimeline) {
+                    console.log('[CanvasPreview] Ignoring seeked - was programmatic sync');
+                    return;
+                  }
+
+                  // If video position is very different from intended, it might be a user-initiated
+                  // seek on the video element itself - sync timeline to match
+                  if (diffFromIntended > 0.5) {
+                    console.log('[CanvasPreview] Video seeked independently, syncing timeline');
+                    lastIntendedPlayheadRef.current = video.currentTime;
+                    onPlayheadChange(video.currentTime);
+                  }
                 }}
                 onTimeUpdate={() => {
-                  if (isSeekingRef.current) {
-                    console.log('[CanvasPreview] onTimeUpdate skipped - seeking');
-                    return;
-                  }
+                  if (isSeekingRef.current || isSyncingFromTimelineRef.current || isBufferingToSeekRef.current) return;
                   const video = getVideoElement();
-                  if (!video || !Number.isFinite(video.currentTime)) {
-                    console.log('[CanvasPreview] onTimeUpdate skipped - no video');
-                    return;
-                  }
-                  console.log('[CanvasPreview] onTimeUpdate', { 
-                    currentTime: video.currentTime,
-                    lastSeek: lastSeekedRef.current 
-                  });
+                  if (!video || !Number.isFinite(video.currentTime)) return;
                   lastSeekedRef.current = video.currentTime;
-                  onPlayheadChange(video.currentTime);
+                  // Only sync video → timeline when playing. When paused, timeline is source of truth.
+                  if (isPlaying) onPlayheadChange(video.currentTime);
                 }}
-                onPlay={() => {
-                  const video = getVideoElement();
-                  console.log('[CanvasPreview] onPlay fired', { 
-                    currentTime: video?.currentTime,
-                    duration: video?.duration,
-                    paused: video?.paused
-                  });
-                  setMutedForPolicy(false);
-                }}
-                onPause={() => {
-                  const video = getVideoElement();
-                  console.log('[CanvasPreview] onPause fired', { 
-                    currentTime: video?.currentTime 
-                  });
-                }}
-                onEnded={() => {
-                  console.log('[CanvasPreview] onEnded fired', { isPlaying, playheadTime, duration });
-                  if (isPlaying) onPlayPause();
-                }}
+                onPlay={() => setMutedForPolicy(false)}
+                onEnded={() => { if (isPlaying) onPlayPause(); }}
                 onError={(err) => {
                   console.warn('[CanvasPreview] Video failed to load:', videoSrc, err);
                 }}
@@ -498,34 +538,23 @@ export default function CanvasPreview({
           <div className="absolute inset-0 z-[30] pointer-events-none">
             {activeOverlays.map(({ ref, clip: o }) => {
               const overlaySrc = resolveOverlaySrc(o.assetId);
-              if (isPlaceholderOverlaySrc(overlaySrc)) return null;
+              const showPlaceholder = isPlaceholderOverlaySrc(overlaySrc) || overlayLoadErrors.has(o.id);
               const isSelected = selected?.trackId === ref.trackId && selected?.clipId === ref.clipId;
-              return (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                key={o.id}
-                src={overlaySrc}
-                alt={o.label}
-                className={[
-                  'absolute select-none drop-shadow-[0_10px_30px_rgba(0,0,0,0.45)]',
-                  isSelected ? 'ring-2 ring-accent rounded' : '',
-                ].join(' ')}
-                style={{
-                  left: `${o.x * 100}%`,
-                  top: `${o.y * 100}%`,
-                  transform: `translate(-50%, -50%) scale(${o.scale})`,
-                  transformOrigin: 'center',
-                  width: '40%',
-                  maxWidth: 260,
-                  height: 'auto',
-                  opacity: 0.95,
-                }}
-                onPointerDown={(e) => {
+              const overlayStyle = {
+                left: `${o.x * 100}%`,
+                top: `${o.y * 100}%`,
+                transform: `translate(-50%, -50%) scale(${o.scale})`,
+                transformOrigin: 'center' as const,
+                width: '40%',
+                maxWidth: 260,
+                opacity: 0.95,
+              };
+              const pointerHandlers = {
+                onPointerDown: (e: React.PointerEvent) => {
                   e.stopPropagation();
                   onSelectClip(ref);
-                  // drag only when selected (after selecting), so first click selects, second drags
                   if (!isSelected) return;
-                  (e.currentTarget as HTMLImageElement).setPointerCapture(e.pointerId);
+                  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
                   dragRef.current = {
                     ref,
                     startX: e.clientX,
@@ -535,7 +564,40 @@ export default function CanvasPreview({
                   };
                   window.addEventListener('pointermove', onPointerMove);
                   window.addEventListener('pointerup', onPointerUp);
+                },
+              };
+              if (showPlaceholder) {
+                return (
+                  <div
+                    key={o.id}
+                    className={[
+                      'absolute select-none pointer-events-auto flex items-center justify-center rounded border border-dashed border-white/40 bg-black/30 text-white/70 text-xs p-2 text-center',
+                      isSelected ? 'ring-2 ring-accent' : '',
+                    ].join(' ')}
+                    style={{ ...overlayStyle, height: 120 }}
+                    {...pointerHandlers}
+                  >
+                    {o.label || 'Upload image'}
+                  </div>
+                );
+              }
+              return (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                key={o.id}
+                src={overlaySrc}
+                alt={o.label}
+                className={[
+                  'absolute select-none pointer-events-auto drop-shadow-[0_10px_30px_rgba(0,0,0,0.45)]',
+                  isSelected ? 'ring-2 ring-accent rounded' : '',
+                ].join(' ')}
+                style={{
+                  ...overlayStyle,
+                  height: 'auto',
                 }}
+                onLoad={() => onOverlayLoad(o.id)}
+                onError={() => onOverlayError(o.id)}
+                {...pointerHandlers}
               />
               );
             })}

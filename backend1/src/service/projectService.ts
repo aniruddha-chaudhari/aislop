@@ -33,10 +33,13 @@ export async function createProject(
   templatePath: string,
   templateLabel: string,
   templateType: 'video' | 'image' = 'video',
-  format: '9:16' | '16:9' | '1:1' = '9:16'
+  format: '9:16' | '16:9' | '1:1' = '9:16',
+  /** When set, timeline duration is set from audio session so template is "cut to audio size" from the start */
+  initialDuration?: number
 ): Promise<Project> {
   const projectId = generateProjectId();
   const now = new Date().toISOString();
+  const duration = typeof initialDuration === 'number' && initialDuration > 0 ? initialDuration : 0;
 
   const project: Project = {
     id: projectId,
@@ -49,7 +52,7 @@ export async function createProject(
     },
     audioSessionId,
     timeline: {
-      duration: 0,
+      duration,
       tracks: [],
     },
     status: 'draft',

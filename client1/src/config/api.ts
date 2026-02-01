@@ -90,4 +90,5 @@ export const API_ENDPOINTS = {
   servePreview: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/preview`,
   uploadProjectImage: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/upload-image`,
   projectImages: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/images`,
+  serveProjectImage: (projectId: string, assetId: string) => `${API_BASE_URL}/api/project/${projectId}/image/${encodeURIComponent(assetId)}`,
 } as const;

@@ -338,11 +338,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
           assContent += `Dialogue: 0,${formatAssTime(wordStart)},${formatAssTime(wordEnd)},Normal,${speaker},0,0,0,,${subtitleText}\n`;
         });
       }
-    } else {
-      const startTime = formatAssTime(clip.start);
-      const endTime = formatAssTime(clip.start + clip.duration);
-      const text = (clip.text || '').replace(/\n/g, '\\N');
-      assContent += `Dialogue: 0,${startTime},${endTime},Normal,${speaker},0,0,0,,${text}\n`;
     }
   }
 
@@ -474,11 +469,11 @@ export async function generateTimelinePreview(
     let filterComplex = '';
     let lastLabel = '0:v';
 
-    // Match backend1 timelineCompiler positions (290:1250 Stewie, 290:1350 Peter, MarginV 700, fontSize 48)
-    const stewieX = Math.floor(290 * SCALE);
-    const stewieY = Math.floor(1250 * SCALE);
-    const peterX = Math.floor(290 * SCALE);
-    const peterY = Math.floor(1350 * SCALE);
+    // Match backend videoGenerator: Stewie=300:1350 (lower), Peter=300:1250 (higher)
+    const stewieX = Math.floor(300 * SCALE);
+    const stewieY = Math.floor(1350 * SCALE);
+    const peterX = Math.floor(300 * SCALE);
+    const peterY = Math.floor(1250 * SCALE);
     const fontSize = Math.floor(48 * SCALE);
     const marginV = Math.floor(700 * SCALE);
 
@@ -502,16 +497,37 @@ export async function generateTimelinePreview(
     });
 
     if (charInputs.length > 0) {
-      const stewieInput = charInputs.find(c => c.clip.character === 'Stewie');
-      const peterInput = charInputs.find(c => c.clip.character === 'Peter');
+      const stewieClips = charInputs.filter(c => c.clip.character === 'Stewie');
+      const peterClips = charInputs.filter(c => c.clip.character === 'Peter');
 
-      if (stewieInput) {
-        filterComplex += `;[${lastLabel}][${stewieInput.inputIndex}:v]overlay=${stewieX}:${stewieY}[stewie_overlay]`;
+      const stewieRanges: string[] = [];
+      const peterRanges: string[] = [];
+      stewieClips.forEach(({ clip }) => {
+        stewieRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
+      });
+      peterClips.forEach(({ clip }) => {
+        peterRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
+      });
+
+      const stewieEnable = stewieRanges.length > 0 ? stewieRanges.join('+') : '0';
+      const peterEnable = peterRanges.length > 0 ? peterRanges.join('+') : '0';
+
+      const stewieScaleW = Math.floor(500 * SCALE);
+      const stewieScaleH = Math.floor(600 * SCALE);
+      const peterScaleW = Math.floor(580 * SCALE);
+      const peterScaleH = Math.floor(720 * SCALE);
+      const stewieInputIndex = stewieClips[0]?.inputIndex;
+      const peterInputIndex = peterClips[0]?.inputIndex;
+
+      if (stewieInputIndex !== undefined) {
+        filterComplex += `;[${stewieInputIndex}:v]scale=${stewieScaleW}:${stewieScaleH}:force_original_aspect_ratio=decrease[stewie_scaled]`;
+        filterComplex += `;[${lastLabel}][stewie_scaled]overlay=${stewieX}:${stewieY}:enable='${stewieEnable}'[stewie_overlay]`;
         lastLabel = 'stewie_overlay';
       }
 
-      if (peterInput) {
-        filterComplex += `;[${lastLabel}][${peterInput.inputIndex}:v]overlay=${peterX}:${peterY}[with_characters]`;
+      if (peterInputIndex !== undefined) {
+        filterComplex += `;[${peterInputIndex}:v]scale=${peterScaleW}:${peterScaleH}:force_original_aspect_ratio=decrease[peter_scaled]`;
+        filterComplex += `;[${lastLabel}][peter_scaled]overlay=${peterX}:${peterY}:enable='${peterEnable}'[with_characters]`;
         lastLabel = 'with_characters';
       }
     }

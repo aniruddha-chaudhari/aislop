@@ -72,14 +72,17 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const handlePlayToggle = async () => {
     const next = !isPlaying;
     let seekTo: number | undefined;
-    console.log('[EditorLayout] handlePlayToggle', { 
-      next, 
-      playheadTime, 
-      duration: draftProject.duration,
-      atEnd: playheadTime >= draftProject.duration,
-      hasTemplate: !!project.template?.src,
-      audioSessionId: project.audioSessionId
-    });
+    // Log for scrub-then-play: what playhead/duration/seekTo when user clicks play
+    if (next) {
+      const atEnd = draftProject.duration > 0 && playheadTime >= draftProject.duration;
+      const computedSeekTo = atEnd ? 0 : playheadTime;
+      console.log('[EditorLayout] handlePlayToggle (play)', {
+        playheadTime,
+        duration: draftProject.duration,
+        atEnd,
+        seekTo: computedSeekTo,
+      });
+    }
     
     // If playing and we have template + audio session, generate/use preview
     if (next && project.template?.src && project.audioSessionId && project.audioSessionId !== 'no-session') {
@@ -124,21 +127,15 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         }
         return;
       }
-    } else if (next && (!project.template?.src || !project.audioSessionId || project.audioSessionId === 'no-session')) {
-      // Show message about what's missing
-      const missing = [];
-      if (!project.template?.src) missing.push('template');
-      if (!project.audioSessionId || project.audioSessionId === 'no-session') missing.push('audio session');
-      
-      setMessage({ 
-        type: 'info', 
-        text: `Please select a ${missing.join(' and ')} first` 
-      });
+    } else if (next && !project.template?.src) {
+      // Block play only when no template (allow template-only play from timeline)
+      setMessage({ type: 'info', text: 'Please select a template first' });
       setTimeout(() => setMessage(null), 3000);
       return;
     }
     
-    if (next && playheadTime >= draftProject.duration) {
+    // Only reset to start when actually at end of timeline (duration > 0)
+    if (next && draftProject.duration > 0 && playheadTime >= draftProject.duration) {
       setPlayheadTime(0);
       seekTo = 0;
     } else if (next) {
@@ -158,18 +155,6 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
 
   // When the route changes to a new project, reset local draft state.
   useEffect(() => {
-    console.log('[EditorLayout] useEffect syncing draftProject with project:', {
-      projectId: project.id,
-      projectAudioSessionId: project.audioSessionId,
-      projectTemplateSrc: project.template?.src,
-      projectTracksCount: project.tracks?.length || 0,
-      projectClipsCount: project.tracks?.reduce((sum, t) => sum + (t.clips?.length || 0), 0) || 0,
-      projectDuration: project.duration,
-      draftAudioSessionId: draftProject.audioSessionId,
-      draftTemplateSrc: draftProject.template?.src,
-      draftTracksCount: draftProject.tracks.length,
-      draftClipsCount: draftProject.tracks.reduce((sum, t) => sum + t.clips.length, 0)
-    });
     setDraftProject(project);
     setSelected(null);
     setPlayheadTime(0);
@@ -333,10 +318,10 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
           if (templateNeedsTrack) {
             console.log('[EditorLayout] Creating overlay track for template');
             try {
-              // Get duration from audio track if it exists, otherwise use a default
+              // Use session/timeline duration so template is cut to audio size (never longer than session)
               const audioTrack = timelineTracks.find((t: any) => t.type === 'audio');
               const audioDuration = audioTrack?.clips?.reduce((sum: number, c: any) => sum + (c.duration || 0), 0) || updatedProject?.timeline?.duration || 30;
-              const templateDuration = Math.max(audioDuration, 30); // At least 30 seconds
+              const templateDuration = Math.max(1, audioDuration); // Match session length; minimum 1s to avoid zero
 
               // Create overlay track with template clip
               const overlayTrack = {
