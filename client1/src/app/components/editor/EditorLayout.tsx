@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Clip, ClipRef, EditorProject, Track } from '../../../features/editor/types';
 import { useRouter } from 'next/navigation';
 import EditorSidebar from './EditorSidebar';
@@ -62,6 +62,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const [timelineHeight, setTimelineHeight] = useState(260);
   const [rightPanelWidth, setRightPanelWidth] = useState(224);
   const [selected, setSelected] = useState<ClipRef | null>(null);
+  const [isDirty, setIsDirty] = useState(false);
+  const [showSubtitlesInTimeline, setShowSubtitlesInTimeline] = useState(true);
   const rafRef = useRef<number | null>(null);
   const lastTsRef = useRef<number | null>(null);
   const previewPlayerRef = useRef<PreviewPlayerApi | null>(null);
@@ -160,6 +162,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   useEffect(() => {
     setDraftProject(project);
     setSelected(null);
+    setIsDirty(false);
     setPlayheadTime(0);
     setIsPlaying(false);
     setPreviewVideoSrc(null); // Clear preview when project/template/session changes
@@ -589,6 +592,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       });
       return { ...p, tracks };
     });
+    setIsDirty(true);
   };
 
   const addTrack = () => {
@@ -603,6 +607,16 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       };
       return { ...p, tracks: [...p.tracks, newTrack] };
     });
+    setIsDirty(true);
+  };
+
+  const deleteTrack = (trackId: string) => {
+    setDraftProject((p) => ({
+      ...p,
+      tracks: p.tracks.filter((t) => t.id !== trackId),
+    }));
+    if (selected?.trackId === trackId) setSelected(null);
+    setIsDirty(true);
   };
 
   /** Create a new track below and move the clip there at the given start time (used when dragging over another clip). */
@@ -641,6 +655,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       queueMicrotask(() => onNewRef?.({ trackId: newTrackId, clipId: ref.clipId }));
       return { ...p, tracks: newTracks };
     });
+    setIsDirty(true);
   };
 
   /** Move clip from its current track (the temp new track) back to the original track and remove the empty track. */
@@ -675,6 +690,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       queueMicrotask(() => onBackRef({ trackId: originalTrackId, clipId: ref.clipId }));
       return { ...p, tracks: newTracks };
     });
+    setIsDirty(true);
   };
 
   /** Move clip from its current track to another existing track at the given start time. */
@@ -714,6 +730,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       queueMicrotask(() => onNewRef?.({ trackId: targetTrackId, clipId: ref.clipId }));
       return { ...p, tracks: newTracks };
     });
+    setIsDirty(true);
   };
 
   // When playing, playhead is driven by the video (onTimeUpdate in CanvasPreview).
@@ -805,7 +822,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     }
   };
 
-  const handleSaveTimeline = async () => {
+  const handleSaveTimeline = useCallback(async (isAutoSave = false) => {
     try {
       const response = await fetch(API_ENDPOINTS.saveTimeline(project.id), {
         method: 'PUT',
@@ -825,8 +842,15 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       const data = await response.json();
       
       if (data.success) {
-        setMessage({ type: 'success', text: 'Timeline saved!' });
-        setTimeout(() => setMessage(null), 2000);
+        setIsDirty(false);
+        onProjectUpdate?.();
+        if (isAutoSave) {
+          setMessage({ type: 'success', text: 'Saved' });
+          setTimeout(() => setMessage(null), 1500);
+        } else {
+          setMessage({ type: 'success', text: 'Timeline saved!' });
+          setTimeout(() => setMessage(null), 2000);
+        }
       } else {
         throw new Error(data.error || 'Failed to save timeline');
       }
@@ -837,7 +861,16 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         text: error instanceof Error ? error.message : 'Failed to save timeline' 
       });
     }
-  };
+  }, [project.id, draftProject.duration, draftProject.tracks, onProjectUpdate]);
+
+  // Auto-save when dirty after 2 seconds of inactivity
+  useEffect(() => {
+    if (!isDirty) return;
+    const timer = setTimeout(() => {
+      handleSaveTimeline(true);
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [isDirty, draftProject, handleSaveTimeline]);
 
   const handleExport = async () => {
     setIsExporting(true);
@@ -997,9 +1030,12 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
           onSelectClip={setSelected}
           onUpdateClip={updateClip}
           onAddTrack={addTrack}
+          onDeleteTrack={deleteTrack}
           onMoveClipToNewTrack={moveClipToNewTrack}
           onMoveClipBackToTrack={moveClipBackToTrack}
           onMoveClipToTrack={moveClipToTrack}
+          showSubtitlesInTimeline={showSubtitlesInTimeline}
+          onToggleShowSubtitlesInTimeline={() => setShowSubtitlesInTimeline((v) => !v)}
         />
       </div>
     </div>

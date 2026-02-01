@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CharacterClip, Clip, ClipRef, EditorProject, OverlayClip, SubtitleClip } from '../../../features/editor/types';
+import type { Clip, ClipRef, EditorProject } from '../../../features/editor/types';
 import { API_ENDPOINTS } from '../../../config/api';
 
 export type PreviewPlayerApi = {
@@ -60,76 +60,6 @@ export default function CanvasPreview({
   const isSeekingRef = useRef(false);
   const [mutedForPolicy, setMutedForPolicy] = useState(true);
   const frameRef = useRef<HTMLDivElement | null>(null);
-  const dragRef = useRef<{
-    ref: ClipRef;
-    startX: number;
-    startY: number;
-    originX: number;
-    originY: number;
-  } | null>(null);
-
-  const { activeSubtitle, activeOverlays, activeCharacters } = useMemo(() => {
-    const now = playheadTime;
-
-    const isActive = (c: Clip) => now >= c.start && now <= c.start + c.duration;
-
-    const subs: SubtitleClip[] = [];
-    const overlays: Array<{ ref: ClipRef; clip: OverlayClip }> = [];
-    const chars: Array<{ ref: ClipRef; clip: CharacterClip }> = [];
-
-    for (const t of project.tracks) {
-      for (const c of t.clips) {
-        if (!isActive(c)) continue;
-        if (c.kind === 'subtitle') subs.push(c);
-        if (c.kind === 'overlay') overlays.push({ ref: { trackId: t.id, clipId: c.id }, clip: c });
-        if (c.kind === 'character') chars.push({ ref: { trackId: t.id, clipId: c.id }, clip: c });
-      }
-    }
-
-    // choose latest-starting subtitle if multiple overlap
-    subs.sort((a, b) => b.start - a.start);
-
-    return {
-      activeSubtitle: subs[0] ?? null,
-      activeOverlays: overlays,
-      activeCharacters: chars,
-    };
-  }, [playheadTime, project.tracks]);
-
-  const PLACEHOLDER_OVERLAY_SRCS = ['/window.svg', '/file.svg', '/globe.svg'];
-
-  /** Resolve overlay image URL: use project image API when we have a project, else placeholder SVGs for mock data. */
-  const resolveOverlaySrc = (assetId: string): string => {
-    if (project.id) {
-      return API_ENDPOINTS.serveProjectImage(project.id, assetId);
-    }
-    if (assetId.includes('02')) return '/globe.svg';
-    if (assetId.includes('01')) return '/file.svg';
-    return '/window.svg';
-  };
-
-  const isPlaceholderOverlaySrc = (src: string) => PLACEHOLDER_OVERLAY_SRCS.includes(src);
-  const [overlayLoadErrors, setOverlayLoadErrors] = useState<Set<string>>(new Set());
-  const onOverlayError = useCallback((clipId: string) => {
-    setOverlayLoadErrors((prev) => new Set(prev).add(clipId));
-  }, []);
-  const onOverlayLoad = useCallback((clipId: string) => {
-    setOverlayLoadErrors((prev) => {
-      const next = new Set(prev);
-      next.delete(clipId);
-      return next;
-    });
-  }, []);
-
-  // Clear overlay load errors when project updates (e.g. after image upload) so we retry loading
-  useEffect(() => {
-    setOverlayLoadErrors(new Set());
-  }, [project.id, project.tracks]);
-
-  const resolveCharacterSrc = (character: CharacterClip['character']): string => {
-    return character === 'Stewie' ? '/vercel.svg' : '/next.svg';
-  };
-
   // Convert template path to API URL if it's a file system path
   const getTemplateUrl = (templateSrc: string | undefined): string | undefined => {
     if (!templateSrc) return undefined;
@@ -167,29 +97,6 @@ export default function CanvasPreview({
     [previewVideoSrc, project.template.src]
   );
   const hasVideoSrc = Boolean(videoSrc);
-
-  const pointerToNormalized = (clientX: number, clientY: number) => {
-    const el = frameRef.current;
-    if (!el) return null;
-    const rect = el.getBoundingClientRect();
-    const x = (clientX - rect.left) / rect.width;
-    const y = (clientY - rect.top) / rect.height;
-    return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
-  };
-
-  const onPointerMove = (e: PointerEvent) => {
-    const drag = dragRef.current;
-    if (!drag) return;
-    const pos = pointerToNormalized(e.clientX, e.clientY);
-    if (!pos) return;
-    onUpdateClip(drag.ref, { x: pos.x, y: pos.y } as Partial<Clip>);
-  };
-
-  const onPointerUp = () => {
-    dragRef.current = null;
-    window.removeEventListener('pointermove', onPointerMove);
-    window.removeEventListener('pointerup', onPointerUp);
-  };
 
   const lastSeekedRef = useRef<number>(0);
   const videoReadyRef = useRef(false);
@@ -532,131 +439,7 @@ export default function CanvasPreview({
             )}
           </div>
 
-          {/* Overlays (Phase 2) — drawn on top (z-30) but pointer-events-none so video controls stay usable */}
-          {/* Only show overlays if NOT using preview video (preview has overlays baked in) */}
-          {!previewVideoSrc && (
-          <div className="absolute inset-0 z-[30] pointer-events-none">
-            {activeOverlays.map(({ ref, clip: o }) => {
-              const overlaySrc = resolveOverlaySrc(o.assetId);
-              const showPlaceholder = isPlaceholderOverlaySrc(overlaySrc) || overlayLoadErrors.has(o.id);
-              const isSelected = selected?.trackId === ref.trackId && selected?.clipId === ref.clipId;
-              const overlayStyle = {
-                left: `${o.x * 100}%`,
-                top: `${o.y * 100}%`,
-                transform: `translate(-50%, -50%) scale(${o.scale})`,
-                transformOrigin: 'center' as const,
-                width: '40%',
-                maxWidth: 260,
-                opacity: 0.95,
-              };
-              const pointerHandlers = {
-                onPointerDown: (e: React.PointerEvent) => {
-                  e.stopPropagation();
-                  onSelectClip(ref);
-                  if (!isSelected) return;
-                  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-                  dragRef.current = {
-                    ref,
-                    startX: e.clientX,
-                    startY: e.clientY,
-                    originX: o.x,
-                    originY: o.y,
-                  };
-                  window.addEventListener('pointermove', onPointerMove);
-                  window.addEventListener('pointerup', onPointerUp);
-                },
-              };
-              if (showPlaceholder) {
-                return (
-                  <div
-                    key={o.id}
-                    className={[
-                      'absolute select-none pointer-events-auto flex items-center justify-center rounded border border-dashed border-white/40 bg-black/30 text-white/70 text-xs p-2 text-center',
-                      isSelected ? 'ring-2 ring-accent' : '',
-                    ].join(' ')}
-                    style={{ ...overlayStyle, height: 120 }}
-                    {...pointerHandlers}
-                  >
-                    {o.label || 'Upload image'}
-                  </div>
-                );
-              }
-              return (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                key={o.id}
-                src={overlaySrc}
-                alt={o.label}
-                className={[
-                  'absolute select-none pointer-events-auto drop-shadow-[0_10px_30px_rgba(0,0,0,0.45)]',
-                  isSelected ? 'ring-2 ring-accent rounded' : '',
-                ].join(' ')}
-                style={{
-                  ...overlayStyle,
-                  height: 'auto',
-                }}
-                onLoad={() => onOverlayLoad(o.id)}
-                onError={() => onOverlayError(o.id)}
-                {...pointerHandlers}
-              />
-              );
-            })}
-
-            {activeCharacters.map(({ ref, clip: c }) => {
-              const isSelected = selected?.trackId === ref.trackId && selected?.clipId === ref.clipId;
-              return (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                key={c.id}
-                src={resolveCharacterSrc(c.character)}
-                alt={c.character}
-                className={[
-                  'absolute select-none drop-shadow-[0_10px_30px_rgba(0,0,0,0.55)]',
-                  isSelected ? 'ring-2 ring-accent rounded' : '',
-                ].join(' ')}
-                style={{
-                  left: `${c.x * 100}%`,
-                  top: `${c.y * 100}%`,
-                  transform: `translate(-50%, -50%) scale(${c.scale})`,
-                  transformOrigin: 'center',
-                  width: '30%',
-                  maxWidth: 200,
-                  height: 'auto',
-                  opacity: 0.98,
-                }}
-                onPointerDown={(e) => {
-                  e.stopPropagation();
-                  onSelectClip(ref);
-                  if (!isSelected) return;
-                  (e.currentTarget as HTMLImageElement).setPointerCapture(e.pointerId);
-                  dragRef.current = {
-                    ref,
-                    startX: e.clientX,
-                    startY: e.clientY,
-                    originX: c.x,
-                    originY: c.y,
-                  };
-                  window.addEventListener('pointermove', onPointerMove);
-                  window.addEventListener('pointerup', onPointerUp);
-                }}
-              />
-              );
-            })}
-
-            {activeSubtitle && (
-              <div className="absolute bottom-12 left-1/2 w-[92%] -translate-x-1/2 text-center">
-                <div className="mx-auto inline-block rounded-lg bg-black/65 px-3 py-2">
-                  <div className="text-[10px] font-semibold tracking-wide text-accent">
-                    {activeSubtitle.speaker}
-                  </div>
-                  <div className="text-sm font-semibold text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.65)]">
-                    {activeSubtitle.text}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-          )}
+          {/* Overlays and characters are not drawn in the editor preview — view them in the timeline and properties panel. The backend preview/export bakes them in. */}
 
         </div>
       </div>

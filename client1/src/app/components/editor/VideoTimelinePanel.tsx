@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useMemo, useRef, useState, useEffect } from 'react';
-import { ArrowLeft, Download, Play, Pause, Plus, Settings } from 'lucide-react';
+import { ArrowLeft, Download, Play, Pause, Plus, Settings, Trash2, Eye, EyeOff } from 'lucide-react';
 import type { Clip, ClipRef, EditorProject, Track } from '../../../features/editor/types';
 
 /**
@@ -47,6 +47,7 @@ type Props = {
   onSelectClip: (ref: ClipRef | null) => void;
   onUpdateClip: (ref: ClipRef, patch: Partial<Clip>) => void;
   onAddTrack?: () => void;
+  onDeleteTrack?: (trackId: string) => void;
   onMoveClipToNewTrack?: (ref: ClipRef, start: number, onNewRef: (newRef: ClipRef) => void) => void;
   onMoveClipBackToTrack?: (
     ref: ClipRef,
@@ -60,9 +61,18 @@ type Props = {
     start: number,
     onNewRef: (newRef: ClipRef) => void
   ) => void;
+  /** Whether to show subtitle track in the timeline (default: true) */
+  showSubtitlesInTimeline?: boolean;
+  onToggleShowSubtitlesInTimeline?: () => void;
 };
 
 const SNAP_THRESHOLD_SEC = 0.2;
+
+/** Filter tracks for display; optionally hide subtitle track */
+function filterTracksForDisplay(tracks: Track[], showSubtitlesInTimeline: boolean): Track[] {
+  if (showSubtitlesInTimeline) return tracks;
+  return tracks.filter(t => t.type !== 'subtitle');
+}
 const RULER_HEIGHT_PX = 32; // h-8
 const TRACK_ROW_HEIGHT_PX = 48; // h-12
 
@@ -170,9 +180,12 @@ export default function VideoTimelinePanel({
   onSelectClip,
   onUpdateClip,
   onAddTrack,
+  onDeleteTrack,
   onMoveClipToNewTrack,
   onMoveClipBackToTrack,
   onMoveClipToTrack,
+  showSubtitlesInTimeline = true,
+  onToggleShowSubtitlesInTimeline,
 }: Props) {
   const [isResizing, setIsResizing] = useState(false);
   const playheadTimeRef = useRef(playheadTime);
@@ -339,7 +352,7 @@ export default function VideoTimelinePanel({
         otherClipsSameTrack,
         project.duration
       );
-      const sortedTracks = sortTracks(project.tracks);
+      const sortedTracks = sortTracks(filterTracksForDisplay(project.tracks, showSubtitlesInTimeline));
       const el = timelineContentRef.current;
       let trackIndexUnderCursor: number | null = null;
       if (el && sortedTracks.length > 0) {
@@ -560,9 +573,22 @@ export default function VideoTimelinePanel({
           <div className="w-32 shrink-0 border-r border-border">
             {/* Header spacer to align with time ruler */}
             <div className="h-8 bg-muted border-b border-border" />
-            {sortTracks(project.tracks).map((t) => (
-              <div key={t.id} className="h-12 bg-muted flex items-center px-3 border-b border-border">
-                <span className="text-xs font-semibold truncate">{t.name}</span>
+            {sortTracks(filterTracksForDisplay(project.tracks, showSubtitlesInTimeline)).map((t) => (
+              <div key={t.id} className="h-12 bg-muted flex items-center gap-2 px-3 border-b border-border group">
+                <span className="text-xs font-semibold truncate flex-1 min-w-0">{t.name}</span>
+                {onDeleteTrack && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDeleteTrack(t.id);
+                    }}
+                    className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition opacity-0 group-hover:opacity-100 shrink-0"
+                    title="Delete track"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -598,7 +624,7 @@ export default function VideoTimelinePanel({
                 </div>
 
                 {/* Tracks lanes - sorted: overlay first, then audio, then others */}
-                {sortTracks(project.tracks).map((t) => (
+                {sortTracks(filterTracksForDisplay(project.tracks, showSubtitlesInTimeline)).map((t) => (
                   <div
                     key={t.id}
                     className="h-12 border-b border-border bg-card relative"
@@ -694,6 +720,17 @@ export default function VideoTimelinePanel({
             <Plus size={16} />
             <span className="text-xs font-medium">Add Track</span>
           </button>
+          {onToggleShowSubtitlesInTimeline && (
+            <button
+              type="button"
+              onClick={onToggleShowSubtitlesInTimeline}
+              className={`p-1.5 rounded hover:bg-accent transition inline-flex items-center gap-1.5 ${showSubtitlesInTimeline ? 'text-foreground' : 'text-muted-foreground'}`}
+              title={showSubtitlesInTimeline ? 'Hide subtitle track in timeline' : 'Show subtitle track in timeline'}
+            >
+              {showSubtitlesInTimeline ? <Eye size={16} /> : <EyeOff size={16} />}
+              <span className="text-xs font-medium">Timeline subs</span>
+            </button>
+          )}
           <button className="p-1.5 rounded hover:bg-accent transition text-foreground" title="Settings">
             <Settings size={16} />
           </button>
