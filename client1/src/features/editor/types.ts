@@ -74,6 +74,8 @@ export type EditorProject = {
     src?: string;
     /** Optional poster (for video templates). */
     posterSrc?: string;
+    /** Start time (seconds) into the background video; 0 = play from beginning. Only for video templates. */
+    videoStart?: number;
   };
   tracks: Track[];
 };

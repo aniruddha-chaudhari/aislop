@@ -15,7 +15,7 @@
   --secondary: oklch(0.2603 0 0);
   --secondary-foreground: oklch(0.9851 0 0);
   --muted: oklch(0.2393 0 0);
-  --muted-foreground: oklch(0.7122 0 0);
+  --muted-foreground: oklch(0.88 0 0);
   --accent: oklch(0.3132 0 0);
   --accent-foreground: oklch(0.9851 0 0);
   --destructive: oklch(0.3123 0.0852 29.7877);
@@ -141,6 +141,15 @@ input[type="number"] {
 
 .studio-button-secondary:hover {
   background-color: var(--accent);
+}
+
+/* Ensure buttons with dark grey backgrounds always have light text */
+button[class*="bg-muted"],
+button[class*="bg-secondary"] {
+  color: var(--secondary-foreground);
+}
+button.bg-accent {
+  color: var(--accent-foreground);
 }
 
 .studio-button-accent {

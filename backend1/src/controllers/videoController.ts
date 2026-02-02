@@ -156,7 +156,7 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
       imagePlan,
       userImages,
       approvedUserImagePlacements,
-      backgroundVideoSpeed = 1.10, // Default slight speed increase (10% faster)
+      backgroundVideoSpeed = 1.25, // Default template speed 1.25x
       videoStyle = 'standard' // Video style preset (standard, reel_dynamic)
     } = (ctx.body as any);
 

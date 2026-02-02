@@ -1514,7 +1514,7 @@ export class ImageEmbeddingService {
     backgroundVideoPath: string,
     imagePlan: ImageEmbeddingPlan,
     device: string = 'cuda',
-    backgroundVideoSpeed: number = 1.10,
+    backgroundVideoSpeed: number = 1.25,
     videoStyle: string = 'standard'
   ): Promise<{ success: boolean; videoPath?: string; error?: string }> {
     try {

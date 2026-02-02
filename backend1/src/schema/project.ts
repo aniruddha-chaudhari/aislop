@@ -92,6 +92,8 @@ export const ProjectSchema = z.object({
     label: z.string(),
     path: z.string(),
     posterSrc: z.string().optional(),
+    /** Start time (seconds) into the background video; 0 = play from beginning. Only applies when type is 'video'. */
+    videoStart: z.number().min(0).optional(),
   }),
   audioSessionId: z.string(),
   timeline: TimelineSchema,

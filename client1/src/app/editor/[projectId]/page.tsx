@@ -81,6 +81,7 @@ export default function EditorPage() {
             label: backendProject.template.label,
             src: backendProject.template.path,
             posterSrc: backendProject.template.posterSrc,
+            videoStart: backendProject.template.videoStart ?? 0,
           },
           tracks: sortTracks(backendProject.timeline.tracks.map((track: any) => ({
             id: track.id,

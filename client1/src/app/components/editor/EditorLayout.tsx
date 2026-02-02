@@ -334,6 +334,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             type: 'video',
             label: templateLabel,
             path: templatePath,
+            videoStart: project.template?.videoStart ?? 0,
           },
         }),
       });
@@ -468,6 +469,38 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       setChangingTemplate(false);
     }
   };
+
+  const handleVideoStartChange = useCallback(async (seconds: number) => {
+    const value = Math.max(0, seconds);
+    try {
+      const response = await fetch(API_ENDPOINTS.updateProject(project.id), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          template: {
+            type: draftProject.template?.type ?? 'video',
+            label: draftProject.template?.label ?? '',
+            path: draftProject.template?.src ?? '',
+            posterSrc: draftProject.template?.posterSrc,
+            videoStart: value,
+          },
+        }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      if (data.success) {
+        setDraftProject((prev) => ({
+          ...prev,
+          template: { ...prev.template, videoStart: value },
+        }));
+        setPreviewVideoSrc(null);
+        const updated = await onProjectUpdate?.();
+        if (updated) setDraftProject(updated);
+      }
+    } catch (e) {
+      console.error('Failed to update video start:', e);
+    }
+  }, [project.id, draftProject.template, onProjectUpdate]);
 
   const handleChangeAudioSession = async (audioSessionId: string, sessionName: string) => {
     setChangingAudioSession(true);
@@ -1063,6 +1096,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
               updateClip(selected, patch);
             }}
             projectId={project.id}
+            project={draftProject}
+            onVideoStartChange={handleVideoStartChange}
             onProjectUpdate={onProjectUpdate}
           />
         </div>

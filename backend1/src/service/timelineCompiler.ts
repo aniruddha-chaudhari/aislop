@@ -105,11 +105,13 @@ export async function compileTimeline(
       throw new Error(`Template not found: ${templatePath} (original: ${project.template.path})`);
     }
     const isImage = /\.(jpe?g|png|gif|webp)$/i.test(templatePath);
+    const videoStart = Math.max(0, project.template.videoStart ?? 0);
     if (isImage) {
       command.input(templatePath).inputOptions(['-loop', '1', '-t', duration.toString()]);
     } else {
-      // Single pass: -stream_loop -1 -t duration limits template input to duration seconds (no pre-generation)
-      command.input(templatePath).inputOptions(['-stream_loop', '-1', '-t', duration.toString()]);
+      // -ss before -i = input seek (start background video at videoStart seconds); then loop/trim to duration
+      const opts = videoStart > 0 ? ['-ss', videoStart.toString(), '-stream_loop', '-1', '-t', duration.toString()] : ['-stream_loop', '-1', '-t', duration.toString()];
+      command.input(templatePath).inputOptions(opts);
     }
 
     const audioPath = await getAudioPath(project);

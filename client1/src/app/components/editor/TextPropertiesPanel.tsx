@@ -1,12 +1,14 @@
 'use client';
 
 import { useState, useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
-import type { Clip, ClipRef, OverlayClip } from '../../../features/editor/types';
+import type { Clip, ClipRef, EditorProject, OverlayClip } from '../../../features/editor/types';
 import { API_ENDPOINTS } from '../../../config/api';
 
 export type TextPropertiesPanelHandle = {
   openFileDialog: () => void;
 };
+
+const TEMPLATE_TRACK_ID = 't_overlay_template';
 
 type Props = {
   width: number;
@@ -15,6 +17,10 @@ type Props = {
   selectedRef: ClipRef | null;
   onUpdateClip: (patch: Partial<Clip>) => void;
   projectId: string;
+  /** Current project (for template video start when template clip is selected) */
+  project?: EditorProject | null;
+  /** Change background video start (seconds). Only used when template clip is selected. */
+  onVideoStartChange?: (seconds: number) => void;
   /** Called after overlay image upload so parent can refetch project and refresh preview */
   onProjectUpdate?: () => void;
 };
@@ -30,8 +36,20 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
   selectedRef,
   onUpdateClip,
   projectId,
+  project,
+  onVideoStartChange,
   onProjectUpdate,
 }, ref) {
+  const isTemplateClip = selectedRef?.trackId === TEMPLATE_TRACK_ID && selected?.kind === 'overlay';
+  const isTemplateVideo = project?.template?.type === 'video' && project?.template?.src;
+  const showVideoStart = isTemplateClip && isTemplateVideo;
+
+  const templateVideoStart = project?.template?.videoStart ?? 0;
+  const [videoStartInput, setVideoStartInput] = useState<string>(() => String(templateVideoStart));
+  // Sync from project only when template clip is (re)selected, so user can clear the field while typing
+  useEffect(() => {
+    if (showVideoStart) setVideoStartInput(String(project?.template?.videoStart ?? 0));
+  }, [showVideoStart, selectedRef?.trackId, selectedRef?.clipId]);
   const [isResizing, setIsResizing] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -139,8 +157,48 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
         </div>
       ) : (
         <div className="space-y-4">
-          {/* When overlay clip is selected (e.g. from timeline), show Image Asset / upload first */}
-          {selected.kind === 'overlay' && (
+          {/* When template (background) video clip is selected, show Video start control */}
+          {showVideoStart && (
+            <div className="rounded border border-border bg-muted/30 p-3">
+              <div className="text-xs font-semibold mb-2">Background video</div>
+              <p className="text-[11px] text-muted-foreground mb-2">
+                Start the background video this many seconds in. Audio length stays the same.
+              </p>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Video start (s)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={videoStartInput}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    setVideoStartInput(raw);
+                    if (raw === '' || raw === '-') {
+                      onVideoStartChange?.(0);
+                      return;
+                    }
+                    const v = parseFloat(raw);
+                    if (!Number.isNaN(v) && v >= 0) onVideoStartChange?.(v);
+                  }}
+                  onBlur={() => {
+                    const v = parseFloat(videoStartInput);
+                    if (videoStartInput === '' || Number.isNaN(v) || v < 0) {
+                      setVideoStartInput('0');
+                      onVideoStartChange?.(0);
+                    } else {
+                      setVideoStartInput(String(Math.max(0, v)));
+                      onVideoStartChange?.(Math.max(0, v));
+                    }
+                  }}
+                  className="w-full bg-muted border border-border rounded px-3 py-2 text-xs"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* When overlay clip is selected (e.g. from timeline), show Image Asset / upload first. Skip for template track. */}
+          {selected.kind === 'overlay' && !isTemplateClip && (
             <div className="rounded border border-border bg-muted/30 p-3">
               <div className="text-xs font-semibold mb-3">Image Asset</div>
               

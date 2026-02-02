@@ -48,6 +48,7 @@ export async function createProject(
       type: templateType,
       label: templateLabel,
       path: templatePath,
+      videoStart: 0,
     },
     audioSessionId,
     timeline: {

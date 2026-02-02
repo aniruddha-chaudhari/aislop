@@ -441,11 +441,13 @@ export async function generateTimelinePreview(
 
     const command = ffmpeg();
     const isImage = /\.(jpe?g|png|gif|webp)$/i.test(templatePath);
+    const videoStart = Math.max(0, (template as { videoStart?: number }).videoStart ?? 0);
 
     if (isImage) {
       command.input(templatePath).inputOptions(['-loop', '1', '-t', duration.toString()]);
     } else {
-      command.input(templatePath).inputOptions(['-stream_loop', '-1']);
+      const opts = videoStart > 0 ? ['-ss', videoStart.toString(), '-stream_loop', '-1'] : ['-stream_loop', '-1'];
+      command.input(templatePath).inputOptions(opts);
     }
     command.input(concatenatedAudioPath).inputOptions(['-t', duration.toString()]);
 
@@ -703,11 +705,13 @@ export async function generateTimelinePreviewHls(
 
     const command = ffmpeg();
     const isImage = /\.(jpe?g|png|gif|webp)$/i.test(templatePath);
+    const videoStart = Math.max(0, (template as { videoStart?: number }).videoStart ?? 0);
 
     if (isImage) {
       command.input(templatePath).inputOptions(['-loop', '1', '-t', duration.toString()]);
     } else {
-      command.input(templatePath).inputOptions(['-stream_loop', '-1']);
+      const opts = videoStart > 0 ? ['-ss', videoStart.toString(), '-stream_loop', '-1'] : ['-stream_loop', '-1'];
+      command.input(templatePath).inputOptions(opts);
     }
     command.input(concatenatedAudioPath).inputOptions(['-t', duration.toString()]);
 
@@ -992,12 +996,14 @@ export async function generateTimelineSegmentPreview(
 
     const command = ffmpeg();
     const isImage = /\.(jpe?g|png|gif|webp)$/i.test(templatePath);
+    const videoStart = Math.max(0, (template as { videoStart?: number }).videoStart ?? 0);
+    const fileStart = videoStart + segmentStart;
 
-    // Input 0: template video or image.
+    // Input 0: template video or image. For video, seek to (videoStart + segmentStart) and take segmentDuration.
     if (isImage) {
       command.input(templatePath).inputOptions(['-loop', '1', '-t', segmentDuration.toString()]);
     } else {
-      command.input(templatePath);
+      command.input(templatePath).inputOptions(['-ss', fileStart.toString(), '-t', segmentDuration.toString()]);
     }
 
     // Input 1: concatenated audio, trimmed to the segment window at input level.
@@ -1035,16 +1041,14 @@ export async function generateTimelineSegmentPreview(
     const peterY = Math.floor(1250 * SCALE);
 
     // For images, we already constrained the duration using -t on the input.
-    // For videos, trim to the [segmentStart, segmentEnd] window and reset PTS
-    // so that t=0 at the start of the segment.
+    // For videos, we already sought to fileStart and took segmentDuration; just scale/crop (no trim).
     if (isImage) {
       filterComplex =
         `[0:v]scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=increase,` +
         `crop=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT},format=yuv420p[bg]`;
     } else {
       filterComplex =
-        `[0:v]trim=start=${segmentStart.toFixed(3)}:end=${segmentEnd.toFixed(3)},` +
-        `setpts=PTS-STARTPTS,` +
+        `[0:v]setpts=PTS-STARTPTS,` +
         `scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=increase,` +
         `crop=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT},format=yuv420p[bg]`;
     }

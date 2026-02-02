@@ -726,7 +726,7 @@ export async function generateVideoWithSubtitles(
   sessionId: string,
   backgroundVideoPath: string,
   device: string = 'cuda',
-  backgroundVideoSpeed: number = 1.10, // Default 10% speed increase
+  backgroundVideoSpeed: number = 1.25, // Default template speed 1.25x
   videoStyle: string = 'standard' // Video style preset
 ): Promise<{
   success: boolean;
