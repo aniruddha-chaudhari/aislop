@@ -28,8 +28,6 @@ type Props = {
   /** Optional: Preview video source (FFmpeg composite) to use instead of template */
   previewVideoSrc?: string | null;
   isGeneratingPreview?: boolean;
-  /** When true, this is a temporary segment preview (will swap to full HLS when ready) */
-  isSegmentPreview?: boolean;
 };
 
 export default function CanvasPreview({
@@ -47,7 +45,6 @@ export default function CanvasPreview({
   onPreviewReady,
   previewVideoSrc,
   isGeneratingPreview = false,
-  isSegmentPreview = false,
 }: Props) {
   const playerRef = useRef<HTMLVideoElement | null>(null);
   const playerWrapperRef = useRef<HTMLDivElement | null>(null);
@@ -403,7 +400,7 @@ export default function CanvasPreview({
         >
           {/* Template: container with ref to find video element */}
           <div ref={playerWrapperRef} className="absolute inset-0 z-[20] pointer-events-none">
-            {project.template.type === 'video' && hasVideoSrc ? (
+            {(project.template.type === 'video' || previewVideoSrc) && hasVideoSrc ? (
               <video
                 ref={setPlayerRef}
                 // For HLS sources, the src will be managed by hls.js; keep it empty here.
@@ -463,21 +460,13 @@ export default function CanvasPreview({
                 }}
                 onPlay={() => setMutedForPolicy(false)}
                 onEnded={() => {
-                  if (isSegmentPreview) {
-                    // For segment previews, just pause (don't stop) - HLS swap will resume playback
-                    console.log('[CanvasPreview] Segment preview ended, pausing and waiting for HLS swap');
-                    const video = getVideoElement();
-                    if (video) video.pause();
-                    // Don't call onPlayPause() - keep isPlaying state so HLS swap can resume
-                  } else if (isPlaying) {
-                    onPlayPause();
-                  }
+                  if (isPlaying) onPlayPause();
                 }}
                 onError={(err) => {
                   console.warn('[CanvasPreview] Video failed to load:', videoSrc, err);
                 }}
               />
-            ) : project.template.type === 'image' && hasVideoSrc ? (
+            ) : project.template.type === 'image' && hasVideoSrc && !previewVideoSrc ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 key={videoSrc}

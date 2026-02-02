@@ -11,6 +11,32 @@ The real-time preview feature provides instant visual feedback when editing vide
 3. **Real-Time Updates**: Automatically regenerate preview when timeline content changes
 4. **Performance**: Use GPU acceleration for faster encoding
 
+## Intended Behavior: No Stuck, No Flicker
+
+What we were trying to build:
+
+1. **Fast start**  
+   As soon as the first ~3s around the playhead is encoded, play that segment immediately so the user gets instant feedback.
+
+2. **Background build**  
+   While that 3s clip plays, keep generating the full HLS preview in the background (chunks / full playlist).
+
+3. **Chained 3s segments (no stuck at 3s)**  
+   When the first 3s segment ends, **do not** wait for full HLS. Instead, swap to the **next** 3s segment (playhead+3s → playhead+6s) so playback continues. Keep generating and swapping to the next 3s segment (then the next, …) until the full HLS is ready. Net effect: “3s chunk now → next 3s chunk → … → full HLS when ready” so the video never sits at “ended” waiting for the full preview.
+
+4. **Seamless handoff**  
+   When the full HLS is ready, switch from whatever 3s segment is playing to the HLS source and continue playback at the same timeline position without a visible stop.
+
+5. **No flicker / no audio cut at segment boundaries**  
+   At every 3s boundary, swapping by changing the **same** video element’s `src` causes a brief blank and audio gap. To avoid that: **preload the next 3s segment in a second video element**; when the current segment ends, **flip** to the preloaded one (show it and play) instead of changing `src` on the current element. So: two videos when in segment mode—one playing current, one preloading next; on segment end, flip to the preloaded one and call the parent to update URLs and request the following segment.
+
+6. **HLS chunk-boundary lag**  
+   After switching to full HLS, playback uses fixed-length segments (e.g. 3s or 6s). At each segment boundary the player must fetch the next `.ts` chunk. To reduce stutter: increase HLS.js buffer (`maxBufferLength` / `maxMaxBufferLength`) and/or use longer HLS segment duration (e.g. 6s) so there are fewer boundaries.
+
+**Summary**  
+- **Want:** Play 3s chunk immediately → chain 3s segments (swap to next 3s) until full HLS is ready → then switch to HLS; no stopping, no flicker, no audio cut at boundaries.  
+- **Implementation ideas:** Pre-request next 3s segment when starting current one; on segment end, either swap to preloaded URL (single-video) or flip to a second, preloaded video element (two-video); when HLS is ready, swap to HLS and seek to same global time; tune HLS.js buffering and backend HLS segment length.
+
 ## Architecture
 
 ### Hybrid Preview Approach
