@@ -72,6 +72,9 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   // Preview generation
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
   const [previewVideoSrc, setPreviewVideoSrc] = useState<string | null>(null);
+  const [isUsingSegmentPreview, setIsUsingSegmentPreview] = useState(false);
+  const segmentStartTimeRef = useRef<number>(0); // Global timeline time where segment starts
+  const hlsPollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const handlePlayToggle = async () => {
     const next = !isPlaying;
@@ -88,7 +91,9 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       });
     }
     
-    // If playing and we have template + audio session, generate/use preview
+    // If playing and we have template + audio session, use hybrid preview approach:
+    // 1. Generate fast 3s segment around playhead → start playing immediately
+    // 2. Generate full HLS in background → swap when ready
     if (next && project.template?.src && project.audioSessionId && project.audioSessionId !== 'no-session') {
       // Check if we need to generate preview
       if (!previewVideoSrc) {
@@ -96,29 +101,101 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         setMessage({ type: 'info', text: 'Generating preview...' });
         
         try {
-          const response = await fetch(API_ENDPOINTS.generatePreview(project.id), {
+          // STEP 1: Generate fast 3-second segment around playhead
+          console.log('[EditorLayout] Generating fast 3s segment preview...');
+          const segmentResponse = await fetch(API_ENDPOINTS.generatePreview(project.id), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ playheadTime }),
           });
 
-          const data = await response.json();
+          const segmentData = await segmentResponse.json();
           
-          if (!response.ok) {
-            throw new Error(data.error || `HTTP error! status: ${response.status}`);
+          if (!segmentResponse.ok || !segmentData.success) {
+            throw new Error(segmentData.error || 'Failed to generate segment preview');
           }
+
+          // Start playing the 3s segment immediately (starts at t=0 of segment, which is playhead)
+          const segmentUrl = `${API_ENDPOINTS.servePreview(project.id)}?t=${Date.now()}`;
+          segmentStartTimeRef.current = playheadTime; // Remember where segment starts in global timeline
+          setPreviewVideoSrc(segmentUrl);
+          setIsUsingSegmentPreview(true);
+          setIsPlaying(true);
+          previewPlayerRef.current?.requestPlay?.(0); // Segment always starts at 0
+          setMessage({ type: 'info', text: 'Preview ready (generating full preview...)' });
+          setIsGeneratingPreview(false); // Clear loading indicator since segment is playing
+
+          // STEP 2: Kick off full HLS generation in background
+          console.log('[EditorLayout] Starting full HLS generation in background...');
+          fetch(API_ENDPOINTS.generatePreviewHls(project.id), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          }).catch((err) => {
+            console.error('[EditorLayout] Background HLS generation failed', err);
+          });
+
+          // STEP 3: Poll for HLS readiness and swap when ready
+          const pollForHls = async () => {
+            console.log('[EditorLayout] Polling for HLS readiness...');
+            try {
+              const statusResponse = await fetch(API_ENDPOINTS.getPreviewHlsStatus(project.id));
+              const statusData = await statusResponse.json();
+              
+              console.log('[EditorLayout] HLS status check', { 
+                success: statusData.success, 
+                ready: statusData.ready,
+                version: statusData.version,
+                playlistUrl: statusData.playlistUrl 
+              });
+              
+              if (statusData.success && statusData.ready && statusData.playlistUrl) {
+                // HLS is ready! Swap from segment to HLS playlist
+                console.log('[EditorLayout] HLS ready, swapping from segment to full preview');
+                
+                // Calculate global timeline time: segment starts at segmentStartTimeRef.current,
+                // and when using segment preview, playheadTime represents time within segment (0-3s)
+                // But actually, CanvasPreview syncs video.currentTime → playheadTime, so playheadTime
+                // is the video's currentTime. For segment, that's 0-3s. We need to add segment start.
+                const videoElement = document.querySelector('video') as HTMLVideoElement | null;
+                const currentVideoTime = videoElement?.currentTime ?? playheadTime;
+                // Always treat this as segment preview context: global = segmentStart + local time
+                const globalTime = segmentStartTimeRef.current + currentVideoTime;
+                
+                console.log('[EditorLayout] Swapping to HLS', {
+                  segmentStart: segmentStartTimeRef.current,
+                  currentVideoTime,
+                  playheadTime,
+                  globalTime,
+                });
+                
+                // Swap to HLS playlist
+                const absolutePlaylistUrl = `${API_BASE_URL}${statusData.playlistUrl}?t=${Date.now()}`;
+                setPreviewVideoSrc(absolutePlaylistUrl);
+                setIsUsingSegmentPreview(false);
+                
+                // Clear polling
+                if (hlsPollIntervalRef.current) {
+                  clearInterval(hlsPollIntervalRef.current);
+                  hlsPollIntervalRef.current = null;
+                }
+                
+                // Resume playback at the same position in HLS stream (global timeline time)
+                setTimeout(() => {
+                  // Always resume playback once HLS is ready; this is a continuous preview flow
+                  previewPlayerRef.current?.requestPlay?.(globalTime);
+                }, 300); // Small delay to let HLS.js attach and load manifest
+                
+                setMessage({ type: 'success', text: 'Full preview ready!' });
+                setTimeout(() => setMessage(null), 2000);
+              }
+            } catch (err) {
+              console.error('[EditorLayout] HLS status check failed', err);
+            }
+          };
+
+          // Poll every 1 second for HLS readiness
+          hlsPollIntervalRef.current = setInterval(pollForHls, 1000);
           
-          if (data.success) {
-            const previewUrl = `${API_ENDPOINTS.servePreview(project.id)}?t=${Date.now()}`;
-            setPreviewVideoSrc(previewUrl);
-            setMessage({ type: 'success', text: 'Preview ready!' });
-            setTimeout(() => setMessage(null), 2000);
-            
-            // Now play the preview
-            setIsPlaying(true);
-            previewPlayerRef.current?.requestPlay?.(playheadTime >= draftProject.duration ? 0 : playheadTime);
-          } else {
-            throw new Error(data.error || 'Failed to generate preview');
-          }
         } catch (error) {
           console.error('[EditorLayout] Preview generation error:', error);
           setMessage({ 
@@ -126,7 +203,6 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             text: error instanceof Error ? error.message : 'Failed to generate preview' 
           });
           setTimeout(() => setMessage(null), 5000);
-        } finally {
           setIsGeneratingPreview(false);
         }
         return;
@@ -166,8 +242,25 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     setPlayheadTime(0);
     setIsPlaying(false);
     setPreviewVideoSrc(null); // Clear preview when project/template/session changes
+    setIsUsingSegmentPreview(false);
+    segmentStartTimeRef.current = 0;
     setExportedVideoFilename(null);
+    
+    // Clean up HLS polling interval
+    if (hlsPollIntervalRef.current) {
+      clearInterval(hlsPollIntervalRef.current);
+      hlsPollIntervalRef.current = null;
+    }
   }, [project.id]);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (hlsPollIntervalRef.current) {
+        clearInterval(hlsPollIntervalRef.current);
+      }
+    };
+  }, []);
 
   // Fetch templates and audio sessions on mount
   useEffect(() => {
@@ -979,6 +1072,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             onPreviewReady={(api) => { previewPlayerRef.current = api; }}
             previewVideoSrc={previewVideoSrc}
             isGeneratingPreview={isGeneratingPreview}
+            isSegmentPreview={isUsingSegmentPreview}
           />
 
           {/* Right Properties Panel */}

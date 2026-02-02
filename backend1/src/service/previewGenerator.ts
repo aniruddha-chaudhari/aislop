@@ -19,6 +19,7 @@ if (ffmpegPath) {
 
 // Preview configuration - scaled 1/3 from 1080x1920 (matches timelineCompiler full export)
 const PREVIEW_DIR = path.join(process.cwd(), 'storage', 'previews');
+const HLS_ROOT_DIR = path.join(PREVIEW_DIR, 'hls');
 const PREVIEW_WIDTH = 360;
 const PREVIEW_HEIGHT = 640;
 const SCALE = PREVIEW_HEIGHT / 1920; // Same proportion as timelineCompiler 1080x1920
@@ -32,6 +33,9 @@ const OVERLAY_Y_TOP = Math.floor(40 * (PREVIEW_HEIGHT / 1920)); // 13 at 640px h
 // Ensure preview directory exists
 if (!fs.existsSync(PREVIEW_DIR)) {
   fs.mkdirSync(PREVIEW_DIR, { recursive: true });
+}
+if (!fs.existsSync(HLS_ROOT_DIR)) {
+  fs.mkdirSync(HLS_ROOT_DIR, { recursive: true });
 }
 
 /**
@@ -124,13 +128,17 @@ export async function generatePreview(
 
     // Output options: low-res, fast encode
     // CRITICAL: -map 0:v uses template VIDEO, -map 1:a uses DIALOGUE audio (not template audio!)
+    // Use GPU encoding (h264_nvenc) when available for faster preview generation.
     command
       .outputOptions([
         '-map', '0:v', // Video from template (input 0)
         '-map', '1:a', // Audio from concatenated dialogue (input 1), NOT template
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast', // Fast encode
-        '-crf', '28', // Lower quality for smaller file
+        '-c:v', 'h264_nvenc',
+        // NVENC bitrate-based configuration tuned for low-res preview
+        '-b:v', PREVIEW_BITRATE,
+        '-maxrate', '750k',
+        '-bufsize', '1500k',
+        '-preset', 'p4', // Balanced quality/speed preset
         '-vf', `scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=increase,crop=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}`,
         '-c:a', 'aac',
         '-b:a', '64k', // Low audio bitrate
@@ -138,8 +146,9 @@ export async function generatePreview(
         '-ar', '22050', // Lower sample rate
         '-shortest', // End when shortest input ends
         '-y' // Overwrite
-      ])
-      .output(outputPath);
+      ]);
+    console.log('[FFmpeg] Preview encoding mode: GPU (h264_nvenc)');
+    command.output(outputPath);
 
     // Track progress
     command.on('progress', (progress: any) => {
@@ -423,18 +432,6 @@ export async function generateTimelinePreview(
     const characterClips = (characterTrack?.clips?.filter((c: any) => c.kind === 'character') || []) as CharacterClip[];
     let subtitleClips = (subtitleTrack?.clips?.filter((c: any) => c.kind === 'subtitle') || []) as SubtitleClip[];
 
-    console.log('[IMAGE PLAN] Preview using image plan (overlay track)', {
-      projectId,
-      trackId: overlayTrack?.id ?? 'none',
-      totalOverlayClips: overlayClips.length,
-      duration,
-    });
-    overlayClips.forEach((clip: OverlayClip, i: number) => {
-      const imagePath = clip.path ?? path.join(IMAGE_UPLOAD_DIR, audioSessionId, `${clip.assetId}.png`);
-      const exists = fs.existsSync(imagePath);
-      console.log(`[IMAGE PLAN]   overlay #${i + 1} id=${clip.id} assetId=${clip.assetId} label="${clip.label}" start=${clip.start.toFixed(1)}s duration=${clip.duration.toFixed(1)}s path=${exists ? imagePath : 'MISSING'}`);
-    });
-
     onProgress?.(15, 'Fetching word timings for karaoke...');
     subtitleClips = await enrichSubtitleClipsWithWords(session, subtitleClips);
 
@@ -461,13 +458,6 @@ export async function generateTimelinePreview(
         // Use actual FFmpeg input order: 0=template, 1=audio, 2+=overlays (so first overlay = 2, second = 3, ...)
         overlayInputs.push({ clip, inputIndex: 2 + overlayInputs.length });
       }
-    });
-
-    console.log('[IMAGE PLAN] Preview overlay inputs (images actually used)', {
-      totalInPlan: overlayClips.length,
-      withImageFile: overlayInputs.length,
-      skipped: overlayClips.length - overlayInputs.length,
-      inputs: overlayInputs.map(({ clip, inputIndex }) => ({ id: clip.id, assetId: clip.assetId, inputIndex })),
     });
 
     let nextIdx = 2 + overlayInputs.length;
@@ -575,16 +565,20 @@ export async function generateTimelinePreview(
         '-map', '[out]',  // Map filter output for video
         '-map', '1:a',    // Map audio from concatenated input
         '-t', duration.toString(),
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-crf', '28',
+        // Use GPU encoding (h264_nvenc) for timeline-aware preview as well.
+        '-c:v', 'h264_nvenc',
+        '-b:v', PREVIEW_BITRATE,
+        '-maxrate', '750k',
+        '-bufsize', '1500k',
+        '-preset', 'p4',
         '-c:a', 'aac',
         '-b:a', '64k',
         '-ac', '2',
         '-ar', '22050',
         '-y'
-      ])
-      .output(outputPath);
+      ]);
+    console.log('[FFmpeg] Timeline preview encoding mode: GPU (h264_nvenc)');
+    command.output(outputPath);
 
     command.on('progress', (p: any) => {
       if (p.percent) onProgress?.(Math.min(95, 50 + (p.percent / 100) * 45), `Encoding: ${Math.round(p.percent)}%`);
@@ -608,10 +602,576 @@ export async function generateTimelinePreview(
     });
 
     onProgress?.(100, 'Preview ready!');
-    console.log('[IMAGE PLAN] Preview generated successfully', { projectId, outputPath, overlayCount: overlayInputs.length });
     return { success: true, outputPath };
   } catch (error) {
-    console.log('[IMAGE PLAN] Preview generation failed', { projectId, error: error instanceof Error ? error.message : String(error) });
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
+}
+
+/**
+ * Generate a full-length HLS preview (3s segments) for a project timeline.
+ *
+ * This reuses the same compositing logic as `generateTimelinePreview` but
+ * outputs an HLS playlist and TS segments instead of a single MP4 file.
+ * The `version` parameter should be a filesystem-safe identifier for the
+ * current timeline version (for example based on project.updatedAt).
+ */
+export async function generateTimelinePreviewHls(
+  project: Project,
+  version: string,
+  onProgress?: (percent: number, message: string) => void
+): Promise<{ success: boolean; playlistPath?: string; error?: string }> {
+  const { id: projectId, template, audioSessionId, timeline } = project;
+
+  try {
+    const session = await prisma.session.findUnique({
+      where: { id: audioSessionId },
+      include: {
+        dialogues: {
+          include: { audioFile: true },
+          orderBy: { order: 'asc' }
+        }
+      }
+    });
+
+    if (!session) {
+      return { success: false, error: `Audio session ${audioSessionId} not found` };
+    }
+
+    const audioFiles = session.dialogues
+      .filter((d: any) => d.audioFile && d.audioFile.success)
+      .map((d: any) => d.audioFile!.filePath);
+
+    if (audioFiles.length === 0) {
+      return { success: false, error: 'No audio files in session' };
+    }
+
+    const duration = timeline?.duration || session.totalDuration || 60;
+    const templatePath = resolveTemplatePath(template.path);
+
+    if (!fs.existsSync(templatePath)) {
+      return { success: false, error: `Template not found: ${templatePath}` };
+    }
+
+    const hlsDir = path.join(HLS_ROOT_DIR, projectId, version);
+    if (!fs.existsSync(hlsDir)) {
+      fs.mkdirSync(hlsDir, { recursive: true });
+    }
+
+    const playlistPath = path.join(hlsDir, 'index.m3u8');
+    const segmentPatternRaw = path.join(hlsDir, 'seg_%03d.ts');
+    // FFmpeg on Windows prefers forward slashes in filter/filename args.
+    const segmentPattern = segmentPatternRaw.replace(/\\/g, '/');
+
+    // If playlist already exists for this version, assume preview is ready.
+    if (fs.existsSync(playlistPath)) {
+      return { success: true, playlistPath };
+    }
+
+    if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
+
+    onProgress?.(10, 'Concatenating audio for HLS preview...');
+    const audioListPath = path.join(TEMP_DIR, `preview_audio_list_${projectId}.txt`);
+    const audioListContent = audioFiles.map((f: string) => `file '${f.replace(/'/g, "'\\''")}'`).join('\n');
+    fs.writeFileSync(audioListPath, audioListContent);
+
+    const concatenatedAudioPath = path.join(TEMP_DIR, `preview_audio_${projectId}.wav`);
+    await new Promise<void>((resolve, reject) => {
+      const concatCmd = ffmpeg()
+        .input(audioListPath)
+        .inputOptions(['-f', 'concat', '-safe', '0'])
+        .outputOptions(['-c:a', 'pcm_s16le'])
+        .output(concatenatedAudioPath);
+      concatCmd.on('start', () => {});
+      concatCmd.on('stderr', () => {});
+      concatCmd.on('end', () => resolve());
+      concatCmd.on('error', (err: Error) => reject(err));
+      concatCmd.run();
+    });
+
+    const overlayTrack = timeline?.tracks?.find((t: any) => t.type === 'overlay' && t.id === 't_imgs');
+    const characterTrack = timeline?.tracks?.find((t: any) => t.type === 'character');
+    const subtitleTrack = timeline?.tracks?.find((t: any) => t.type === 'subtitle');
+
+    const overlayClips = (overlayTrack?.clips?.filter((c: any) => c.kind === 'overlay') || []) as OverlayClip[];
+    const characterClips = (characterTrack?.clips?.filter((c: any) => c.kind === 'character') || []) as CharacterClip[];
+    let subtitleClips = (subtitleTrack?.clips?.filter((c: any) => c.kind === 'subtitle') || []) as SubtitleClip[];
+
+    onProgress?.(15, 'Fetching word timings for HLS karaoke...');
+    subtitleClips = await enrichSubtitleClipsWithWords(session, subtitleClips);
+
+    let assPath: string | null = null;
+    if (subtitleClips.length > 0) {
+      assPath = generateAssFromTimeline(`${projectId}_hls`, subtitleClips);
+    }
+
+    const command = ffmpeg();
+    const isImage = /\.(jpe?g|png|gif|webp)$/i.test(templatePath);
+
+    if (isImage) {
+      command.input(templatePath).inputOptions(['-loop', '1', '-t', duration.toString()]);
+    } else {
+      command.input(templatePath).inputOptions(['-stream_loop', '-1']);
+    }
+    command.input(concatenatedAudioPath).inputOptions(['-t', duration.toString()]);
+
+    const overlayInputs: { clip: OverlayClip; inputIndex: number }[] = [];
+    overlayClips.forEach((clip: OverlayClip) => {
+      const imagePath = clip.path ?? path.join(IMAGE_UPLOAD_DIR, audioSessionId, `${clip.assetId}.png`);
+      if (fs.existsSync(imagePath)) {
+        command.input(imagePath);
+        overlayInputs.push({ clip, inputIndex: 2 + overlayInputs.length });
+      }
+    });
+
+    let nextIdx = 2 + overlayInputs.length;
+    const charInputs: { clip: CharacterClip; inputIndex: number }[] = [];
+    for (const clip of characterClips) {
+      const charPath = getCharacterImagePath(clip.character);
+      if (charPath) {
+        command.input(charPath);
+        charInputs.push({ clip, inputIndex: nextIdx++ });
+      }
+    }
+
+    let filterComplex = '';
+    let lastLabel = '0:v';
+
+    const stewieX = Math.floor(300 * SCALE);
+    const stewieY = Math.floor(1350 * SCALE);
+    const peterX = Math.floor(300 * SCALE);
+    const peterY = Math.floor(1250 * SCALE);
+    const fontSize = Math.floor(48 * SCALE);
+    const marginV = Math.floor(700 * SCALE);
+
+    filterComplex = `[0:v]scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=increase,crop=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT},format=yuv420p[bg]`;
+    lastLabel = 'bg';
+
+    if (assPath && fs.existsSync(assPath)) {
+      const assPathFixed = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+      const forceStyle = `Fontname=Arial-Black,FontSize=${fontSize},PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H80000000,Bold=1,BorderStyle=1,Outline=3,Shadow=2,Alignment=2,MarginV=${marginV}`;
+      filterComplex += `;[${lastLabel}]subtitles='${assPathFixed}':force_style='${forceStyle}'[with_subs]`;
+      lastLabel = 'with_subs';
+    }
+
+    overlayInputs.forEach(({ clip, inputIndex }, index) => {
+      filterComplex += `;[${inputIndex}:v]scale=${OVERLAY_SCALE_W}:${OVERLAY_SCALE_H}:force_original_aspect_ratio=decrease[ov${index}]`;
+      filterComplex += `;[${lastLabel}][ov${index}]overlay=(W-w)/2:${OVERLAY_Y_TOP}:enable='between(t,${clip.start},${clip.start + clip.duration})'[vo${index}]`;
+      lastLabel = `vo${index}`;
+    });
+
+    if (charInputs.length > 0) {
+      const stewieClips = charInputs.filter(c => c.clip.character === 'Stewie');
+      const peterClips = charInputs.filter(c => c.clip.character === 'Peter');
+
+      const stewieRanges: string[] = [];
+      const peterRanges: string[] = [];
+      stewieClips.forEach(({ clip }) => {
+        stewieRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
+      });
+      peterClips.forEach(({ clip }) => {
+        peterRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
+      });
+
+      const stewieEnable = stewieRanges.length > 0 ? stewieRanges.join('+') : '0';
+      const peterEnable = peterRanges.length > 0 ? peterRanges.join('+') : '0';
+
+      const stewieScaleW = Math.floor(500 * SCALE);
+      const stewieScaleH = Math.floor(600 * SCALE);
+      const peterScaleW = Math.floor(580 * SCALE);
+      const peterScaleH = Math.floor(720 * SCALE);
+      const stewieInputIndex = stewieClips[0]?.inputIndex;
+      const peterInputIndex = peterClips[0]?.inputIndex;
+
+      if (stewieInputIndex !== undefined) {
+        filterComplex += `;[${stewieInputIndex}:v]scale=${stewieScaleW}:${stewieScaleH}:force_original_aspect_ratio=decrease[stewie_scaled]`;
+        filterComplex += `;[${lastLabel}][stewie_scaled]overlay=${stewieX}:${stewieY}:enable='${stewieEnable}'[stewie_overlay]`;
+        lastLabel = 'stewie_overlay';
+      }
+
+      if (peterInputIndex !== undefined) {
+        filterComplex += `;[${peterInputIndex}:v]scale=${peterScaleW}:${peterScaleH}:force_original_aspect_ratio=decrease[peter_scaled]`;
+        filterComplex += `;[${lastLabel}][peter_scaled]overlay=${peterX}:${peterY}:enable='${peterEnable}'[with_characters]`;
+        lastLabel = 'with_characters';
+      }
+    }
+
+    onProgress?.(50, 'Encoding HLS preview...');
+
+    filterComplex += `;[${lastLabel}]format=yuv420p,setsar=1[out]`;
+
+    const timeout = setTimeout(() => {}, 600000);
+
+    command.on('start', () => {});
+    command.on('stderr', () => {});
+
+    command
+      .complexFilter(filterComplex)
+      .outputOptions([
+        '-map', '[out]',
+        '-map', '1:a',
+        '-t', duration.toString(),
+        '-c:v', 'h264_nvenc',
+        '-b:v', PREVIEW_BITRATE,
+        '-maxrate', '750k',
+        '-bufsize', '1500k',
+        '-preset', 'p4',
+        '-c:a', 'aac',
+        '-b:a', '64k',
+        '-ac', '2',
+        '-ar', '22050',
+        '-f', 'hls',
+        '-hls_time', '3',
+        '-hls_playlist_type', 'vod',
+        '-hls_segment_filename', segmentPattern,
+        '-y',
+      ]);
+    console.log('[FFmpeg] Timeline HLS preview encoding mode: GPU (h264_nvenc)', {
+      projectId,
+      version,
+      hlsDir,
+    });
+    command.output(playlistPath);
+
+    command.on('progress', (p: any) => {
+      if (p.percent) onProgress?.(Math.min(95, 50 + (p.percent / 100) * 45), `Encoding HLS: ${Math.round(p.percent)}%`);
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      command
+        .on('end', () => {
+          clearTimeout(timeout);
+          try {
+            fs.unlinkSync(audioListPath);
+            fs.unlinkSync(concatenatedAudioPath);
+          } catch (_) {}
+          
+          // Post-process playlist: rewrite segment paths to use API URLs.
+          // FFmpeg writes relative paths like "seg_000.ts", but we need absolute API URLs.
+          try {
+            const playlistContent = fs.readFileSync(playlistPath, 'utf8');
+            // Replace relative segment paths with API URLs.
+            // Segment URLs should be: /api/project/:id/preview/hls/:version/:segment
+            // HLS playlist format: segment filename appears on its own line after #EXTINF
+            const segmentBaseUrl = `/api/project/${projectId}/preview/hls/${encodeURIComponent(version)}`;
+            const rewrittenPlaylist = playlistContent.replace(
+              /^(seg_\d+\.ts)$/gm,
+              (match) => `${segmentBaseUrl}/${match}`
+            );
+            fs.writeFileSync(playlistPath, rewrittenPlaylist, 'utf8');
+            console.log('[HLS] Rewrote playlist segment paths', { 
+              projectId, 
+              version,
+              sampleSegment: `${segmentBaseUrl}/seg_000.ts`
+            });
+          } catch (rewriteErr) {
+            console.warn('[HLS] Failed to rewrite playlist segment paths', rewriteErr);
+            // Continue anyway - segments might still work if served from same origin
+          }
+          
+          resolve();
+        })
+        .on('error', (err: Error) => {
+          clearTimeout(timeout);
+          reject(err);
+        })
+        .run();
+    });
+
+    onProgress?.(100, 'HLS preview ready!');
+    return { success: true, playlistPath };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
+}
+
+/**
+ * Generate a short timeline-aware preview segment starting at the current playhead.
+ *
+ * This is a lighter-weight variant of `generateTimelinePreview` that only renders
+ * a small window of the full timeline (for example 5 seconds starting at
+ * `centerTime`). It uses the same image plan (overlays, characters) but trims
+ * and offsets clip timings so that local segment time 0 corresponds to the
+ * requested playhead position.
+ *
+ * NOTE: To keep the implementation focused and fast, this segment preview
+ * currently omits karaoke subtitles. Full previews still include subtitles via
+ * `generateTimelinePreview`.
+ */
+export async function generateTimelineSegmentPreview(
+  project: Project,
+  centerTime: number,
+  windowSeconds: number = 3,
+  onProgress?: (percent: number, message: string) => void
+): Promise<{ success: boolean; outputPath?: string; error?: string }> {
+  const { id: projectId, template, audioSessionId, timeline } = project;
+
+  try {
+    const session = await prisma.session.findUnique({
+      where: { id: audioSessionId },
+      include: {
+        dialogues: {
+          include: { audioFile: true },
+          orderBy: { order: 'asc' }
+        }
+      }
+    });
+
+    if (!session) {
+      return { success: false, error: `Audio session ${audioSessionId} not found` };
+    }
+
+    const audioFiles = session.dialogues
+      .filter((d: any) => d.audioFile && d.audioFile.success)
+      .map((d: any) => d.audioFile!.filePath);
+
+    if (audioFiles.length === 0) {
+      return { success: false, error: 'No audio files in session' };
+    }
+
+    const fullDuration = timeline?.duration || session.totalDuration || 60;
+
+    // Clamp centerTime and compute a forward-looking window [segmentStart, segmentEnd].
+    const safeCenter = Math.max(0, Math.min(centerTime || 0, fullDuration));
+    let segmentStart = safeCenter;
+    let segmentEnd = Math.min(fullDuration, segmentStart + windowSeconds);
+    if (segmentEnd <= segmentStart) {
+      // Ensure we always have at least a small positive duration.
+      segmentEnd = Math.min(fullDuration, segmentStart + 1);
+    }
+    const segmentDuration = Math.max(0.1, segmentEnd - segmentStart);
+
+    const templatePath = resolveTemplatePath(template.path);
+
+    if (!fs.existsSync(templatePath)) {
+      return { success: false, error: `Template not found: ${templatePath}` };
+    }
+
+    const outputPath = path.join(PREVIEW_DIR, `preview_${projectId}.mp4`);
+
+    if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
+
+    onProgress?.(10, 'Concatenating audio (segment)...');
+    const audioListPath = path.join(TEMP_DIR, `preview_audio_list_${projectId}.txt`);
+    const audioListContent = audioFiles.map((f: string) => `file '${f.replace(/'/g, "'\\''")}'`).join('\n');
+    fs.writeFileSync(audioListPath, audioListContent);
+
+    const concatenatedAudioPath = path.join(TEMP_DIR, `preview_audio_${projectId}.wav`);
+    await new Promise<void>((resolve, reject) => {
+      const concatCmd = ffmpeg()
+        .input(audioListPath)
+        .inputOptions(['-f', 'concat', '-safe', '0'])
+        .outputOptions(['-c:a', 'pcm_s16le'])
+        .output(concatenatedAudioPath);
+      concatCmd.on('start', () => {});
+      concatCmd.on('stderr', () => {});
+      concatCmd.on('end', () => resolve());
+      concatCmd.on('error', (err: Error) => reject(err));
+      concatCmd.run();
+    });
+
+    const overlayTrack = timeline?.tracks?.find((t: any) => t.type === 'overlay' && t.id === 't_imgs');
+    const characterTrack = timeline?.tracks?.find((t: any) => t.type === 'character');
+
+    const sliceClipsToWindow = <T extends { start: number; duration: number }>(clips: T[]): T[] => {
+      const result: T[] = [];
+      for (const clip of clips) {
+        const globalStart = clip.start;
+        const globalEnd = clip.start + clip.duration;
+        // Skip clips that don't intersect with the segment window.
+        if (globalEnd <= segmentStart || globalStart >= segmentEnd) continue;
+
+        const localStart = Math.max(0, globalStart - segmentStart);
+        const localEnd = Math.min(segmentEnd, globalEnd) - segmentStart;
+        const localDuration = Math.max(0.05, localEnd - localStart);
+
+        result.push({
+          ...clip,
+          start: localStart,
+          duration: localDuration,
+        });
+      }
+      return result;
+    };
+
+    const overlayClips = sliceClipsToWindow(
+      (overlayTrack?.clips?.filter((c: any) => c.kind === 'overlay') || []) as OverlayClip[]
+    );
+    const characterClips = sliceClipsToWindow(
+      (characterTrack?.clips?.filter((c: any) => c.kind === 'character') || []) as CharacterClip[]
+    );
+
+    const command = ffmpeg();
+    const isImage = /\.(jpe?g|png|gif|webp)$/i.test(templatePath);
+
+    // Input 0: template video or image.
+    if (isImage) {
+      command.input(templatePath).inputOptions(['-loop', '1', '-t', segmentDuration.toString()]);
+    } else {
+      command.input(templatePath);
+    }
+
+    // Input 1: concatenated audio, trimmed to the segment window at input level.
+    command
+      .input(concatenatedAudioPath)
+      .inputOptions(['-ss', segmentStart.toString(), '-t', segmentDuration.toString()]);
+
+    const overlayInputs: { clip: OverlayClip; inputIndex: number }[] = [];
+    overlayClips.forEach((clip: OverlayClip) => {
+      const imagePath = clip.path ?? path.join(IMAGE_UPLOAD_DIR, audioSessionId, `${clip.assetId}.png`);
+      if (fs.existsSync(imagePath)) {
+        command.input(imagePath);
+        // Use actual FFmpeg input order: 0=template, 1=audio, 2+=overlays (so first overlay = 2, second = 3, ...)
+        overlayInputs.push({ clip, inputIndex: 2 + overlayInputs.length });
+      }
+    });
+
+    let nextIdx = 2 + overlayInputs.length;
+    const charInputs: { clip: CharacterClip; inputIndex: number }[] = [];
+    for (const clip of characterClips) {
+      const charPath = getCharacterImagePath(clip.character);
+      if (charPath) {
+        command.input(charPath);
+        charInputs.push({ clip, inputIndex: nextIdx++ });
+      }
+    }
+
+    let filterComplex = '';
+    let lastLabel = '0:v';
+
+    // Match backend videoGenerator: Stewie=300:1350 (lower), Peter=300:1250 (higher)
+    const stewieX = Math.floor(300 * SCALE);
+    const stewieY = Math.floor(1350 * SCALE);
+    const peterX = Math.floor(300 * SCALE);
+    const peterY = Math.floor(1250 * SCALE);
+
+    // For images, we already constrained the duration using -t on the input.
+    // For videos, trim to the [segmentStart, segmentEnd] window and reset PTS
+    // so that t=0 at the start of the segment.
+    if (isImage) {
+      filterComplex =
+        `[0:v]scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=increase,` +
+        `crop=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT},format=yuv420p[bg]`;
+    } else {
+      filterComplex =
+        `[0:v]trim=start=${segmentStart.toFixed(3)}:end=${segmentEnd.toFixed(3)},` +
+        `setpts=PTS-STARTPTS,` +
+        `scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=increase,` +
+        `crop=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT},format=yuv420p[bg]`;
+    }
+    lastLabel = 'bg';
+
+    // Overlays in local segment time.
+    overlayInputs.forEach(({ clip, inputIndex }, index) => {
+      filterComplex += `;[${inputIndex}:v]scale=${OVERLAY_SCALE_W}:${OVERLAY_SCALE_H}:force_original_aspect_ratio=decrease[ov${index}]`;
+      filterComplex += `;[${lastLabel}][ov${index}]overlay=(W-w)/2:${OVERLAY_Y_TOP}:enable='between(t,${clip.start},${
+        clip.start + clip.duration
+      })'[vo${index}]`;
+      lastLabel = `vo${index}`;
+    });
+
+    // Character overlays in local segment time.
+    if (charInputs.length > 0) {
+      const stewieClips = charInputs.filter(c => c.clip.character === 'Stewie');
+      const peterClips = charInputs.filter(c => c.clip.character === 'Peter');
+
+      const stewieRanges: string[] = [];
+      const peterRanges: string[] = [];
+      stewieClips.forEach(({ clip }) => {
+        stewieRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
+      });
+      peterClips.forEach(({ clip }) => {
+        peterRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
+      });
+
+      const stewieEnable = stewieRanges.length > 0 ? stewieRanges.join('+') : '0';
+      const peterEnable = peterRanges.length > 0 ? peterRanges.join('+') : '0';
+
+      const stewieScaleW = Math.floor(500 * SCALE);
+      const stewieScaleH = Math.floor(600 * SCALE);
+      const peterScaleW = Math.floor(580 * SCALE);
+      const peterScaleH = Math.floor(720 * SCALE);
+      const stewieInputIndex = stewieClips[0]?.inputIndex;
+      const peterInputIndex = peterClips[0]?.inputIndex;
+
+      if (stewieInputIndex !== undefined) {
+        filterComplex += `;[${stewieInputIndex}:v]scale=${stewieScaleW}:${stewieScaleH}:force_original_aspect_ratio=decrease[stewie_scaled]`;
+        filterComplex += `;[${lastLabel}][stewie_scaled]overlay=${stewieX}:${stewieY}:enable='${stewieEnable}'[stewie_overlay]`;
+        lastLabel = 'stewie_overlay';
+      }
+
+      if (peterInputIndex !== undefined) {
+        filterComplex += `;[${peterInputIndex}:v]scale=${peterScaleW}:${peterScaleH}:force_original_aspect_ratio=decrease[peter_scaled]`;
+        filterComplex += `;[${lastLabel}][peter_scaled]overlay=${peterY}:${peterY}:enable='${peterEnable}'[with_characters]`;
+        lastLabel = 'with_characters';
+      }
+    }
+
+    onProgress?.(50, 'Encoding segment preview...');
+
+    filterComplex += `;[${lastLabel}]format=yuv420p,setsar=1[out]`;
+
+    const timeout = setTimeout(() => {}, 60000);
+
+    command.on('start', () => {});
+    command.on('stderr', () => {});
+
+    command
+      .complexFilter(filterComplex)
+      .outputOptions([
+        '-map', '[out]',  // Map filter output for video
+        '-map', '1:a',    // Map audio from concatenated input (already trimmed)
+        '-t', segmentDuration.toString(),
+        '-c:v', 'h264_nvenc',
+        '-b:v', PREVIEW_BITRATE,
+        '-maxrate', '750k',
+        '-bufsize', '1500k',
+        '-preset', 'p4',
+        '-c:a', 'aac',
+        '-b:a', '64k',
+        '-ac', '2',
+        '-ar', '22050',
+        '-y'
+      ]);
+    console.log('[FFmpeg] Timeline SEGMENT preview encoding mode: GPU (h264_nvenc)', {
+      projectId,
+      centerTime: safeCenter,
+      segmentStart,
+      segmentEnd,
+      segmentDuration,
+    });
+    command.output(outputPath);
+
+    command.on('progress', (p: any) => {
+      if (p.percent) onProgress?.(Math.min(95, 50 + (p.percent / 100) * 45), `Encoding (segment): ${Math.round(p.percent)}%`);
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      command
+        .on('end', () => {
+          clearTimeout(timeout);
+          try {
+            fs.unlinkSync(audioListPath);
+            fs.unlinkSync(concatenatedAudioPath);
+          } catch (_) {}
+          resolve();
+        })
+        .on('error', (err: Error) => {
+          clearTimeout(timeout);
+          reject(err);
+        })
+        .run();
+    });
+
+    onProgress?.(100, 'Segment preview ready!');
+    return { success: true, outputPath };
+  } catch (error) {
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'

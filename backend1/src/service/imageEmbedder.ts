@@ -1112,7 +1112,6 @@ Provide specific diagram concepts that would work well in educational video cont
       const filePath = path.join(outputDir, `${plan.sessionId}_image_plan.json`);
       fs.writeFileSync(filePath, JSON.stringify(plan, null, 2));
 
-      console.log('💾 [SAVE] Image plan saved to:', filePath);
       return filePath;
 
     } catch (error) {
@@ -1126,20 +1125,6 @@ Provide specific diagram concepts that would work well in educational video cont
     try {
       const content = fs.readFileSync(filePath, 'utf8');
       const plan = JSON.parse(content) as ImageEmbeddingPlan;
-
-      console.log('📖 [LOAD] Image plan loaded from:', filePath);
-      console.log('[IMAGE PLAN] Loaded plan detail', {
-        sessionId: plan.sessionId,
-        totalDuration: plan.totalDuration,
-        requirementCount: plan.imageRequirements?.length ?? 0,
-        summary: plan.summary,
-      });
-      (plan.imageRequirements || []).slice(0, 10).forEach((req: { id?: string; title?: string; timestamp?: number }, i: number) => {
-        console.log(`[IMAGE PLAN]   #${i + 1} id=${req.id} title="${req.title}" at ${req.timestamp?.toFixed(1)}s`);
-      });
-      if ((plan.imageRequirements?.length ?? 0) > 10) {
-        console.log(`[IMAGE PLAN]   ... and ${(plan.imageRequirements?.length ?? 0) - 10} more requirements`);
-      }
       return plan;
 
     } catch (error) {
@@ -1359,20 +1344,7 @@ export class ImageEmbeddingService {
       const imagePlan = await ImageEmbeddingAnalyzer.analyzeDialogueForImages(sessionId, assLikeData, topic, userProvidedImages);
 
       // 💾 SAVE PLAN TO FILE
-      const planFilePath = await ImageEmbeddingAnalyzer.saveImagePlan(imagePlan);
-
-      console.log('✅ [SERVICE] Clean timestamp-based image plan generated successfully');
-      console.log('[IMAGE PLAN] Plan detail', {
-        sessionId: imagePlan.sessionId,
-        totalDuration: imagePlan.totalDuration,
-        planFilePath,
-        summary: imagePlan.summary,
-        requirementCount: imagePlan.imageRequirements?.length ?? 0,
-        userProvidedCount: userProvidedImages?.length ?? 0,
-      });
-      (imagePlan.imageRequirements || []).forEach((req: { id?: string; title?: string; timestamp?: number; contextualDuration?: number; duration?: number; imageType?: string; priority?: string; uploaded?: boolean; imagePath?: string }, i: number) => {
-        console.log(`[IMAGE PLAN]   #${i + 1} id=${req.id} title="${req.title}" timestamp=${req.timestamp?.toFixed(1)}s duration=${(req.contextualDuration ?? req.duration ?? 8).toFixed(1)}s type=${req.imageType} priority=${req.priority} uploaded=${!!req.uploaded} path=${req.imagePath ?? 'none'}`);
-      });
+      await ImageEmbeddingAnalyzer.saveImagePlan(imagePlan);
 
       return imagePlan;
 

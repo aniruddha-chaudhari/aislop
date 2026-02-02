@@ -164,16 +164,6 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
     // If we have an image plan, this is the final video generation with images
     if (imagePlan && !generateAssOnly) {
       const reqs = imagePlan.imageRequirements || [];
-      console.log('🎨 [CONTROLLER] Using image plan for video generation', {
-        sessionId: imagePlan.sessionId,
-        totalDuration: imagePlan.totalDuration,
-        requirementCount: reqs.length,
-        summary: imagePlan.summary,
-      });
-      reqs.forEach((req: { id?: string; title?: string; timestamp?: number; contextualDuration?: number; duration?: number; uploaded?: boolean; imagePath?: string }, i: number) => {
-        console.log(`[IMAGE PLAN]   req #${i + 1} id=${req.id} title="${req.title}" at ${req.timestamp?.toFixed(1)}s duration=${(req.contextualDuration ?? req.duration ?? 8).toFixed(1)}s uploaded=${!!req.uploaded} path=${req.imagePath ?? 'none'}`);
-      });
-
       // Use the new image embedding service
       const result = await ImageEmbeddingService.generateVideoWithEmbeddedImages(
         sessionId,
@@ -296,12 +286,6 @@ export const generateVideoWithSubtitles = async (ctx: HttpContext): Promise<Hand
             try {
               const existingPlan = JSON.parse(fs.readFileSync(imagePlanFile, 'utf8'));
               existingAiImages = existingPlan.imageRequirements.filter((req: any) => req.uploaded && req.imagePath);
-              console.log('[IMAGE PLAN] Loaded existing image plan for user images video', {
-                sessionId,
-                file: imagePlanFile,
-                totalRequirements: existingPlan.imageRequirements?.length ?? 0,
-                uploadedIncluded: existingAiImages.length,
-              });
             } catch (error) {
               console.warn('⚠️ [CONTROLLER] Could not load existing image plan:', error);
             }
@@ -917,7 +901,6 @@ export const analyzeAssForImages = async (ctx: HttpContext): Promise<HandlerResu
 
 
     // Clean up old session files before starting new image plan generation
-    console.log('🧹 [CONTROLLER] Cleaning up old session files before image plan generation...');
     cleanupOldUserImageFiles();
 
     // Get session data - we always need this for clean timestamp analysis
@@ -954,7 +937,6 @@ export const analyzeAssForImages = async (ctx: HttpContext): Promise<HandlerResu
 
 
     // Use the new clean timestamp method for better image analysis accuracy
-    console.log('[IMAGE PLAN] Generating image plan (analyzeAssForImages)', { sessionId, topic, dialogueCount: validDialogues.length });
     const imagePlan = await ImageEmbeddingService.generateImageEmbeddingPlanFromCleanTimestamps(
       sessionId,
       validDialogues,
@@ -963,17 +945,6 @@ export const analyzeAssForImages = async (ctx: HttpContext): Promise<HandlerResu
       'ultra'
     );
 
-    console.log('[IMAGE PLAN] Analyze response plan detail', {
-      sessionId: imagePlan.sessionId,
-      totalDuration: imagePlan.totalDuration,
-      requirementCount: imagePlan.imageRequirements?.length ?? 0,
-      summary: imagePlan.summary,
-    });
-    (imagePlan.imageRequirements || []).forEach((req: { id?: string; title?: string; timestamp?: number }, i: number) => {
-      console.log(`[IMAGE PLAN]   #${i + 1} id=${req.id} title="${req.title}" timestamp=${req.timestamp?.toFixed(1)}s`);
-    });
-
-    // Format response for user
     const formattedPlan = ImageEmbeddingService.formatPlanForUser(imagePlan);
 
     return jsonResponse(200,{
@@ -1021,22 +992,13 @@ export const getImagePlanStatus = async (ctx: HttpContext): Promise<HandlerResul
 
     const imagePlan = ImageEmbeddingAnalyzer.loadImagePlan(planFilePath);
     const progress = ImageEmbeddingAnalyzer.getUploadProgress(imagePlan);
-    const formattedPlan = ImageEmbeddingService.formatPlanForUser(imagePlan);
-
-    console.log('[IMAGE PLAN] getImagePlanStatus', {
-      sessionId,
-      planFilePath,
-      requirementCount: imagePlan.imageRequirements?.length ?? 0,
-      uploaded: progress.uploaded,
-      total: progress.total,
-      percentage: progress.percentage,
-    });
+    const formattedPlanStatus = ImageEmbeddingService.formatPlanForUser(imagePlan);
 
     return jsonResponse(200,{
       success: true,
       imagePlan,
       progress,
-      formattedPlan,
+      formattedPlan: formattedPlanStatus,
       isComplete: progress.percentage === 100
     });
 

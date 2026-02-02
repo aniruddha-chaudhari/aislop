@@ -29,9 +29,6 @@ const server = Bun.serve({
   },
 });
 
-console.log(`\n🚀 Backend server listening on http://localhost:${port}`);
-console.log('   Image plan logs: watch this terminal when you click "Image Plan" in the editor.\n');
-
 setInterval(() => {
   try {
     if (!fs.existsSync(ASS_CACHE_DIR)) return;

@@ -5,7 +5,7 @@ import { generateSubtitlesAndCharacters, generateImagePlan } from '../service/ai
 import { getSessionDuration } from '../service/sessionDuration';
 import type { Track } from '../schema/project';
 import { compileTimeline } from '../service/timelineCompiler';
-import { generatePreview, generateTimelinePreview } from '../service/previewGenerator';
+import { generatePreview, generateTimelinePreview, generateTimelineSegmentPreview, generateTimelinePreviewHls } from '../service/previewGenerator';
 import { ProjectSchema, TimelineSchema } from '../schema/project';
 import fs from 'fs';
 import path from 'path';
@@ -298,7 +298,6 @@ export async function generateAiDraftForProject(ctx: HttpContext): Promise<Handl
 export async function generateImagePlanForProject(ctx: HttpContext): Promise<HandlerResult> {
   // Log immediately so you see output in the terminal where the backend is running (not browser console)
   process.stdout.write('[IMAGE PLAN] POST /api/project/:id/image-plan hit\n');
-  console.log('[IMAGE PLAN] ========== Image plan request started ==========');
 
   try {
     const projectId = ctx.params?.id;
@@ -328,27 +327,7 @@ export async function generateImagePlanForProject(ctx: HttpContext): Promise<Han
     }
 
     const topic = body.topic || project.name || 'Technical conversation';
-
-    console.log('[IMAGE PLAN] Generating image plan for project', {
-      projectId,
-      projectName: project.name,
-      audioSessionId: project.audioSessionId,
-      topic,
-    });
-
     const result = await generateImagePlan(project.audioSessionId, topic);
-
-    console.log('[IMAGE PLAN] Image plan generated for project', projectId, {
-      overlayTrackId: result.overlayTrack.id,
-      clipCount: result.overlayTrack.clips.length,
-      clips: result.overlayTrack.clips.map((c: { id: string; label?: string; start: number; duration: number; assetId?: string }) => ({
-        id: c.id,
-        label: c.label,
-        start: c.start.toFixed(1) + 's',
-        duration: c.duration.toFixed(1) + 's',
-        assetId: c.assetId,
-      })),
-    });
 
     // Merge overlay track into existing timeline: replace t_imgs in place to preserve track order
     const existing = project.timeline;
@@ -466,16 +445,6 @@ export async function startExport(ctx: HttpContext): Promise<HandlerResult> {
     const body = (ctx.body as { step?: number }) ?? {};
     const exportStep = Math.min(4, Math.max(1, Number(body.step ?? ctx.query?.step ?? 4))) as 1 | 2 | 3 | 4;
 
-    console.log('[EXPORT] Starting export', {
-      projectId,
-      projectName: project.name,
-      audioSessionId: project.audioSessionId,
-      exportStep,
-      timelineDuration: project.timeline?.duration,
-      tracksCount: project.timeline?.tracks?.length ?? 0,
-      trackTypes: project.timeline?.tracks?.map(t => ({ id: t.id, type: t.type, clipsCount: t.clips?.length ?? 0 })) ?? [],
-    });
-
     // Update status to exporting
     await projectService.updateStatus(projectId, 'exporting');
 
@@ -483,10 +452,8 @@ export async function startExport(ctx: HttpContext): Promise<HandlerResult> {
     compileTimeline(project, { exportStep })
       .then(async (result) => {
         const success = result && typeof result === 'object' && result.success;
-        console.log('[EXPORT] compileTimeline finished', { projectId, success, outputPath: result?.outputPath, error: result?.error });
         if (success) {
           await projectService.updateStatus(projectId, 'exported');
-          console.log('[EXPORT] Export complete', { projectId });
         } else {
           await projectService.updateStatus(projectId, 'ready');
           console.error('[EXPORT] Export failed', { projectId, error: result?.error });
@@ -792,20 +759,19 @@ export async function generateProjectPreview(ctx: HttpContext): Promise<HandlerR
 
     const overlayTrack = project.timeline?.tracks?.find((t: { type: string; id: string }) => t.type === 'overlay' && t.id === 't_imgs');
     const overlayClips = overlayTrack?.clips?.filter((c: { kind?: string }) => c.kind === 'overlay') ?? [];
-    console.log('[IMAGE PLAN] Generating preview for project', projectId, {
-      imagePlanInTimeline: !!overlayTrack,
-      overlayClipCount: overlayClips.length,
-      overlayClips: overlayClips.map((c: { id: string; label?: string; assetId?: string; start: number; duration: number }) => ({
-        id: c.id,
-        label: c.label,
-        assetId: c.assetId,
-        start: c.start.toFixed(1) + 's',
-        duration: c.duration.toFixed(1) + 's',
-      })),
-    });
 
-    // Use timeline-aware preview (includes subtitles, overlays, characters when present)
-    const result = await generateTimelinePreview(project);
+    // Optional: playhead time from client so we can render a short segment preview.
+    const body = (ctx.body as any) || {};
+    const playheadTime =
+      typeof body?.playheadTime === 'number' && Number.isFinite(body.playheadTime)
+        ? body.playheadTime
+        : undefined;
+
+    // If client provides a playheadTime, generate a short segment preview starting there.
+    // Otherwise, fall back to the full-length timeline-aware preview.
+    const result = playheadTime !== undefined
+      ? await generateTimelineSegmentPreview(project, playheadTime, 3)
+      : await generateTimelinePreview(project);
 
     if (!result.success) {
       return jsonResponse(500, {
@@ -823,6 +789,220 @@ export async function generateProjectPreview(ctx: HttpContext): Promise<HandlerR
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to generate preview',
+    });
+  }
+}
+
+/**
+ * Generate (or reuse) an HLS preview for a project timeline.
+ * POST /api/project/:id/preview/hls
+ */
+export async function generateProjectPreviewHls(ctx: HttpContext): Promise<HandlerResult> {
+  try {
+    const projectId = ctx.params?.id;
+
+    if (!projectId) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Project ID is required',
+      });
+    }
+
+    const project = await projectService.getProject(projectId);
+
+    if (!project) {
+      return jsonResponse(404, {
+        success: false,
+        error: 'Project not found',
+      });
+    }
+
+    if (!project.template?.path) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Project has no template assigned',
+      });
+    }
+
+    if (!project.audioSessionId || project.audioSessionId === 'no-session') {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Project has no audio session assigned',
+      });
+    }
+
+    // Use updatedAt as a stable-ish version identifier for the current timeline.
+    const rawVersion = project.updatedAt || new Date().toISOString();
+    const safeVersion = rawVersion.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+    const result = await generateTimelinePreviewHls(project, safeVersion);
+
+    if (!result.success || !result.playlistPath) {
+      return jsonResponse(500, {
+        success: false,
+        error: result.error || 'Failed to generate HLS preview',
+      });
+    }
+
+    // Return absolute URL for the playlist (frontend will prepend API_BASE_URL if needed)
+    // The playlist itself contains absolute segment URLs after post-processing.
+    const playlistUrl = `/api/project/${projectId}/preview/hls/${encodeURIComponent(safeVersion)}/index.m3u8`;
+
+    return jsonResponse(200, {
+      success: true,
+      version: safeVersion,
+      playlistUrl,
+      message: 'HLS preview ready',
+    });
+  } catch (error) {
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to generate HLS preview',
+    });
+  }
+}
+
+/**
+ * Check if HLS preview is ready for a project.
+ * GET /api/project/:id/preview/hls/status
+ */
+export async function getProjectPreviewHlsStatus(ctx: HttpContext): Promise<HandlerResult> {
+  try {
+    const projectId = ctx.params?.id;
+
+    if (!projectId) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Project ID is required',
+      });
+    }
+
+    const project = await projectService.getProject(projectId);
+
+    if (!project) {
+      return jsonResponse(404, {
+        success: false,
+        error: 'Project not found',
+      });
+    }
+
+    // Use updatedAt as version identifier
+    const rawVersion = project.updatedAt || new Date().toISOString();
+    const safeVersion = rawVersion.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+    const manifestPath = path.join(process.cwd(), 'storage', 'previews', 'hls', projectId, safeVersion, 'index.m3u8');
+    const isReady = fs.existsSync(manifestPath);
+
+    if (isReady) {
+      const playlistUrl = `/api/project/${projectId}/preview/hls/${encodeURIComponent(safeVersion)}/index.m3u8`;
+      return jsonResponse(200, {
+        success: true,
+        ready: true,
+        version: safeVersion,
+        playlistUrl,
+      });
+    }
+
+    return jsonResponse(200, {
+      success: true,
+      ready: false,
+      version: safeVersion,
+    });
+  } catch (error) {
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to check HLS status',
+    });
+  }
+}
+
+/**
+ * Serve HLS playlist for a project.
+ * GET /api/project/:id/preview/hls/:version/index.m3u8
+ */
+export async function serveProjectPreviewHlsManifest(ctx: HttpContext): Promise<HandlerResult> {
+  try {
+    const projectId = ctx.params?.id;
+    const version = ctx.params?.version;
+
+    if (!projectId || !version) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Project ID and version are required',
+      });
+    }
+
+    const manifestPath = path.join(process.cwd(), 'storage', 'previews', 'hls', projectId, version, 'index.m3u8');
+
+    if (!fs.existsSync(manifestPath)) {
+      return jsonResponse(404, {
+        success: false,
+        error: 'HLS manifest not found. Generate it first using POST /api/project/:id/preview/hls',
+      });
+    }
+
+    const buf = await fs.promises.readFile(manifestPath);
+    return new Response(new Blob([buf]), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/vnd.apple.mpegurl',
+        'Cache-Control': 'no-store',
+      },
+    });
+  } catch (error) {
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to serve HLS manifest',
+    });
+  }
+}
+
+/**
+ * Serve individual HLS segment.
+ * GET /api/project/:id/preview/hls/:version/:segment
+ */
+export async function serveProjectPreviewHlsSegment(ctx: HttpContext): Promise<HandlerResult> {
+  try {
+    const projectId = ctx.params?.id;
+    const version = ctx.params?.version;
+    const segment = ctx.params?.segment;
+
+    if (!projectId || !version || !segment) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Project ID, version and segment are required',
+      });
+    }
+
+    // Basic safety: disallow path traversal via segment parameter.
+    if (segment.includes('..') || segment.includes('/') || segment.includes('\\')) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Invalid segment name',
+      });
+    }
+
+    const segmentPath = path.join(process.cwd(), 'storage', 'previews', 'hls', projectId, version, segment);
+
+    if (!fs.existsSync(segmentPath)) {
+      return jsonResponse(404, {
+        success: false,
+        error: 'HLS segment not found',
+      });
+    }
+
+    const buf = await fs.promises.readFile(segmentPath);
+    return new Response(new Blob([buf]), {
+      status: 200,
+      headers: {
+        'Content-Type': 'video/mp2t',
+        'Cache-Control': 'no-store',
+      },
+    });
+  } catch (error) {
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to serve HLS segment',
     });
   }
 }

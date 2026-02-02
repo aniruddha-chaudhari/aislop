@@ -10,8 +10,6 @@ const prisma = new PrismaClient();
 
 async function updateAllSessionDurations() {
   try {
-    console.log('📊 Starting to update durations for all sessions...\n');
-
     // Get all sessions
     const sessions = await prisma.session.findMany({
       select: {
@@ -21,17 +19,9 @@ async function updateAllSessionDurations() {
       }
     });
 
-    console.log(`Found ${sessions.length} sessions\n`);
-
     for (const session of sessions) {
-      console.log(`Processing session: ${session.id} (${session.name || 'Unnamed'})`);
-      console.log(`  Current stored duration: ${session.totalDuration ?? 'not set'}`);
-      
-      const duration = await updateSessionDuration(session.id);
-      console.log(`  Updated duration: ${duration.toFixed(2)}s\n`);
+      await updateSessionDuration(session.id);
     }
-
-    console.log('✅ All session durations updated!');
   } catch (error) {
     console.error('❌ Error updating session durations:', error);
   } finally {

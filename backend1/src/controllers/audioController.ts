@@ -152,7 +152,6 @@ export function cleanupOldUserImageFiles(): void {
       if (file.endsWith('_image_plan.json')) {
         fs.unlinkSync(filePath);
         cleanedCount++;
-        console.log(`🧹 [CLEANUP] Removed old image plan file: ${file}`);
       }
 
       // Clean up image analysis files

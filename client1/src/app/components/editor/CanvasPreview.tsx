@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Hls from 'hls.js';
 import type { Clip, ClipRef, EditorProject } from '../../../features/editor/types';
 import { API_ENDPOINTS } from '../../../config/api';
 
@@ -27,6 +28,8 @@ type Props = {
   /** Optional: Preview video source (FFmpeg composite) to use instead of template */
   previewVideoSrc?: string | null;
   isGeneratingPreview?: boolean;
+  /** When true, this is a temporary segment preview (will swap to full HLS when ready) */
+  isSegmentPreview?: boolean;
 };
 
 export default function CanvasPreview({
@@ -44,6 +47,7 @@ export default function CanvasPreview({
   onPreviewReady,
   previewVideoSrc,
   isGeneratingPreview = false,
+  isSegmentPreview = false,
 }: Props) {
   const playerRef = useRef<HTMLVideoElement | null>(null);
   const playerWrapperRef = useRef<HTMLDivElement | null>(null);
@@ -97,6 +101,10 @@ export default function CanvasPreview({
     [previewVideoSrc, project.template.src]
   );
   const hasVideoSrc = Boolean(videoSrc);
+  const isHlsSrc = useMemo(
+    () => Boolean(previewVideoSrc && previewVideoSrc.endsWith('.m3u8')),
+    [previewVideoSrc]
+  );
 
   const lastSeekedRef = useRef<number>(0);
   const videoReadyRef = useRef(false);
@@ -108,6 +116,56 @@ export default function CanvasPreview({
     videoReadyRef.current = false;
     setMutedForPolicy(true);
   }, [videoSrc]);
+
+  // Attach HLS.js when previewVideoSrc is an HLS playlist.
+  useEffect(() => {
+    const video = getVideoElement();
+    if (!video || !previewVideoSrc || !isHlsSrc) return;
+
+    // Use hls.js where supported
+    if (Hls.isSupported()) {
+      const hls = new Hls({
+        debug: false,
+        enableWorker: true,
+      });
+      
+      hls.loadSource(previewVideoSrc);
+      hls.attachMedia(video);
+      
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        console.error('[CanvasPreview] HLS error', { event, data });
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              console.error('[CanvasPreview] HLS network error, trying to recover...');
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              console.error('[CanvasPreview] HLS media error, trying to recover...');
+              hls.recoverMediaError();
+              break;
+            default:
+              console.error('[CanvasPreview] HLS fatal error, destroying...');
+              hls.destroy();
+              break;
+          }
+        }
+      });
+      
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        console.log('[CanvasPreview] HLS manifest parsed successfully');
+      });
+
+      return () => {
+        hls.destroy();
+      };
+    }
+
+    // Fallback for Safari / native HLS
+    if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = previewVideoSrc;
+    }
+  }, [previewVideoSrc, isHlsSrc]);
 
   // Expose play/pause so parent can call play() in same stack as user click (required for autoplay policy).
   useEffect(() => {
@@ -348,7 +406,8 @@ export default function CanvasPreview({
             {project.template.type === 'video' && hasVideoSrc ? (
               <video
                 ref={setPlayerRef}
-                src={videoSrc}
+                // For HLS sources, the src will be managed by hls.js; keep it empty here.
+                src={isHlsSrc ? '' : videoSrc}
                 style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', pointerEvents: 'auto' }}
                 playsInline
                 preload="auto"
@@ -403,7 +462,17 @@ export default function CanvasPreview({
                   if (isPlaying) onPlayheadChange(video.currentTime);
                 }}
                 onPlay={() => setMutedForPolicy(false)}
-                onEnded={() => { if (isPlaying) onPlayPause(); }}
+                onEnded={() => {
+                  if (isSegmentPreview) {
+                    // For segment previews, just pause (don't stop) - HLS swap will resume playback
+                    console.log('[CanvasPreview] Segment preview ended, pausing and waiting for HLS swap');
+                    const video = getVideoElement();
+                    if (video) video.pause();
+                    // Don't call onPlayPause() - keep isPlaying state so HLS swap can resume
+                  } else if (isPlaying) {
+                    onPlayPause();
+                  }
+                }}
                 onError={(err) => {
                   console.warn('[CanvasPreview] Video failed to load:', videoSrc, err);
                 }}

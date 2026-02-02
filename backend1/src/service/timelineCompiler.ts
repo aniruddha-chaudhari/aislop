@@ -60,15 +60,6 @@ export async function compileTimeline(
 
   const outputPath = path.join(outputDir, outputFilename);
 
-  console.log('[EXPORT] compileTimeline started', {
-    projectId: project.id,
-    projectName: project.name,
-    audioSessionId: project.audioSessionId,
-    outputPath,
-    exportStep,
-    stepLabel: exportStep === 1 ? 'template+audio' : exportStep === 2 ? 'template+audio+subtitles' : exportStep === 3 ? 'template+audio+subtitles+overlays' : 'full',
-  });
-
   try {
     const { preset, crf, scale } = getQualitySettings(quality);
 
@@ -106,16 +97,12 @@ export async function compileTimeline(
       }
       assPath = await generateKaraokeAssSubtitles(subtitleClips, project.id);
     }
-    console.log('[EXPORT] ASS subtitles', { assPath, exists: assPath ? fs.existsSync(assPath) : false, clipsCount: subtitleClips.length });
-    console.log('[EXPORT] Overlay clips', overlayClips.map((c, i) => ({ i, id: c.id, assetId: c.assetId, start: c.start, duration: c.duration, path: c.path })));
-    console.log('[EXPORT] Character clips', characterClips.map((c, i) => ({ i, id: c.id, character: c.character, start: c.start, duration: c.duration })));
 
     const templatePath = resolveTemplatePath(project.template.path);
     if (!fs.existsSync(templatePath)) {
       throw new Error(`Template not found: ${templatePath} (original: ${project.template.path})`);
     }
     const isImage = /\.(jpe?g|png|gif|webp)$/i.test(templatePath);
-    console.log('[EXPORT] Using template', { path: templatePath, duration, isImage });
     if (isImage) {
       command.input(templatePath).inputOptions(['-loop', '1', '-t', duration.toString()]);
     } else {
@@ -124,12 +111,6 @@ export async function compileTimeline(
     }
 
     const audioPath = await getAudioPath(project);
-    console.log('[EXPORT] getAudioPath result', {
-      projectId: project.id,
-      audioSessionId: project.audioSessionId,
-      audioPath: audioPath ?? null,
-      audioPathExists: audioPath ? fs.existsSync(audioPath) : false,
-    });
     let nextInputIndex = 1; // 0 = template
     if (audioPath) {
       command.input(audioPath).inputOptions(['-t', duration.toString()]);
@@ -259,22 +240,24 @@ export async function compileTimeline(
         return { index: inputIndex, type: 'character', path: p ?? '(none)', exists: !!p && fs.existsSync(p) };
       })
     ];
-    console.log('[EXPORT] FFmpeg input order and mapping', {
-      projectId: project.id,
-      inputOrder,
-      audioStream,
-      overlayInputsCount: overlayInputs.length,
-      characterInputsCount: characterInputs.length,
-    });
-    console.log('[EXPORT] All input paths (verify template has video)', allInputPaths);
     // Step 1: -map 0:v -map 1:a; Step 2+: -map [final] -map 1:a
     const outputOpts: string[] = useSimpleVf
       ? ['-map', '0:v', '-map', audioStream]
       : ['-map', '[final]', '-map', audioStream];
+
+    // Use GPU encoding (h264_nvenc) for faster export when available.
+    // We use bitrate-based configuration instead of CRF for NVENC.
+    const videoBitrate = quality === 'preview' ? '3000k' : '6000k';
+    const maxrate = quality === 'preview' ? '4000k' : '8000k';
+    const bufsize = quality === 'preview' ? '8000k' : '12000k';
+    const nvencPreset = quality === 'preview' ? 'p4' : 'p5';
+
     outputOpts.push(
-      '-c:v', 'libx264',
-      '-preset', preset,
-      '-crf', crf,
+      '-c:v', 'h264_nvenc',
+      '-b:v', videoBitrate,
+      '-maxrate', maxrate,
+      '-bufsize', bufsize,
+      '-preset', nvencPreset,
       '-s', scale,
       '-pix_fmt', 'yuv420p',
       '-c:a', 'aac',
@@ -283,20 +266,10 @@ export async function compileTimeline(
       '-t', duration.toString(),
       '-y'
     );
+    console.log(`[FFmpeg] Export encoding mode: GPU (h264_nvenc), quality=${quality}, exportStep=${exportStep}`);
     command.outputOptions(outputOpts);
 
     command.output(outputPath);
-
-    command.on('start', (cmdLine: string) => {
-      console.log('[EXPORT] FFmpeg started', { projectId: project.id, exportStep });
-      console.log('[EXPORT] FFmpeg command (full)', cmdLine);
-      if (!useSimpleVf) console.log('[EXPORT] filterComplex', filterComplex);
-    });
-    command.on('stderr', (line: string) => {
-      if (line.includes('error') || line.includes('Error') || line.includes('Invalid') || line.includes('failed')) {
-        console.log('[EXPORT] FFmpeg stderr', line.trim());
-      }
-    });
     command.on('progress', (progress: any) => {
       if (progress.percent && onProgress) {
         const percent = Math.min(Math.round(progress.percent), 99);
@@ -318,7 +291,7 @@ export async function compileTimeline(
           }
 
           publishFileUpdate(project.id, {
-            type: 'complete',
+            type: 'completed',
             message: 'Video export complete',
             videoPath: outputPath,
           });
@@ -399,8 +372,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     const speaker = clip.speaker || (clip as { character?: string }).character || 'Speaker';
 
     if (clip.words && clip.words.length > 0) {
-      for (let i = 0; i < clip.words.length; i += 3) {
-        const wordGroup = clip.words.slice(i, Math.min(i + 3, clip.words.length));
+      const clipWords = clip.words ?? [];
+      for (let i = 0; i < clipWords.length; i += 3) {
+        const wordGroup = clipWords.slice(i, Math.min(i + 3, clipWords.length));
         const fullText = wordGroup.map(w => (w as { word: string }).word || w).join(' ');
         const isTooLong = fullText.length > 25;
 
@@ -441,7 +415,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         wordGroup.forEach((word, groupIndex) => {
           const wordStart = clip.start + (word as { start: number }).start;
           const wordEnd = groupIndex === wordGroup.length - 1
-            ? (i + groupIndex === clip.words.length - 1 ? clip.start + (word as { end: number }).end : clip.words[i + groupIndex + 1] ? clip.start + (clip.words[i + groupIndex + 1] as { start: number }).start : clip.start + (word as { end: number }).end)
+            ? (i + groupIndex === clipWords.length - 1
+              ? clip.start + (word as { end: number }).end
+              : clipWords[i + groupIndex + 1]
+                ? clip.start + (clipWords[i + groupIndex + 1] as { start: number }).start
+                : clip.start + (word as { end: number }).end)
             : clip.start + (wordGroup[groupIndex + 1] as { start: number }).start;
           let subtitleText = '';
           wordGroup.forEach((groupWord, wordIdx) => {
@@ -488,11 +466,9 @@ async function getAudioPath(project: Project): Promise<string | null> {
     });
 
     if (!session) {
-      console.log('[EXPORT] getAudioPath: no session found', { audioSessionId: project.audioSessionId });
       return null;
     }
     if (session.dialogues.length === 0) {
-      console.log('[EXPORT] getAudioPath: session has no dialogues', { audioSessionId: project.audioSessionId });
       return null;
     }
 
@@ -500,16 +476,9 @@ async function getAudioPath(project: Project): Promise<string | null> {
       .filter(d => d.audioFile?.filePath && d.audioFile?.success !== false && fs.existsSync(d.audioFile.filePath))
       .map(d => d.audioFile!.filePath);
 
-    console.log('[EXPORT] getAudioPath: session loaded', {
-      audioSessionId: project.audioSessionId,
-      dialoguesCount: session.dialogues.length,
-      audioFilesCount: audioFiles.length,
-    });
-
     await prisma.$disconnect();
 
     if (audioFiles.length === 0) {
-      console.log('[EXPORT] getAudioPath: no valid audio file paths', { audioSessionId: project.audioSessionId });
       return null;
     }
 
