@@ -33,7 +33,7 @@ export default function EditorPage() {
     fetchProject();
   }, [projectId]);
 
-  const fetchProject = async () => {
+  const fetchProject = async (): Promise<EditorProject | undefined> => {
     console.log('[EditorPage] fetchProject called for projectId:', projectId);
     const isRefresh = !!project;
     try {
@@ -46,9 +46,10 @@ export default function EditorPage() {
         // Fallback to mock data if project doesn't exist
         if (response.status === 404) {
           console.log('Project not found, using mock data');
-          setProject(makeMockProject(projectId));
+          const mock = makeMockProject(projectId);
+          setProject(mock);
           setLoading(false);
-          return;
+          return mock;
         }
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -113,6 +114,7 @@ export default function EditorPage() {
           }))
         });
         setProject(editorProject);
+        return editorProject;
       } else {
         throw new Error(data.error || 'Failed to fetch project');
       }
@@ -120,7 +122,9 @@ export default function EditorPage() {
       console.error('Error fetching project:', err);
       setError(err instanceof Error ? err.message : 'Failed to fetch project');
       // Fallback to mock data on error
-      setProject(makeMockProject(projectId));
+      const mock = makeMockProject(projectId);
+      setProject(mock);
+      return mock;
     } finally {
       setLoading(false);
     }

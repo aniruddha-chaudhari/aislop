@@ -9,7 +9,7 @@ export type SubtitlesAndCharactersResult = {
 };
 
 export type ImagePlanResult = {
-  overlayTrack: Track;
+  overlayTracks: Track[];
 };
 
 /**
@@ -98,14 +98,61 @@ export async function generateImagePlan(
     ...(req.imagePath && { path: req.imagePath }),
   }));
 
-  const overlayTrack: Track = {
-    id: 't_imgs',
-    type: 'overlay',
-    name: 'Images',
-    clips: overlayClips,
-  };
+  // Assign overlapping clips to different tracks so user can remove/choose/trim in editor
+  const overlayTracks = assignOverlappingClipsToTracks(overlayClips);
 
-  return { overlayTrack };
+  return { overlayTracks };
+}
+
+/** Clips overlap if their time ranges intersect. */
+function clipsOverlap(
+  startA: number,
+  durationA: number,
+  startB: number,
+  durationB: number
+): boolean {
+  const endA = startA + durationA;
+  const endB = startB + durationB;
+  return startA < endB && startB < endA;
+}
+
+/**
+ * Assign overlay clips to tracks so that overlapping clips end up on different tracks.
+ * First track is "Images" (t_imgs), then "Images 2" (t_imgs_2), etc.
+ */
+function assignOverlappingClipsToTracks(clips: Clip[]): Track[] {
+  if (clips.length === 0) {
+    return [{ id: 't_imgs', type: 'overlay', name: 'Images', clips: [] }];
+  }
+
+  const sorted = [...clips].sort((a, b) => a.start - b.start);
+  const trackClips: Clip[][] = [];
+
+  for (const clip of sorted) {
+    const start = clip.start;
+    const duration = clip.duration;
+    let placed = false;
+    for (let t = 0; t < trackClips.length; t++) {
+      const hasOverlap = trackClips[t].some(
+        (c) => clipsOverlap(c.start, c.duration, start, duration)
+      );
+      if (!hasOverlap) {
+        trackClips[t].push(clip);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      trackClips.push([clip]);
+    }
+  }
+
+  return trackClips.map((clipsInTrack, i) => ({
+    id: i === 0 ? 't_imgs' : `t_imgs_${i + 1}`,
+    type: 'overlay' as const,
+    name: i === 0 ? 'Images' : `Images ${i + 1}`,
+    clips: clipsInTrack,
+  }));
 }
 
 /**
@@ -117,14 +164,14 @@ export async function generateAiDraft(
   topic: string
 ): Promise<Timeline> {
   const { duration, audioTrack, subtitleTrack, characterTrack } = await generateSubtitlesAndCharacters(audioSessionId, topic);
-  let overlayTrack: Track = { id: 't_imgs', type: 'overlay', name: 'Images', clips: [] };
+  let overlayTracks: Track[] = [{ id: 't_imgs', type: 'overlay', name: 'Images', clips: [] }];
   try {
     const plan = await generateImagePlan(audioSessionId, topic);
-    overlayTrack = plan.overlayTrack;
+    overlayTracks = plan.overlayTracks;
   } catch (_e) {}
   return {
     duration,
-    tracks: [audioTrack, subtitleTrack, overlayTrack, characterTrack],
+    tracks: [audioTrack, subtitleTrack, ...overlayTracks, characterTrack],
   };
 }
 

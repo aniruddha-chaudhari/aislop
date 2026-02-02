@@ -296,9 +296,6 @@ export async function generateAiDraftForProject(ctx: HttpContext): Promise<Handl
  * POST /api/project/:id/image-plan
  */
 export async function generateImagePlanForProject(ctx: HttpContext): Promise<HandlerResult> {
-  // Log immediately so you see output in the terminal where the backend is running (not browser console)
-  process.stdout.write('[IMAGE PLAN] POST /api/project/:id/image-plan hit\n');
-
   try {
     const projectId = ctx.params?.id;
     const body = ctx.body as any;
@@ -329,13 +326,18 @@ export async function generateImagePlanForProject(ctx: HttpContext): Promise<Han
     const topic = body.topic || project.name || 'Technical conversation';
     const result = await generateImagePlan(project.audioSessionId, topic);
 
-    // Merge overlay track into existing timeline: replace t_imgs in place to preserve track order
+    // Merge overlay tracks into existing timeline: replace all image overlay tracks (t_imgs, t_imgs_2, ...) in place
     const existing = project.timeline;
     const existingTracks = (existing?.tracks ?? []) as Track[];
-    const hasImagesTrack = existingTracks.some((t) => t.id === 't_imgs');
-    const tracks: Track[] = hasImagesTrack
-      ? existingTracks.map((t) => (t.id === 't_imgs' ? result.overlayTrack : t))
-      : [...existingTracks, result.overlayTrack];
+    const isImageOverlayTrack = (t: Track) =>
+      t.type === 'overlay' && (t.id === 't_imgs' || /^t_imgs_\d+$/.test(t.id));
+    const firstImageIndex = existingTracks.findIndex((t) => isImageOverlayTrack(t));
+    const before = firstImageIndex >= 0 ? existingTracks.slice(0, firstImageIndex) : existingTracks;
+    const after =
+      firstImageIndex >= 0
+        ? existingTracks.slice(firstImageIndex).filter((t) => !isImageOverlayTrack(t))
+        : [];
+    const tracks: Track[] = [...before, ...result.overlayTracks, ...after];
     // Keep existing duration if set; otherwise use audio session duration so template stays "cut to audio size"
     const existingDuration = existing?.duration;
     const duration =
@@ -445,6 +447,8 @@ export async function startExport(ctx: HttpContext): Promise<HandlerResult> {
     const body = (ctx.body as { step?: number }) ?? {};
     const exportStep = Math.min(4, Math.max(1, Number(body.step ?? ctx.query?.step ?? 4))) as 1 | 2 | 3 | 4;
 
+    console.log('[EXPORT] Start requested', { projectId, exportStep });
+
     // Update status to exporting
     await projectService.updateStatus(projectId, 'exporting');
 
@@ -454,6 +458,7 @@ export async function startExport(ctx: HttpContext): Promise<HandlerResult> {
         const success = result && typeof result === 'object' && result.success;
         if (success) {
           await projectService.updateStatus(projectId, 'exported');
+          console.log('[EXPORT] Completed successfully', { projectId, videoPath: result.outputPath });
         } else {
           await projectService.updateStatus(projectId, 'ready');
           console.error('[EXPORT] Export failed', { projectId, error: result?.error });
@@ -757,8 +762,8 @@ export async function generateProjectPreview(ctx: HttpContext): Promise<HandlerR
       });
     }
 
-    const overlayTrack = project.timeline?.tracks?.find((t: { type: string; id: string }) => t.type === 'overlay' && t.id === 't_imgs');
-    const overlayClips = overlayTrack?.clips?.filter((c: { kind?: string }) => c.kind === 'overlay') ?? [];
+    const imageOverlayTracks = (project.timeline?.tracks ?? []).filter((t: { type: string; id: string }) => t.type === 'overlay' && (t.id === 't_imgs' || /^t_imgs_\d+$/.test(t.id)));
+    const overlayClips = imageOverlayTracks.flatMap((t: { clips?: { kind?: string }[] }) => t.clips?.filter((c: { kind?: string }) => c.kind === 'overlay') ?? []);
 
     // Optional: playhead time from client so we can render a short segment preview.
     const body = (ctx.body as any) || {};

@@ -60,6 +60,8 @@ export async function compileTimeline(
 
   const outputPath = path.join(outputDir, outputFilename);
 
+  console.log('[EXPORT] compileTimeline started', { projectId: project.id, outputPath, exportStep, quality });
+
   try {
     const { preset, crf, scale } = getQualitySettings(quality);
 
@@ -266,7 +268,7 @@ export async function compileTimeline(
       '-t', duration.toString(),
       '-y'
     );
-    console.log(`[FFmpeg] Export encoding mode: GPU (h264_nvenc), quality=${quality}, exportStep=${exportStep}`);
+    console.log('[EXPORT] FFmpeg running', { projectId: project.id, outputPath, duration });
     command.outputOptions(outputOpts);
 
     command.output(outputPath);
@@ -286,6 +288,7 @@ export async function compileTimeline(
     return new Promise((resolve, reject) => {
       command
         .on('end', () => {
+          console.log('[EXPORT] FFmpeg finished', { projectId: project.id, outputPath });
           if (onProgress) {
             onProgress(100, 'Video export complete');
           }

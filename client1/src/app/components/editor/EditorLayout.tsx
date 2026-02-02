@@ -25,7 +25,8 @@ function sortTracks(tracks: Track[]): Track[] {
 
 type Props = {
   project: EditorProject;
-  onProjectUpdate?: () => void;
+  /** Refetch project; if it returns the updated project, we sync draftProject so template/audio/timeline show without reload */
+  onProjectUpdate?: () => void | Promise<EditorProject | void>;
 };
 
 type TemplateVideo = {
@@ -73,6 +74,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
   const [previewVideoSrc, setPreviewVideoSrc] = useState<string | null>(null);
   const hlsPollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isInitialTimelineRef = useRef(true);
 
   const handlePlayToggle = async () => {
     const next = !isPlaying;
@@ -85,6 +87,14 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     // If playing and we have template + audio session, use full HLS preview only
     if (next && project.template?.src && project.audioSessionId && project.audioSessionId !== 'no-session') {
       if (!previewVideoSrc) {
+        if (isDirty) {
+          try {
+            await handleSaveTimeline(true);
+          } catch (e) {
+            setMessage({ type: 'error', text: 'Save failed. Save timeline first.' });
+            return;
+          }
+        }
         setIsGeneratingPreview(true);
         setMessage({ type: 'info', text: 'Generating preview...' });
         try {
@@ -112,6 +122,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
                 const absolutePlaylistUrl = `${API_BASE_URL}${data.playlistUrl}?t=${Date.now()}`;
                 setPreviewVideoSrc(absolutePlaylistUrl);
                 setIsGeneratingPreview(false);
+                setIsPlaying(true);
                 if (hlsPollIntervalRef.current) {
                   clearInterval(hlsPollIntervalRef.current);
                   hlsPollIntervalRef.current = null;
@@ -167,13 +178,28 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     setIsPlaying(false);
     setPreviewVideoSrc(null);
     setExportedVideoFilename(null);
-    
+    isInitialTimelineRef.current = true;
+
     // Clean up HLS polling interval
     if (hlsPollIntervalRef.current) {
       clearInterval(hlsPollIntervalRef.current);
       hlsPollIntervalRef.current = null;
     }
   }, [project.id]);
+
+  // When timeline changes (tracks or duration), clear preview so next play regenerates from current timeline
+  useEffect(() => {
+    if (isInitialTimelineRef.current) {
+      isInitialTimelineRef.current = false;
+      return;
+    }
+    setPreviewVideoSrc(null);
+    setIsPlaying(false);
+    if (hlsPollIntervalRef.current) {
+      clearInterval(hlsPollIntervalRef.current);
+      hlsPollIntervalRef.current = null;
+    }
+  }, [draftProject.tracks, draftProject.duration]);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -188,6 +214,18 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   useEffect(() => {
     fetchTemplates();
     fetchAudioSessions();
+  }, []);
+
+  // Refetch when editor tab becomes visible (e.g. after adding template/session elsewhere)
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        fetchTemplates();
+        fetchAudioSessions();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
   }, []);
 
   const fetchTemplates = async () => {
@@ -315,7 +353,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       if (data.success) {
         setMessage({ type: 'success', text: `Template changed to ${templateLabel}` });
         console.log('[EditorLayout] Calling onProjectUpdate after template change, hasCallback:', !!onProjectUpdate);
-        await onProjectUpdate?.();
+        const updated = await onProjectUpdate?.();
+        if (updated) setDraftProject(updated);
 
         // Get updated project data to check timeline state
         const updatedProjectResponse = await fetch(API_ENDPOINTS.getProject(project.id));
@@ -411,7 +450,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
               const saveData = await saveResponse.json();
               console.log('[EditorLayout] Save timeline response data:', saveData);
               console.log('[EditorLayout] Calling onProjectUpdate after saving template timeline');
-              await onProjectUpdate?.();
+              const updatedAfterSave = await onProjectUpdate?.();
+              if (updatedAfterSave) setDraftProject(updatedAfterSave);
             } catch (timelineError) {
               console.error('[EditorLayout] Template timeline build/save failed:', timelineError);
               // Don't show error to user, template was still updated successfully
@@ -461,7 +501,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         // Clear old preview since audio session changed
         setPreviewVideoSrc(null);
         
-        await onProjectUpdate?.();
+        const updated = await onProjectUpdate?.();
+        if (updated) setDraftProject(updated);
 
         // Get updated project to check for existing template track
         const updatedProjectResponse = await fetch(API_ENDPOINTS.getProject(project.id));
@@ -477,13 +518,17 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         })) || [];
         
         const timelineIsEmpty = currentTracks.length === 0 || currentTracks.every((t: any) => (t.clips || []).length === 0);
+        const hasAudioTrackWithClips = currentTracks.some((t: any) => t.type === 'audio' && (t.clips || []).length > 0);
+        const needsAudioTrack = timelineIsEmpty || !hasAudioTrackWithClips;
         console.log('[EditorLayout] Checking timeline after audio session change:', {
           timelineIsEmpty,
+          hasAudioTrackWithClips,
+          needsAudioTrack,
           tracksCount: currentTracks.length,
           clipsCount: currentTracks.reduce((sum: number, t: any) => sum + (t.clips || []).length, 0),
           tracks: currentTracks.map((t: any) => ({ id: t.id, name: t.name, type: t.type, clipsCount: (t.clips || []).length }))
         });
-        if (timelineIsEmpty) {
+        if (needsAudioTrack) {
           try {
             console.log('[EditorLayout] Building audio-only timeline for session:', audioSessionId);
             const timeline = await buildAudioOnlyTimeline(audioSessionId, sessionName, currentTracks);
@@ -510,7 +555,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             const saveData = await saveResponse.json();
             console.log('[EditorLayout] Save timeline response data:', saveData);
             console.log('[EditorLayout] Calling onProjectUpdate after saving timeline');
-            await onProjectUpdate?.();
+            const updatedAfterSave = await onProjectUpdate?.();
+            if (updatedAfterSave) setDraftProject(updatedAfterSave);
             
             // Proactively generate preview in background if we have template + audio session
             if (updatedProject?.template?.src) {
@@ -762,9 +808,9 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const hasSubtitlesAndChars = draftProject.tracks.some(t =>
     (t.type === 'subtitle' || t.type === 'character') && t.clips.length > 0
   );
-  // Image plan generated (t_imgs overlay track has clips)
+  // Image plan generated (any image overlay track t_imgs / t_imgs_N has clips)
   const hasImagePlan = draftProject.tracks.some(t =>
-    t.id === 't_imgs' && t.type === 'overlay' && t.clips.length > 0
+    t.type === 'overlay' && (t.id === 't_imgs' || /^t_imgs_\d+$/.test(t.id)) && t.clips.length > 0
   );
 
   const handleGenerateSubtitlesAndChars = async () => {
@@ -786,7 +832,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
 
       if (data.success && data.project) {
         setMessage({ type: 'success', text: 'Subtitles & characters generated!' });
-        if (onProjectUpdate) onProjectUpdate();
+        const updated = await onProjectUpdate?.();
+        if (updated) setDraftProject(updated);
         setTimeout(() => setMessage(null), 3000);
       } else {
         throw new Error(data.error || 'Failed to generate');
@@ -821,7 +868,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
 
       if (data.success && data.project) {
         setMessage({ type: 'success', text: 'Image plan generated!' });
-        if (onProjectUpdate) onProjectUpdate();
+        const updated = await onProjectUpdate?.();
+        if (updated) setDraftProject(updated);
         setTimeout(() => setMessage(null), 3000);
       } else {
         throw new Error(data.error || 'Failed to generate image plan');
@@ -858,7 +906,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       
       if (data.success) {
         setIsDirty(false);
-        onProjectUpdate?.();
+        const updated = await onProjectUpdate?.();
+        if (updated) setDraftProject(updated);
         if (isAutoSave) {
           setMessage({ type: 'success', text: 'Saved' });
           setTimeout(() => setMessage(null), 1500);
@@ -920,7 +969,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
           if (update.type === 'progress') {
             setExportProgress(update.percent || 0);
             setMessage({ type: 'info', text: update.message || `Exporting: ${update.percent}%` });
-          } else if (update.type === 'complete') {
+          } else if (update.type === 'completed' || update.type === 'complete') {
             completed = true;
             setExportProgress(100);
             setMessage({ type: 'success', text: 'Export complete! Video is ready.' });
@@ -928,9 +977,9 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             if (filename) setExportedVideoFilename(filename);
             eventSource.close();
             setIsExporting(false);
-            if (onProjectUpdate) {
-              onProjectUpdate();
-            }
+            void Promise.resolve(onProjectUpdate?.()).then((updated: EditorProject | void) => {
+              if (updated) setDraftProject(updated);
+            });
           } else if (update.type === 'error') {
             setMessage({ type: 'error', text: update.message || 'Export failed' });
             eventSource.close();
@@ -969,6 +1018,12 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             project={draftProject}
             width={sidebarWidth}
             onWidthChange={setSidebarWidth}
+            templates={templates}
+            audioSessions={audioSessions}
+            onTabFocus={(tab) => {
+              if (tab === 'audioSession') fetchAudioSessions();
+              if (tab === 'template') fetchTemplates();
+            }}
             onChangeAudioSession={async (sessionId) => {
               const session = audioSessions.find(s => s.sessionId === sessionId);
               await handleChangeAudioSession(sessionId, session?.name || sessionId);

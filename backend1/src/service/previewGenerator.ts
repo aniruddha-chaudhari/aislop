@@ -147,7 +147,6 @@ export async function generatePreview(
         '-shortest', // End when shortest input ends
         '-y' // Overwrite
       ]);
-    console.log('[FFmpeg] Preview encoding mode: GPU (h264_nvenc)');
     command.output(outputPath);
 
     // Track progress
@@ -424,11 +423,11 @@ export async function generateTimelinePreview(
       concatCmd.run();
     });
 
-    const overlayTrack = timeline?.tracks?.find((t: any) => t.type === 'overlay' && t.id === 't_imgs');
+    const imageOverlayTracks = (timeline?.tracks ?? []).filter((t: any) => t.type === 'overlay' && (t.id === 't_imgs' || /^t_imgs_\d+$/.test(t.id)));
     const characterTrack = timeline?.tracks?.find((t: any) => t.type === 'character');
     const subtitleTrack = timeline?.tracks?.find((t: any) => t.type === 'subtitle');
 
-    const overlayClips = (overlayTrack?.clips?.filter((c: any) => c.kind === 'overlay') || []) as OverlayClip[];
+    const overlayClips = imageOverlayTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'overlay') || [])) as OverlayClip[];
     const characterClips = (characterTrack?.clips?.filter((c: any) => c.kind === 'character') || []) as CharacterClip[];
     let subtitleClips = (subtitleTrack?.clips?.filter((c: any) => c.kind === 'subtitle') || []) as SubtitleClip[];
 
@@ -577,7 +576,6 @@ export async function generateTimelinePreview(
         '-ar', '22050',
         '-y'
       ]);
-    console.log('[FFmpeg] Timeline preview encoding mode: GPU (h264_nvenc)');
     command.output(outputPath);
 
     command.on('progress', (p: any) => {
@@ -666,11 +664,6 @@ export async function generateTimelinePreviewHls(
     // FFmpeg on Windows prefers forward slashes in filter/filename args.
     const segmentPattern = segmentPatternRaw.replace(/\\/g, '/');
 
-    // If playlist already exists for this version, assume preview is ready.
-    if (fs.existsSync(playlistPath)) {
-      return { success: true, playlistPath };
-    }
-
     if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
     onProgress?.(10, 'Concatenating audio for HLS preview...');
@@ -692,11 +685,11 @@ export async function generateTimelinePreviewHls(
       concatCmd.run();
     });
 
-    const overlayTrack = timeline?.tracks?.find((t: any) => t.type === 'overlay' && t.id === 't_imgs');
+    const imageOverlayTracks = (timeline?.tracks ?? []).filter((t: any) => t.type === 'overlay' && (t.id === 't_imgs' || /^t_imgs_\d+$/.test(t.id)));
     const characterTrack = timeline?.tracks?.find((t: any) => t.type === 'character');
     const subtitleTrack = timeline?.tracks?.find((t: any) => t.type === 'subtitle');
 
-    const overlayClips = (overlayTrack?.clips?.filter((c: any) => c.kind === 'overlay') || []) as OverlayClip[];
+    const overlayClips = imageOverlayTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'overlay') || [])) as OverlayClip[];
     const characterClips = (characterTrack?.clips?.filter((c: any) => c.kind === 'character') || []) as CharacterClip[];
     let subtitleClips = (subtitleTrack?.clips?.filter((c: any) => c.kind === 'subtitle') || []) as SubtitleClip[];
 
@@ -829,11 +822,6 @@ export async function generateTimelinePreviewHls(
         '-hls_segment_filename', segmentPattern,
         '-y',
       ]);
-    console.log('[FFmpeg] Timeline HLS preview encoding mode: GPU (h264_nvenc)', {
-      projectId,
-      version,
-      hlsDir,
-    });
     command.output(playlistPath);
 
     command.on('progress', (p: any) => {
@@ -862,11 +850,6 @@ export async function generateTimelinePreviewHls(
               (match) => `${segmentBaseUrl}/${match}`
             );
             fs.writeFileSync(playlistPath, rewrittenPlaylist, 'utf8');
-            console.log('[HLS] Rewrote playlist segment paths', { 
-              projectId, 
-              version,
-              sampleSegment: `${segmentBaseUrl}/seg_000.ts`
-            });
           } catch (rewriteErr) {
             console.warn('[HLS] Failed to rewrite playlist segment paths', rewriteErr);
             // Continue anyway - segments might still work if served from same origin
@@ -976,7 +959,7 @@ export async function generateTimelineSegmentPreview(
       concatCmd.run();
     });
 
-    const overlayTrack = timeline?.tracks?.find((t: any) => t.type === 'overlay' && t.id === 't_imgs');
+    const imageOverlayTracks = (timeline?.tracks ?? []).filter((t: any) => t.type === 'overlay' && (t.id === 't_imgs' || /^t_imgs_\d+$/.test(t.id)));
     const characterTrack = timeline?.tracks?.find((t: any) => t.type === 'character');
 
     const sliceClipsToWindow = <T extends { start: number; duration: number }>(clips: T[]): T[] => {
@@ -1001,7 +984,7 @@ export async function generateTimelineSegmentPreview(
     };
 
     const overlayClips = sliceClipsToWindow(
-      (overlayTrack?.clips?.filter((c: any) => c.kind === 'overlay') || []) as OverlayClip[]
+      imageOverlayTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'overlay') || [])) as OverlayClip[]
     );
     const characterClips = sliceClipsToWindow(
       (characterTrack?.clips?.filter((c: any) => c.kind === 'character') || []) as CharacterClip[]
@@ -1139,13 +1122,6 @@ export async function generateTimelineSegmentPreview(
         '-ar', '22050',
         '-y'
       ]);
-    console.log('[FFmpeg] Timeline SEGMENT preview encoding mode: GPU (h264_nvenc)', {
-      projectId,
-      centerTime: safeCenter,
-      segmentStart,
-      segmentEnd,
-      segmentDuration,
-    });
     command.output(outputPath);
 
     command.on('progress', (p: any) => {

@@ -28,10 +28,15 @@ type Props = {
   project: EditorProject;
   width: number;
   onWidthChange: (width: number) => void;
+  /** Passed from parent so sidebar updates immediately after add/upload without reload */
+  templates?: TemplateVideo[];
+  audioSessions?: AudioSession[];
   onChangeAudioSession?: (sessionId: string) => void;
   onChangeTemplate?: (path: string, label: string) => void;
   onUploadTemplate?: (file: File) => void;
   uploadingTemplate?: boolean;
+  /** Called when user switches to template or audio session tab so parent can refetch lists */
+  onTabFocus?: (tab: 'audioSession' | 'template') => void;
 };
 
 /** Audio Session + Template buttons (in tab bar); Assets kept separate below. */
@@ -51,19 +56,26 @@ export default function EditorSidebar({
   project, 
   width, 
   onWidthChange, 
+  templates: templatesProp,
+  audioSessions: audioSessionsProp,
   onChangeAudioSession, 
   onChangeTemplate,
   onUploadTemplate,
-  uploadingTemplate 
+  uploadingTemplate,
+  onTabFocus,
 }: Props) {
   const [activeTab, setActiveTab] = useState<SidebarTab>('audioSession');
   const [isOpen, setIsOpen] = useState(true);
   const [isResizing, setIsResizing] = useState(false);
   
-  // Data
-  const [audioSessions, setAudioSessions] = useState<AudioSession[]>([]);
-  const [templates, setTemplates] = useState<TemplateVideo[]>([]);
+  // Local data when parent doesn't pass lists (e.g. standalone usage)
+  const [audioSessionsLocal, setAudioSessionsLocal] = useState<AudioSession[]>([]);
+  const [templatesLocal, setTemplatesLocal] = useState<TemplateVideo[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Use parent's lists when provided so UI updates without reload after add/upload
+  const audioSessions = audioSessionsProp ?? audioSessionsLocal;
+  const templates = templatesProp ?? templatesLocal;
 
   const handleMouseDown = () => {
     setIsResizing(true);
@@ -81,17 +93,17 @@ export default function EditorSidebar({
     try {
       setLoading(true);
       
-      // Fetch audio sessions
+      // Fetch audio sessions (only update local when parent doesn't pass props)
       const audioResponse = await fetch(API_ENDPOINTS.audio);
       const audioData = await audioResponse.json();
       const sessions = audioData.success ? audioData.sessions : audioData.sessions || [];
-      setAudioSessions(sessions);
+      setAudioSessionsLocal(sessions);
 
       // Fetch templates
       const templateResponse = await fetch(API_ENDPOINTS.templateVideos);
       const templateData = await templateResponse.json();
       const temps = templateData.templates || templateData.videos || [];
-      setTemplates(temps);
+      setTemplatesLocal(temps);
 
       setLoading(false);
     } catch (error) {
@@ -140,7 +152,10 @@ export default function EditorSidebar({
           {projectButtons.map((b) => (
             <button
               key={b.id}
-              onClick={() => setActiveTab(b.id)}
+              onClick={() => {
+                setActiveTab(b.id);
+                if (b.id === 'audioSession' || b.id === 'template') onTabFocus?.(b.id);
+              }}
               className={`flex items-center justify-center px-3 py-2 rounded text-xs font-medium transition ${
                 activeTab === b.id ? 'bg-accent text-card' : 'text-foreground hover:bg-muted'
               }`}
