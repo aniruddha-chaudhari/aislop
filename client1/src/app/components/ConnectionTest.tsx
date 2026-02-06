@@ -12,8 +12,6 @@ export default function ConnectionTest() {
     setTestResult('');
 
     try {
-      console.log('Testing connection to:', `${API_BASE_URL}/api/audio/test-connection`);
-      
       const response = await fetch(`${API_BASE_URL}/api/audio/test-connection`, {
         method: 'GET',
         headers: {
@@ -29,7 +27,6 @@ export default function ConnectionTest() {
       const data = await response.json();
       setTestResult(`✅ Connection successful! ${data.message}`);
     } catch (error: any) {
-      console.error('Connection test error:', error);
       setTestResult(`❌ Connection failed: ${error.message}`);
     } finally {
       setTesting(false);

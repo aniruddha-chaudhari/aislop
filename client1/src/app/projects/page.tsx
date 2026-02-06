@@ -68,7 +68,6 @@ export default function ProjectsPage() {
         throw new Error(data.error || 'Failed to fetch projects');
       }
     } catch (err) {
-      console.error('Error fetching projects:', err);
       setError(err instanceof Error ? err.message : 'Failed to fetch projects');
     } finally {
       setLoading(false);
@@ -100,7 +99,6 @@ export default function ProjectsPage() {
         throw new Error(data.error || 'Failed to delete project');
       }
     } catch (err) {
-      console.error('Error deleting project:', err);
       setError(err instanceof Error ? err.message : 'Failed to delete project');
     } finally {
       setDeletingId(null);

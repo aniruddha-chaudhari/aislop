@@ -34,7 +34,6 @@ export default function EditorPage() {
   }, [projectId]);
 
   const fetchProject = async (): Promise<EditorProject | undefined> => {
-    console.log('[EditorPage] fetchProject called for projectId:', projectId);
     const isRefresh = !!project;
     try {
       if (!isRefresh) setLoading(true);
@@ -45,7 +44,6 @@ export default function EditorPage() {
       if (!response.ok) {
         // Fallback to mock data if project doesn't exist
         if (response.status === 404) {
-          console.log('Project not found, using mock data');
           const mock = makeMockProject(projectId);
           setProject(mock);
           setLoading(false);
@@ -55,18 +53,7 @@ export default function EditorPage() {
       }
 
       const data = await response.json();
-      
-      console.log('[EditorPage] fetchProject response data:', {
-        success: data.success,
-        hasProject: !!data.project,
-        rawProject: data.project,
-        audioSessionId: data.project?.audioSessionId,
-        templatePath: data.project?.template?.path,
-        timelineTracksCount: data.project?.timeline?.tracks?.length,
-        timelineDuration: data.project?.timeline?.duration,
-        timelineTracks: data.project?.timeline?.tracks
-      });
-      
+
       if (data.success && data.project) {
         // Transform backend project to EditorProject format
         const backendProject = data.project;
@@ -92,35 +79,13 @@ export default function EditorPage() {
             muted: track.muted,
           }))),
         };
-        
-        console.log('[EditorPage] Setting editorProject state:', {
-          projectId: editorProject.id,
-          audioSessionId: editorProject.audioSessionId,
-          templateSrc: editorProject.template?.src,
-          templateLabel: editorProject.template?.label,
-          duration: editorProject.duration,
-          tracksCount: editorProject.tracks.length,
-          tracks: editorProject.tracks.map(t => ({
-            id: t.id,
-            name: t.name,
-            type: t.type,
-            clipsCount: t.clips.length,
-            clips: t.clips.map(c => ({
-              id: c.id,
-              kind: c.kind,
-              start: c.start,
-              duration: c.duration,
-              label: c.kind === 'subtitle' ? c.speaker : c.kind === 'character' ? c.character : c.kind === 'overlay' ? c.label : c.label
-            }))
-          }))
-        });
+
         setProject(editorProject);
         return editorProject;
       } else {
         throw new Error(data.error || 'Failed to fetch project');
       }
     } catch (err) {
-      console.error('Error fetching project:', err);
       setError(err instanceof Error ? err.message : 'Failed to fetch project');
       // Fallback to mock data on error
       const mock = makeMockProject(projectId);

@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import ConditionalNavbar from "./components/ConditionalNavbar";
@@ -15,8 +15,13 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "AI Slope - AI-Powered Content Generation",
-  description: "Generate conversations, videos, and content with AI-powered tools and analysis",
-  viewport: "width=device-width, initial-scale=1",
+  description:
+    "Generate conversations, videos, and content with AI-powered tools and analysis",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({

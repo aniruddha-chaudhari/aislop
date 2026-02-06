@@ -1,4 +1,4 @@
-export type TrackType = 'audio' | 'subtitle' | 'overlay' | 'character';
+export type TrackType = 'audio' | 'music' | 'sfx' | 'subtitle' | 'overlay' | 'character';
 
 export type BaseClip = {
   id: string;
@@ -9,6 +9,18 @@ export type BaseClip = {
 export type AudioClip = BaseClip & {
   kind: 'audio';
   label: string;
+};
+
+export type MusicClip = BaseClip & {
+  kind: 'music';
+  path: string;
+  volume?: number;
+};
+
+export type SfxClip = BaseClip & {
+  kind: 'sfx';
+  path: string;
+  volume?: number;
 };
 
 export type WordTimestamp = { word: string; start: number; end: number };
@@ -40,7 +52,7 @@ export type CharacterClip = BaseClip & {
   scale: number;
 };
 
-export type Clip = AudioClip | SubtitleClip | OverlayClip | CharacterClip;
+export type Clip = AudioClip | MusicClip | SfxClip | SubtitleClip | OverlayClip | CharacterClip;
 
 export type ClipRef = {
   trackId: string;
@@ -79,4 +91,3 @@ export type EditorProject = {
   };
   tracks: Track[];
 };
-

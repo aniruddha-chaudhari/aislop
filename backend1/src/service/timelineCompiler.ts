@@ -1,10 +1,11 @@
 import fs from 'fs';
 import path from 'path';
-import { Project, Timeline, Track, SubtitleClip, OverlayClip, CharacterClip } from '../schema/project';
+import { Project, Timeline, Track, SubtitleClip, OverlayClip, CharacterClip, MusicClip, SfxClip } from '../schema/project';
 import { publishFileUpdate } from './eventEmitter';
 import { getCharacterImagePath } from '../utils/characterImages';
 import { enrichSubtitleClipsWithWords } from './previewGenerator';
 import { getSessionDuration } from './sessionDuration';
+import { computeOverlayPlacement } from './overlayTransform';
 
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
@@ -26,6 +27,71 @@ function resolveTemplatePath(templatePath: string): string {
   if (fs.existsSync(alt)) return alt;
   const inCwd = path.join(process.cwd(), templatePath);
   return fs.existsSync(inCwd) ? inCwd : templatePath;
+}
+
+function resolveAudioClipPath(clipPath: string): string | null {
+  if (!clipPath) return null;
+  if (/^https?:\/\//i.test(clipPath)) return clipPath;
+  const normalized = clipPath.replace(/\\/g, '/');
+  if (fs.existsSync(clipPath)) return clipPath;
+  const inCwd = path.join(process.cwd(), clipPath);
+  if (fs.existsSync(inCwd)) return inCwd;
+  // If clipPath already starts with audio_assets/, resolve from storage/
+  if (normalized.startsWith('audio_assets/')) {
+    const inStorage = path.join(process.cwd(), 'storage', normalized);
+    if (fs.existsSync(inStorage)) return inStorage;
+  }
+  if (normalized.startsWith('storage/audio_assets/')) {
+    const inStorage = path.join(process.cwd(), normalized);
+    if (fs.existsSync(inStorage)) return inStorage;
+  }
+  const inAudioAssets = path.join(process.cwd(), 'storage', 'audio_assets', clipPath);
+  if (fs.existsSync(inAudioAssets)) return inAudioAssets;
+  return null;
+}
+
+type AudioInputRef = { clip: MusicClip | SfxClip; inputIndex: number; kind: 'music' | 'sfx' };
+
+function buildAudioMixFilter(
+  dialogueInputIndex: number | null,
+  musicInputs: AudioInputRef[],
+  sfxInputs: AudioInputRef[]
+): { filter: string | null; outputLabel: string | null } {
+  const filters: string[] = [];
+  const labels: string[] = [];
+
+  if (dialogueInputIndex !== null) {
+    filters.push(
+      `[${dialogueInputIndex}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a_dialogue]`
+    );
+    labels.push('[a_dialogue]');
+  }
+
+  const addClip = (clip: MusicClip | SfxClip, inputIndex: number, prefix: string, index: number) => {
+    const label = `${prefix}_${index}`;
+    const duration = typeof clip.duration === 'number' && clip.duration > 0 ? clip.duration : null;
+    const volume = typeof clip.volume === 'number' && Number.isFinite(clip.volume) ? Math.max(0, clip.volume) : 1;
+    const delayMs = Math.max(0, Math.round((clip.start || 0) * 1000));
+
+    const chain: string[] = [];
+    if (duration) chain.push(`atrim=0:${duration}`);
+    chain.push('asetpts=PTS-STARTPTS');
+    if (volume !== 1) chain.push(`volume=${volume}`);
+    if (delayMs > 0) chain.push(`adelay=${delayMs}|${delayMs}`);
+    chain.push('aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo');
+
+    filters.push(`[${inputIndex}:a]${chain.join(',')}[${label}]`);
+    labels.push(`[${label}]`);
+  };
+
+  musicInputs.forEach((input, i) => addClip(input.clip, input.inputIndex, 'a_music', i));
+  sfxInputs.forEach((input, i) => addClip(input.clip, input.inputIndex, 'a_sfx', i));
+
+  if (labels.length === 0) return { filter: null, outputLabel: null };
+  if (labels.length === 1) return { filter: filters.join(';'), outputLabel: labels[0] };
+
+  filters.push(`${labels.join('')}amix=inputs=${labels.length}:duration=longest:dropout_transition=0[a_mix]`);
+  return { filter: filters.join(';'), outputLabel: '[a_mix]' };
 }
 
 // Ensure directories exist
@@ -77,6 +143,8 @@ export async function compileTimeline(
 
     const overlayClips: OverlayClip[] = [];
     const characterClips: CharacterClip[] = [];
+    const musicClips: MusicClip[] = [];
+    const sfxClips: SfxClip[] = [];
 
     if (project.timeline && project.timeline.tracks.length > 0) {
       // Get overlay clips from ALL overlay tracks except t_overlay_template (template is already input 0)
@@ -86,6 +154,14 @@ export async function compileTimeline(
       });
       const characterTrack = project.timeline.tracks.find(t => t.type === 'character');
       characterClips.push(...(characterTrack?.clips.filter(c => c.kind === 'character') as CharacterClip[] || []));
+      const musicTracks = project.timeline.tracks.filter(t => t.type === 'music');
+      musicTracks.forEach(t => {
+        musicClips.push(...(t.clips.filter(c => c.kind === 'music') as MusicClip[]));
+      });
+      const sfxTracks = project.timeline.tracks.filter(t => t.type === 'sfx');
+      sfxTracks.forEach(t => {
+        sfxClips.push(...(t.clips.filter(c => c.kind === 'sfx') as SfxClip[]));
+      });
     }
 
     let assPath: string | null = null;
@@ -116,9 +192,40 @@ export async function compileTimeline(
 
     const audioPath = await getAudioPath(project);
     let nextInputIndex = 1; // 0 = template
+    const dialogueInputIndex = audioPath ? nextInputIndex : null;
     if (audioPath) {
       command.input(audioPath).inputOptions(['-t', duration.toString()]);
       nextInputIndex++;
+    }
+
+    const musicInputs: AudioInputRef[] = [];
+    for (const clip of musicClips) {
+      const resolved = resolveAudioClipPath(clip.path);
+      console.log('[Export] music clip', {
+        path: clip.path,
+        resolved,
+        start: clip.start,
+        duration: clip.duration,
+        volume: (clip as any).volume,
+      });
+      if (!resolved) continue;
+      command.input(resolved);
+      musicInputs.push({ clip, inputIndex: nextInputIndex++, kind: 'music' });
+    }
+
+    const sfxInputs: AudioInputRef[] = [];
+    for (const clip of sfxClips) {
+      const resolved = resolveAudioClipPath(clip.path);
+      console.log('[Export] sfx clip', {
+        path: clip.path,
+        resolved,
+        start: clip.start,
+        duration: clip.duration,
+        volume: (clip as any).volume,
+      });
+      if (!resolved) continue;
+      command.input(resolved);
+      sfxInputs.push({ clip, inputIndex: nextInputIndex++, kind: 'sfx' });
     }
 
     // Overlay images (step 3+): -loop 1 so overlay filter gets frames at any timestamp
@@ -146,7 +253,13 @@ export async function compileTimeline(
     }
 
     // Step 1: template + audio only, use simple -vf (no filter_complex)
-    const useSimpleVf = exportStep === 1;
+    const needsAudioMixing = musicInputs.length > 0 || sfxInputs.length > 0;
+    console.log('[Export] audio mix', {
+      musicInputs: musicInputs.length,
+      sfxInputs: sfxInputs.length,
+      needsAudioMixing,
+    });
+    const useSimpleVf = exportStep === 1 && !needsAudioMixing;
     const scaleVf = 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p';
 
     let filterComplex = `[0:v]${scaleVf}[bg]`;
@@ -160,18 +273,26 @@ export async function compileTimeline(
       lastLabel = 'with_subs';
     }
 
-    // Overlay placement (step 3+): match imageEmbedder - 960x720, center x, 40px from top
-    const OVERLAY_SCALE_W = 960;
-    const OVERLAY_SCALE_H = 720;
-    const OVERLAY_Y_TOP = 40;
+    // Overlay base size (legacy default scale=0.5) and legacy top offset.
+    const OVERLAY_BASE_W = 960;
+    const OVERLAY_BASE_H = 720;
+    const OVERLAY_LEGACY_TOP_Y = 40;
     if (exportStep >= 3) {
-    overlayInputs.forEach(({ clip, inputIndex }, index) => {
-      const scaledLabel = `scaled_${index}`;
-      const overlayLabel = `with_overlay_${index}`;
-      filterComplex += `;[${inputIndex}:v]scale=${OVERLAY_SCALE_W}:${OVERLAY_SCALE_H}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
-      filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=(W-w)/2:${OVERLAY_Y_TOP}:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
-      lastLabel = overlayLabel;
-    });
+      overlayInputs.forEach(({ clip, inputIndex }, index) => {
+        const placement = computeOverlayPlacement(
+          clip,
+          1080,
+          1920,
+          OVERLAY_BASE_W,
+          OVERLAY_BASE_H,
+          OVERLAY_LEGACY_TOP_Y
+        );
+        const scaledLabel = `scaled_${index}`;
+        const overlayLabel = `with_overlay_${index}`;
+        filterComplex += `;[${inputIndex}:v]scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
+        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
+        lastLabel = overlayLabel;
+      });
     }
 
     // Character overlays (step 4)
@@ -217,6 +338,13 @@ export async function compileTimeline(
 
     filterComplex += `;[${lastLabel}]format=yuv420p,setsar=1[final]`;
 
+    const audioMix = needsAudioMixing
+      ? buildAudioMixFilter(dialogueInputIndex, musicInputs, sfxInputs)
+      : { filter: null, outputLabel: null };
+    if (audioMix.filter) {
+      filterComplex += `;${audioMix.filter}`;
+    }
+
     if (useSimpleVf) {
       // Step 1: no filter_complex, use -vf for template scaling only
       command.outputOptions(['-vf', scaleVf]);
@@ -225,16 +353,30 @@ export async function compileTimeline(
     }
 
     // When audioPath exists: input 0=template, 1=audio. When not: input 1 is first overlay (no audio).
-    const audioStream = audioPath ? '1:a:0' : '0:a:0?';
+    const audioStream = audioMix.outputLabel ?? (audioPath ? '1:a:0' : '0:a:0?');
     const inputOrder = [
       '0: template',
-      audioPath ? '1: audio' : '1: (first overlay, no audio)',
+      audioPath ? '1: audio' : '1: (first extra input, no dialogue audio)',
+      ...musicInputs.map((m, i) => `${m.inputIndex}: music_${i}`),
+      ...sfxInputs.map((s, i) => `${s.inputIndex}: sfx_${i}`),
       ...overlayInputs.map((o, i) => `${o.inputIndex}: overlay_${i}`),
       ...characterInputs.map((c, i) => `${c.inputIndex}: char_${i}`),
     ];
     const allInputPaths = [
       { index: 0, type: 'template', path: templatePath, exists: fs.existsSync(templatePath) },
       ...(audioPath ? [{ index: 1, type: 'audio', path: audioPath, exists: fs.existsSync(audioPath) }] : []),
+      ...musicInputs.map(({ clip, inputIndex }) => ({
+        index: inputIndex,
+        type: 'music',
+        path: clip.path,
+        exists: !!resolveAudioClipPath(clip.path),
+      })),
+      ...sfxInputs.map(({ clip, inputIndex }) => ({
+        index: inputIndex,
+        type: 'sfx',
+        path: clip.path,
+        exists: !!resolveAudioClipPath(clip.path),
+      })),
       ...overlayInputs.map(({ clip, inputIndex }) => {
         const p = clip.path ?? path.join(IMAGE_UPLOAD_DIR, project.audioSessionId, `${clip.assetId}.png`);
         return { index: inputIndex, type: 'overlay', path: p, exists: fs.existsSync(p) };

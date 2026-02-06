@@ -11,6 +11,24 @@ export const AudioClipSchema = z.object({
   label: z.string(),
 });
 
+export const MusicClipSchema = z.object({
+  id: z.string(),
+  kind: z.literal('music'),
+  path: z.string(),
+  start: z.number(),
+  duration: z.number(),
+  volume: z.number().optional(),
+});
+
+export const SfxClipSchema = z.object({
+  id: z.string(),
+  kind: z.literal('sfx'),
+  path: z.string(),
+  start: z.number(),
+  duration: z.number().optional(),
+  volume: z.number().optional(),
+});
+
 export const WordTimestampSchema = z.object({
   word: z.string(),
   start: z.number(),
@@ -53,6 +71,8 @@ export const CharacterClipSchema = z.object({
 
 export const ClipSchema = z.discriminatedUnion('kind', [
   AudioClipSchema,
+  MusicClipSchema,
+  SfxClipSchema,
   SubtitleClipSchema,
   OverlayClipSchema,
   CharacterClipSchema,
@@ -63,7 +83,7 @@ export const ClipSchema = z.discriminatedUnion('kind', [
  */
 export const TrackSchema = z.object({
   id: z.string(),
-  type: z.enum(['audio', 'subtitle', 'overlay', 'character']),
+  type: z.enum(['audio', 'music', 'sfx', 'subtitle', 'overlay', 'character']),
   name: z.string(),
   clips: z.array(ClipSchema),
   locked: z.boolean().optional(),
@@ -107,6 +127,8 @@ export const ProjectSchema = z.object({
  */
 export type WordTimestamp = z.infer<typeof WordTimestampSchema>;
 export type AudioClip = z.infer<typeof AudioClipSchema>;
+export type MusicClip = z.infer<typeof MusicClipSchema>;
+export type SfxClip = z.infer<typeof SfxClipSchema>;
 export type SubtitleClip = z.infer<typeof SubtitleClipSchema>;
 export type OverlayClip = z.infer<typeof OverlayClipSchema>;
 export type CharacterClip = z.infer<typeof CharacterClipSchema>;

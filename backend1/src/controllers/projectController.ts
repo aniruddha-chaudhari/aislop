@@ -9,6 +9,7 @@ import { generatePreview, generateTimelinePreview, generateTimelineSegmentPrevie
 import { ProjectSchema, TimelineSchema } from '../schema/project';
 import fs from 'fs';
 import path from 'path';
+import { generateSfxTrack } from '../service/sfxService';
 
 /**
  * Create a new project
@@ -264,9 +265,13 @@ export async function generateAiDraftForProject(ctx: HttpContext): Promise<Handl
     const existing = project.timeline;
     const existingTracks = (existing?.tracks ?? []) as Track[];
     const overlayTracks = existingTracks.filter((t) => t.type === 'overlay');
+    const musicTracks = existingTracks.filter((t) => t.type === 'music');
+    const sfxTracks = existingTracks.filter((t) => t.type === 'sfx');
     const tracks: Track[] = [
       ...overlayTracks,
       result.audioTrack,
+      ...musicTracks,
+      ...sfxTracks,
       result.subtitleTrack,
       result.characterTrack,
     ];
@@ -284,6 +289,12 @@ export async function generateAiDraftForProject(ctx: HttpContext): Promise<Handl
       message: 'Subtitles & characters generated successfully',
     });
   } catch (error) {
+    console.error('[Project] generateAiDraftForProject error', {
+      projectId: ctx.params?.id,
+      body: ctx.body,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to generate AI draft',
@@ -366,6 +377,60 @@ export async function generateImagePlanForProject(ctx: HttpContext): Promise<Han
 }
 
 /**
+ * Generate SFX plan for a project (uses existing image plan overlay timings)
+ * POST /api/project/:id/sfx-plan
+ */
+export async function generateSfxPlanForProject(ctx: HttpContext): Promise<HandlerResult> {
+  try {
+    const projectId = ctx.params?.id;
+    if (!projectId) {
+      return jsonResponse(400, { success: false, error: 'Project ID is required' });
+    }
+
+    const project = await projectService.getProject(projectId);
+    if (!project) {
+      return jsonResponse(404, { success: false, error: 'Project not found' });
+    }
+
+    const timeline = project.timeline;
+    if (!timeline || !timeline.tracks) {
+      return jsonResponse(400, { success: false, error: 'Project has no timeline' });
+    }
+
+    const overlayTracks = timeline.tracks.filter((t: any) => t.type === 'overlay');
+    const subtitleTrack = timeline.tracks.find((t: any) => t.type === 'subtitle');
+    const overlayClips = overlayTracks.flatMap((t: any) => (t.clips ?? []).filter((c: any) => c.kind === 'overlay'));
+    const subtitleClips = (subtitleTrack?.clips ?? []).filter((c: any) => c.kind === 'subtitle');
+
+    const sfxTrack = await generateSfxTrack({
+      overlayClips,
+      subtitleClips,
+      duration: timeline.duration ?? 0,
+    });
+
+    const tracksWithoutSfx = timeline.tracks.filter((t: any) => t.type !== 'sfx');
+    const nextTimeline = {
+      ...timeline,
+      tracks: [...tracksWithoutSfx, sfxTrack],
+    };
+
+    const updatedProject = await projectService.updateTimeline(projectId, nextTimeline);
+
+    return jsonResponse(200, {
+      success: true,
+      project: updatedProject,
+      timeline: nextTimeline,
+      message: 'SFX plan generated successfully',
+    });
+  } catch (error) {
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to generate SFX plan',
+    });
+  }
+}
+
+/**
  * Save timeline edits
  * PUT /api/project/:id/timeline
  */
@@ -390,6 +455,19 @@ export async function saveTimeline(ctx: HttpContext): Promise<HandlerResult> {
 
     // Validate timeline with schema
     const timeline = TimelineSchema.parse(body.timeline);
+
+    // Debug: log audio asset tracks being saved (music/sfx)
+    const trackTypes = (timeline.tracks ?? []).map((t: any) => t.type);
+    const musicTracks = (timeline.tracks ?? []).filter((t: any) => t.type === 'music');
+    const sfxTracks = (timeline.tracks ?? []).filter((t: any) => t.type === 'sfx');
+    console.log('[Timeline Save] Tracks', {
+      projectId,
+      trackTypes,
+      musicTracks: musicTracks.length,
+      sfxTracks: sfxTracks.length,
+      musicClips: musicTracks.reduce((acc: number, t: any) => acc + (t.clips?.length || 0), 0),
+      sfxClips: sfxTracks.reduce((acc: number, t: any) => acc + (t.clips?.length || 0), 0),
+    });
 
     const project = await projectService.updateTimeline(projectId, timeline);
 
@@ -840,6 +918,18 @@ export async function generateProjectPreviewHls(ctx: HttpContext): Promise<Handl
     const rawVersion = project.updatedAt || new Date().toISOString();
     const safeVersion = rawVersion.replace(/[^a-zA-Z0-9_-]/g, '_');
 
+    console.log('[HLS Preview] requested (no cache)', { projectId, version: safeVersion });
+
+    // Disable HLS preview cache by deleting any existing playlist/segments
+    // for this version before regenerating.
+    const hlsDir = path.join(process.cwd(), 'storage', 'previews', 'hls', projectId, safeVersion);
+    if (fs.existsSync(hlsDir)) {
+      try {
+        fs.rmSync(hlsDir, { recursive: true, force: true });
+      } catch (rmErr) {
+        console.warn('[HLS Preview] failed to clear cache dir', { hlsDir, error: rmErr });
+      }
+    }
     const result = await generateTimelinePreviewHls(project, safeVersion);
 
     if (!result.success || !result.playlistPath) {
@@ -860,6 +950,10 @@ export async function generateProjectPreviewHls(ctx: HttpContext): Promise<Handl
       message: 'HLS preview ready',
     });
   } catch (error) {
+    console.error('[HLS Preview] controller error', {
+      message: error instanceof Error ? error.message : error,
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to generate HLS preview',
@@ -1110,4 +1204,3 @@ export async function serveProjectPreview(ctx: HttpContext): Promise<HandlerResu
     });
   }
 }
-

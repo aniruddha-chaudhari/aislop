@@ -39,6 +39,8 @@ export const API_ENDPOINTS = {
   testTTSConnection: `${API_BASE_URL}/api/audio/test-connection`,
   cleanupAudio: `${API_BASE_URL}/api/audio/cleanup`,
   streamFileUpdates: (sessionId: string) => `${API_BASE_URL}/api/stream/${sessionId}/files`,
+  audioAssetsMusic: `${API_BASE_URL}/api/audio-assets/music`,
+  audioAssetsSfx: `${API_BASE_URL}/api/audio-assets/sfx`,
 
   // Video endpoints
   generateVideo: `${API_BASE_URL}/api/video/generate`,
@@ -83,6 +85,7 @@ export const API_ENDPOINTS = {
   deleteProject: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}`,
   generateAiDraft: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/ai-draft`,
   generateImagePlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/image-plan`,
+  generateSfxPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/sfx-plan`,
   saveTimeline: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/timeline`,
   exportProject: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/export`,
   exportStatus: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/export/status`,

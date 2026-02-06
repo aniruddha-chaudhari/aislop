@@ -7,15 +7,20 @@ import type { Clip, ClipRef, EditorProject, Track } from '../../../features/edit
 /**
  * Sort tracks in the correct order:
  * 1. Overlay (template) - always first
- * 2. Audio - always second
- * 3. Everything else (subtitle, character, etc.) - after
+ * 2. Dialogue audio - second
+ * 3. Music, then SFX
+ * 4. Everything else (subtitle, character, etc.) - after
  */
 function sortTracks(tracks: Track[]): Track[] {
   const overlayTracks = tracks.filter(t => t.type === 'overlay');
   const audioTracks = tracks.filter(t => t.type === 'audio');
-  const otherTracks = tracks.filter(t => t.type !== 'overlay' && t.type !== 'audio');
+  const musicTracks = tracks.filter(t => t.type === 'music');
+  const sfxTracks = tracks.filter(t => t.type === 'sfx');
+  const otherTracks = tracks.filter(
+    t => t.type !== 'overlay' && t.type !== 'audio' && t.type !== 'music' && t.type !== 'sfx'
+  );
   
-  return [...overlayTracks, ...audioTracks, ...otherTracks];
+  return [...overlayTracks, ...audioTracks, ...musicTracks, ...sfxTracks, ...otherTracks];
 }
 
 type Props = {
@@ -30,8 +35,10 @@ type Props = {
   onSaveTimeline?: () => void;
   onGenerateSubtitlesAndChars?: () => void;
   onGenerateImagePlan?: () => void;
+  onGenerateSfxPlan?: () => void;
   isGeneratingDraft?: boolean;
   isGeneratingImagePlan?: boolean;
+  isGeneratingSfxPlan?: boolean;
   isExporting?: boolean;
   exportProgress?: number;
   hasSubtitlesAndChars?: boolean;
@@ -48,6 +55,7 @@ type Props = {
   onUpdateClip: (ref: ClipRef, patch: Partial<Clip>) => void;
   onAddTrack?: () => void;
   onDeleteTrack?: (trackId: string) => void;
+  onDeleteClip?: (ref: ClipRef) => void;
   onMoveClipToNewTrack?: (ref: ClipRef, start: number, onNewRef: (newRef: ClipRef) => void) => void;
   onMoveClipBackToTrack?: (
     ref: ClipRef,
@@ -142,6 +150,10 @@ function trackColor(type: Track['type']): string {
   switch (type) {
     case 'audio':
       return 'from-cyan-600 to-cyan-400';
+    case 'music':
+      return 'from-emerald-600 to-emerald-400';
+    case 'sfx':
+      return 'from-amber-600 to-amber-400';
     case 'subtitle':
       return 'from-fuchsia-600 to-fuchsia-400';
     case 'overlay':
@@ -149,6 +161,21 @@ function trackColor(type: Track['type']): string {
     case 'character':
       return 'from-zinc-600 to-zinc-400';
   }
+}
+
+function clipPathLabel(path?: string, fallback: string = 'Audio'): string {
+  if (!path) return fallback;
+  const parts = path.split(/[\\/]/);
+  return parts[parts.length - 1] || fallback;
+}
+
+function clipDisplayLabel(c: Clip): string {
+  if (c.kind === 'subtitle') return `${c.speaker}`;
+  if (c.kind === 'character') return c.character;
+  if (c.kind === 'overlay') return c.label;
+  if (c.kind === 'music') return clipPathLabel(c.path, 'Music');
+  if (c.kind === 'sfx') return clipPathLabel(c.path, 'SFX');
+  return c.label;
 }
 
 export default function VideoTimelinePanel({
@@ -163,8 +190,10 @@ export default function VideoTimelinePanel({
   onSaveTimeline,
   onGenerateSubtitlesAndChars,
   onGenerateImagePlan,
+  onGenerateSfxPlan,
   isGeneratingDraft,
   isGeneratingImagePlan,
+  isGeneratingSfxPlan,
   isExporting,
   exportProgress,
   hasSubtitlesAndChars,
@@ -181,6 +210,7 @@ export default function VideoTimelinePanel({
   onUpdateClip,
   onAddTrack,
   onDeleteTrack,
+  onDeleteClip,
   onMoveClipToNewTrack,
   onMoveClipBackToTrack,
   onMoveClipToTrack,
@@ -188,6 +218,12 @@ export default function VideoTimelinePanel({
   onToggleShowSubtitlesInTimeline,
 }: Props) {
   const [isResizing, setIsResizing] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    ref: ClipRef;
+    label: string;
+  } | null>(null);
   const playheadTimeRef = useRef(playheadTime);
   playheadTimeRef.current = playheadTime;
   const movedToNewTrackThisDragRef = useRef(false);
@@ -223,6 +259,22 @@ export default function VideoTimelinePanel({
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [isResizing, onHeightChange]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close();
+    };
+    window.addEventListener('pointerdown', close);
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('scroll', close, true);
+    return () => {
+      window.removeEventListener('pointerdown', close);
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('scroll', close, true);
+    };
+  }, [contextMenu]);
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -489,6 +541,16 @@ export default function VideoTimelinePanel({
               {isGeneratingImagePlan ? '⏳ Generating...' : ' Image Plan'}
             </button>
           )}
+          {onGenerateSfxPlan && (
+            <button
+              type="button"
+              onClick={onGenerateSfxPlan}
+              disabled={isGeneratingSfxPlan}
+              className="px-3 py-1.5 text-xs font-semibold bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed shadow"
+            >
+              {isGeneratingSfxPlan ? 'Generating...' : ' SFX Plan'}
+            </button>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -648,8 +710,20 @@ export default function VideoTimelinePanel({
                           ].join(' ')}
                           style={{ left: `${left}px`, width: `${width}px` }}
                           onClick={(e) => e.stopPropagation()}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onSelectClip(ref);
+                            setContextMenu({
+                              x: e.clientX,
+                              y: e.clientY,
+                              ref,
+                              label: clipDisplayLabel(c),
+                            });
+                          }}
                           onPointerDown={(e) => {
                             e.stopPropagation();
+                            setContextMenu(null);
                             onSelectClip(ref);
                             const mode: 'move' | 'trim-left' | 'trim-right' =
                               (e.target as HTMLElement)?.dataset?.handle === 'l'
@@ -681,13 +755,7 @@ export default function VideoTimelinePanel({
 
                           <div className="h-full px-2 flex items-center">
                             <span className="text-[11px] font-semibold text-white truncate">
-                              {c.kind === 'subtitle'
-                                ? `${c.speaker}`
-                                : c.kind === 'character'
-                                  ? c.character
-                                  : c.kind === 'overlay'
-                                    ? c.label
-                                    : c.label}
+                              {clipDisplayLabel(c)}
                             </span>
                           </div>
                         </div>
@@ -700,6 +768,28 @@ export default function VideoTimelinePanel({
           </div>
         </div>
       </div>
+
+      {contextMenu && (
+        <div
+          className="fixed z-50 min-w-44 rounded-md border border-border bg-card p-1 shadow-lg"
+          style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <div className="px-2 py-1 text-[11px] text-muted-foreground truncate">
+            {contextMenu.label}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              onDeleteClip?.(contextMenu.ref);
+              setContextMenu(null);
+            }}
+            className="w-full rounded px-2 py-1.5 text-left text-xs font-medium text-red-600 hover:bg-red-50"
+          >
+            Delete clip
+          </button>
+        </div>
+      )}
 
       {/* Timeline Footer Controls */}
       <div className="h-10 bg-muted border-t border-border flex items-center justify-between px-4 gap-3">

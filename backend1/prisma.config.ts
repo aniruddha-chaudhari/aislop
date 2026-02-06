@@ -4,8 +4,9 @@ import { defineConfig } from 'prisma/config';
 export default defineConfig({
   schema: 'prisma/schema.prisma',
   datasource: {
-    // Use DATABASE_URL if provided, otherwise fall back to local SQLite file
-    url: 'file:./prisma/dev.db',
+    // Use DATABASE_URL if provided, otherwise fall back to local SQLite file next to schema
+    // This resolves to backend1/prisma/dev.db
+    url: 'file:./dev.db',
   },
 });
 

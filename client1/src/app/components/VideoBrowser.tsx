@@ -46,7 +46,6 @@ export default function VideoBrowser() {
         setError(data.error || 'Failed to fetch videos');
       }
     } catch (error) {
-      console.error('Error fetching videos:', error);
       setError('Failed to connect to server. Make sure the backend is running.');
     } finally {
       setLoading(false);
@@ -86,7 +85,6 @@ export default function VideoBrowser() {
         throw new Error(data.error || 'Failed to delete video');
       }
     } catch (error) {
-      console.error('Error deleting video:', error);
       setError('Failed to delete video. Please try again.');
     }
   };
@@ -115,7 +113,6 @@ export default function VideoBrowser() {
         throw new Error(data.error || 'Failed to cleanup videos');
       }
     } catch (error) {
-      console.error('Error cleaning up videos:', error);
       setError('Failed to cleanup videos. Please try again.');
     }
   };

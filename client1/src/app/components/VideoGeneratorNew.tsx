@@ -124,7 +124,6 @@ export default function VideoGenerator() {
         setSessions(data.sessions);
       }
     } catch (error) {
-      console.error('Error fetching audio sessions:', error);
       setError('Failed to fetch audio sessions');
     } finally {
       setLoading(false);
@@ -142,7 +141,6 @@ export default function VideoGenerator() {
         setTemplateVideos(data.videos);
       }
     } catch (error) {
-      console.error('Error fetching template videos:', error);
     }
   };
 
@@ -186,7 +184,6 @@ export default function VideoGenerator() {
         throw new Error(data.error || 'Failed to upload video');
       }
     } catch (error) {
-      console.error('Error uploading template video:', error);
       setError(error instanceof Error ? error.message : 'Failed to upload video');
     } finally {
       setUploadingTemplate(false);
@@ -202,7 +199,6 @@ export default function VideoGenerator() {
       link.click();
       document.body.removeChild(link);
     } catch (error) {
-      console.error('Error downloading video:', error);
       setError('Failed to download video');
     }
   };
@@ -272,7 +268,6 @@ export default function VideoGenerator() {
         throw new Error(data.error || 'Video generation failed');
       }
     } catch (error) {
-      console.error('Error generating video:', error);
       setError(error instanceof Error ? error.message : 'Failed to generate video');
       setProgress('');
     } finally {

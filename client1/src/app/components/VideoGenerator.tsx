@@ -170,7 +170,6 @@ export default function VideoGenerator() {
           setTimeout(() => setSuccess(''), 3000);
         }
       } catch (error) {
-        console.error('Error loading session data from sessionStorage:', error);
       }
     } else if (urlSessionId) {
       // If no saved data but URL has session ID, set it
@@ -196,7 +195,6 @@ export default function VideoGenerator() {
     try {
       sessionStorage.setItem('videoGenerator_sessionData', JSON.stringify(sessionData));
     } catch (error) {
-      console.error('Error saving session data to sessionStorage:', error);
     }
   };
 
@@ -240,7 +238,6 @@ export default function VideoGenerator() {
           const parsedData = JSON.parse(savedSessionData);
           targetSessionId = parsedData.selectedSession;
         } catch (error) {
-          console.error('Error parsing saved session data:', error);
         }
       }
 
@@ -263,7 +260,6 @@ export default function VideoGenerator() {
         }, 100);
       }
     } catch (error) {
-      console.error('Error fetching audio sessions:', error);
       setError('Failed to fetch audio sessions');
     } finally {
       setLoading(false);
@@ -279,7 +275,6 @@ export default function VideoGenerator() {
       const data = await response.json();
       setTemplateVideos(normalizeTemplateVideos(data));
     } catch (error) {
-      console.error('Error fetching template videos:', error);
     }
   };
 
@@ -323,7 +318,6 @@ export default function VideoGenerator() {
         throw new Error(data.error || 'Failed to upload video');
       }
     } catch (error) {
-      console.error('Error uploading template video:', error);
       setError(error instanceof Error ? error.message : 'Failed to upload video');
     } finally {
       setUploadingTemplate(false);
@@ -339,7 +333,6 @@ export default function VideoGenerator() {
       link.click();
       document.body.removeChild(link);
     } catch (error) {
-      console.error('Error downloading video:', error);
       setError('Failed to download video');
     }
   };
@@ -397,11 +390,6 @@ export default function VideoGenerator() {
     setPlanProgress(null);
 
     try {
-      console.log('[VideoGenerator] generateImagePlan payload', {
-        sessionId: selectedSession,
-        topic: topic.trim(),
-        forceFreshAss: true,
-      });
       const response = await fetch(API_ENDPOINTS.generateImagePlan, {
         method: 'POST',
         headers: {
@@ -414,14 +402,10 @@ export default function VideoGenerator() {
         }),
       });
 
-      console.log('[VideoGenerator] generateImagePlan response status', response.status);
-
       if (!response.ok) {
         try {
-          const errData = await response.json();
-          console.log('[VideoGenerator] generateImagePlan error body', errData);
+          await response.json();
         } catch (e) {
-          console.log('[VideoGenerator] generateImagePlan error body not JSON');
         }
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -442,7 +426,6 @@ export default function VideoGenerator() {
         throw new Error(data.error || 'Failed to generate image plan');
       }
     } catch (error) {
-      console.error('Error generating image plan:', error);
       setError(error instanceof Error ? error.message : 'Failed to generate image plan');
     } finally {
       setLoading(false);
@@ -501,7 +484,6 @@ export default function VideoGenerator() {
       }
 
     } catch (error) {
-      console.error('Error uploading required image:', error);
       const errorMessage = error instanceof Error ? error.message : 'Failed to upload image';
       setRequiredImageErrors(prev => ({ ...prev, [requirementId]: errorMessage }));
     } finally {
@@ -535,7 +517,6 @@ export default function VideoGenerator() {
       }
       // If response is not ok (404, etc.), it just means no plan exists yet, which is fine
     } catch (error) {
-      console.error('Error fetching image plan status:', error);
       // Don't show error to user as this is just a background restoration attempt
     }
   };
@@ -608,7 +589,6 @@ export default function VideoGenerator() {
         throw new Error(data.error || 'Video generation failed');
       }
     } catch (error) {
-      console.error('Error generating video:', error);
       setError(error instanceof Error ? error.message : 'Failed to generate video');
       setProgress('');
     } finally {

@@ -126,7 +126,6 @@ export default function ImageEmbedder() {
         setSessions(data.sessions || []);
       }
     } catch (error) {
-      console.error('Error fetching audio sessions:', error);
       setError('Failed to fetch audio sessions');
     } finally {
       setLoading(false);
@@ -219,7 +218,6 @@ export default function ImageEmbedder() {
         throw new Error(analysisData.error || 'Failed to analyze ASS file');
       }
     } catch (error) {
-      console.error('Error analyzing ASS file:', error);
       setError(error instanceof Error ? error.message : 'Failed to analyze ASS file');
     } finally {
       setAnalyzing(false);
@@ -249,7 +247,6 @@ export default function ImageEmbedder() {
         }
       }
     } catch (error) {
-      console.error('Error fetching uploaded images:', error);
     }
   };
 
@@ -295,7 +292,6 @@ export default function ImageEmbedder() {
         throw new Error(data.error || 'Failed to upload image');
       }
     } catch (error) {
-      console.error('Error uploading image:', error);
       setError(error instanceof Error ? error.message : 'Failed to upload image');
     } finally {
       setUploadingImage(false);
@@ -326,7 +322,6 @@ export default function ImageEmbedder() {
         throw new Error('Failed to delete image');
       }
     } catch (error) {
-      console.error('Error deleting image:', error);
       setError('Failed to delete image');
     }
   };
@@ -343,7 +338,6 @@ export default function ImageEmbedder() {
         }
       }
     } catch (error) {
-      console.error('Error fetching user images:', error);
     }
   };
 
@@ -390,7 +384,6 @@ export default function ImageEmbedder() {
         throw new Error(data.error || 'Failed to upload user image');
       }
     } catch (error) {
-      console.error('Error uploading user image:', error);
       setError(error instanceof Error ? error.message : 'Failed to upload user image');
     } finally {
       setUploadingUserImage(false);
@@ -410,7 +403,6 @@ export default function ImageEmbedder() {
         throw new Error('Failed to delete user image');
       }
     } catch (error) {
-      console.error('Error deleting user image:', error);
       setError('Failed to delete user image');
     }
   };
@@ -449,7 +441,6 @@ export default function ImageEmbedder() {
         throw new Error(data.error || 'Failed to get suggestions');
       }
     } catch (error) {
-      console.error('Error getting user image suggestions:', error);
       setError(error instanceof Error ? error.message : 'Failed to get suggestions');
     } finally {
       setGettingSuggestions(false);
@@ -508,7 +499,6 @@ export default function ImageEmbedder() {
         throw new Error(data.error || 'Failed to generate video');
       }
     } catch (error) {
-      console.error('Error generating video:', error);
       setError(error instanceof Error ? error.message : 'Failed to generate video');
     } finally {
       setGeneratingVideo(false);

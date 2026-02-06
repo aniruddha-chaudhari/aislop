@@ -222,6 +222,10 @@ export default function AudioBrowser() {
       const response = await fetch(`${API_ENDPOINTS.audio}?flat=false`);
 
       if (!response.ok) {
+        console.error('[AudioBrowser] /api/audio/files HTTP error', {
+          status: response.status,
+          statusText: response.statusText,
+        });
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
@@ -238,6 +242,7 @@ export default function AudioBrowser() {
       setSessions(sortedSessions);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[AudioBrowser] Failed to fetch audio files', error);
       setError(`Failed to connect to server: ${errorMessage}`);
     } finally {
       setLoading(false);
@@ -257,7 +262,6 @@ export default function AudioBrowser() {
   const playAudio = (filename: string, sessionId: string) => {
     const audio = new Audio(`${API_BASE_URL}/api/audio/download/${filename}?sessionId=${sessionId}`);
     audio.play().catch(err => {
-      console.error('Error playing audio:', err);
       setError('Failed to play audio file');
     });
   };
@@ -295,7 +299,6 @@ export default function AudioBrowser() {
           audio.play().catch(err => reject(err));
         });
       } catch (error) {
-        console.error('Failed to play audio file:', error);
         setError('Failed to play audio file');
         break;
       }
@@ -337,7 +340,6 @@ export default function AudioBrowser() {
 
       await fetchAudioFiles();
     } catch (error) {
-      console.error('Error deleting audio file:', error);
       setError('Failed to delete audio file');
     }
   };
@@ -374,7 +376,6 @@ export default function AudioBrowser() {
         setError('Failed to regenerate audio');
       }
     } catch (error) {
-      console.error('Error regenerating audio:', error);
       setError('Failed to regenerate audio');
     } finally {
       setRegeneratingIndex(null);
@@ -401,7 +402,6 @@ export default function AudioBrowser() {
 
       setSessions(sessions.filter(s => s.sessionId !== sessionId));
     } catch (error) {
-      console.error('Error deleting session:', error);
       setError('Failed to delete session');
     }
   };

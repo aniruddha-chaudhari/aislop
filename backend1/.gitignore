@@ -30,6 +30,9 @@ pids
 #
 # App-generated media / runtime storage (keep out of git)
 storage/
+!storage/audio_assets/
+!storage/audio_assets/sfx/
+!storage/audio_assets/sfx/sfx.json
 
 # Coverage directory used by tools like istanbul
 coverage/

@@ -153,7 +153,6 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
         }
       }
     } catch (error) {
-      console.error('Error fetching session conversation:', error);
       setConversationError('Failed to load conversation');
     } finally {
       setLoadingConversation(false);
@@ -243,7 +242,6 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
         newImages.push(uploadedImage);
         setSuccess(`Successfully uploaded image for: "${selectedText.length > 100 ? selectedText.substring(0, 100) + '...' : selectedText}"`);
       } catch (err) {
-        console.error('Upload error:', err);
         setError(`Failed to upload ${file.name}: ${err instanceof Error ? err.message : 'Unknown error'}`);
       }
     }
@@ -333,7 +331,6 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
         newImages.push(uploadedImage);
         setSuccess(`Successfully uploaded ${file.name}`);
       } catch (err) {
-        console.error('Upload error:', err);
         setError(`Failed to upload ${file.name}: ${err instanceof Error ? err.message : 'Unknown error'}`);
       }
     }
@@ -378,10 +375,8 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
       });
 
       if (!response.ok) {
-        console.warn('Failed to update image label on server');
       }
     } catch (error) {
-      console.warn('Error updating image label on server:', error);
     }
   };
 
@@ -408,10 +403,8 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
       });
 
       if (!response.ok) {
-        console.warn('Failed to update image description on server');
       }
     } catch (error) {
-      console.warn('Error updating image description on server:', error);
     }
   };
 
@@ -438,10 +431,8 @@ export default function ImageUpload({ onImagesChange, userImages, disabled = fal
       });
 
       if (!response.ok) {
-        console.warn('Failed to update image priority on server');
       }
     } catch (error) {
-      console.warn('Error updating image priority on server:', error);
     }
   };
 

@@ -129,7 +129,6 @@ export default function ImageAnalysisReview({
         throw new Error(data.error || 'Analysis failed');
       }
     } catch (error) {
-      console.error('Error analyzing images:', error);
       setError(error instanceof Error ? error.message : 'Failed to analyze images');
     } finally {
       setAnalyzing(false);
@@ -222,7 +221,6 @@ export default function ImageAnalysisReview({
       }
       setTimeout(() => setCopySuccess(''), 3000);
     } catch (error) {
-      console.error('Failed to copy to clipboard:', error);
       setCopySuccess('❌ Failed to copy. Please select and copy manually.');
       setTimeout(() => setCopySuccess(''), 5000);
     }
@@ -277,7 +275,6 @@ export default function ImageAnalysisReview({
       }
       setTimeout(() => setCopySuccess(''), 3000);
     } catch (error) {
-      console.error('Failed to copy ASS content:', error);
       setCopySuccess('❌ Failed to copy ASS content');
       setTimeout(() => setCopySuccess(''), 3000);
     }
@@ -293,7 +290,6 @@ export default function ImageAnalysisReview({
         setError('Clipboard access not available. Please paste manually into the text area below.');
       }
     } catch (error) {
-      console.error('Failed to paste from clipboard:', error);
       setError('Failed to paste from clipboard. Please paste manually into the text area below.');
     }
   };
@@ -348,7 +344,6 @@ export default function ImageAnalysisReview({
         setPasteText('');
       }
     } catch (error) {
-      console.error('Error applying custom suggestions:', error);
       setError(error instanceof Error ? error.message : 'Failed to apply custom suggestions');
     }
   };

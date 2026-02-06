@@ -16,6 +16,7 @@ type Props = {
   selected: Clip | null;
   selectedRef: ClipRef | null;
   onUpdateClip: (patch: Partial<Clip>) => void;
+  onDeleteClip?: () => void;
   projectId: string;
   /** Current project (for template video start when template clip is selected) */
   project?: EditorProject | null;
@@ -35,6 +36,7 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
   selected,
   selectedRef,
   onUpdateClip,
+  onDeleteClip,
   projectId,
   project,
   onVideoStartChange,
@@ -123,7 +125,6 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
         onProjectUpdate?.();
       }
     } catch (error) {
-      console.error('Error uploading image:', error);
       alert('Failed to upload image');
     } finally {
       setUploadingImage(false);
@@ -275,6 +276,41 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
             </div>
           </div>
 
+          {(selected.kind === 'music' || selected.kind === 'sfx') && (
+            <div className="rounded border border-border bg-muted/30 p-3">
+              <div className="text-xs font-semibold mb-2">
+                {selected.kind === 'music' ? 'Music' : 'SFX'}
+              </div>
+              <div className="space-y-2">
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Audio file path</label>
+                  <input
+                    type="text"
+                    value={selected.path || ''}
+                    onChange={(e) => onUpdateClip({ path: e.target.value } as Partial<Clip>)}
+                    className="w-full bg-muted border border-border rounded px-3 py-2 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Volume (0 - 1)</label>
+                  <input
+                    type="number"
+                    step="0.05"
+                    min={0}
+                    max={1}
+                    value={selected.volume ?? 1}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      const next = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1;
+                      onUpdateClip({ volume: next } as Partial<Clip>);
+                    }}
+                    className="w-full bg-muted border border-border rounded px-3 py-2 text-xs"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
           {(selected.kind === 'overlay' || selected.kind === 'character') && (
             <div className="rounded border border-border bg-muted/30 p-3">
               <div className="text-xs font-semibold mb-2">Transform</div>
@@ -311,7 +347,7 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
                 </div>
               </div>
               <div className="mt-2 text-[11px] text-muted-foreground">
-                Tip: drag the overlay in the preview to change X/Y.
+                Tip: use X/Y/Scale here to reposition and resize image overlays.
               </div>
             </div>
           )}
@@ -328,6 +364,21 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
                 className="mt-1 w-full min-h-[88px] bg-muted border border-border rounded px-3 py-2 text-xs"
               />
             </div>
+          )}
+
+          {onDeleteClip && (
+            <button
+              type="button"
+              onClick={() => {
+                if (!selected || !selectedRef) return;
+                if (window.confirm('Delete this clip from the timeline?')) {
+                  onDeleteClip();
+                }
+              }}
+              className="w-full px-3 py-2 text-xs font-semibold rounded border border-red-700 bg-red-600 text-white hover:bg-red-700 transition shadow-sm"
+            >
+              Delete clip
+            </button>
           )}
         </div>
       )}

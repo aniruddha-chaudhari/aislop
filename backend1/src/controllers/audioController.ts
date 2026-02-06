@@ -11,7 +11,22 @@ import { PrismaClient } from '../generated/prisma';
 import { publishFileUpdate } from '../service/eventEmitter';
 import { updateSessionDuration } from '../service/sessionDuration';
 
-// Initialize Prisma client - schema.prisma has hardcoded database path
+// Initialize Prisma client - log and sanity-check DATABASE_URL for SQLite
+console.log('[Prisma] DATABASE_URL at startup:', process.env.DATABASE_URL);
+try {
+  const rawUrl = process.env.DATABASE_URL || '';
+  if (rawUrl.startsWith('file:')) {
+    let fsPath = rawUrl.replace(/^file:/, '');
+    // On Windows an absolute URL may look like /F:/..., strip leading slash
+    if (fsPath.startsWith('/') && /^[A-Za-z]:/.test(fsPath.slice(1))) {
+      fsPath = fsPath.slice(1);
+    }
+    console.log('[Prisma] Resolved SQLite path:', fsPath, 'exists:', fs.existsSync(fsPath));
+  }
+} catch {
+  // best-effort logging only
+}
+
 const prisma = new PrismaClient();
 
 // Helper function to generate meaningful session names
@@ -1011,7 +1026,15 @@ export async function getAudioFiles(_ctx: HttpContext): Promise<HandlerResult> {
 
     return jsonResponse(200, { success: true, sessions: formattedSessions });
   } catch (error) {
-    return jsonResponse(500, { success: false, error: 'Failed to get audio files', details: error instanceof Error ? error.message : String(error) });
+    console.error('[Audio] getAudioFiles error', {
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return jsonResponse(500, {
+      success: false,
+      error: 'Failed to get audio files',
+      details: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 

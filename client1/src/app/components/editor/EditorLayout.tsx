@@ -12,15 +12,20 @@ import { API_ENDPOINTS, API_BASE_URL } from '../../../config/api';
 /**
  * Sort tracks in the correct order:
  * 1. Overlay (template) - always first
- * 2. Audio - always second
- * 3. Everything else (subtitle, character, etc.) - after
+ * 2. Dialogue audio - second
+ * 3. Music, then SFX
+ * 4. Everything else (subtitle, character, etc.) - after
  */
 function sortTracks(tracks: Track[]): Track[] {
   const overlayTracks = tracks.filter(t => t.type === 'overlay');
   const audioTracks = tracks.filter(t => t.type === 'audio');
-  const otherTracks = tracks.filter(t => t.type !== 'overlay' && t.type !== 'audio');
+  const musicTracks = tracks.filter(t => t.type === 'music');
+  const sfxTracks = tracks.filter(t => t.type === 'sfx');
+  const otherTracks = tracks.filter(
+    t => t.type !== 'overlay' && t.type !== 'audio' && t.type !== 'music' && t.type !== 'sfx'
+  );
   
-  return [...overlayTracks, ...audioTracks, ...otherTracks];
+  return [...overlayTracks, ...audioTracks, ...musicTracks, ...sfxTracks, ...otherTracks];
 }
 
 type Props = {
@@ -50,6 +55,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const router = useRouter();
   const [isGeneratingDraft, setIsGeneratingDraft] = useState(false);
   const [isGeneratingImagePlan, setIsGeneratingImagePlan] = useState(false);
+  const [isGeneratingSfxPlan, setIsGeneratingSfxPlan] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
   const [exportedVideoFilename, setExportedVideoFilename] = useState<string | null>(null);
@@ -98,18 +104,6 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         setIsGeneratingPreview(true);
         setMessage({ type: 'info', text: 'Generating preview...' });
         try {
-          const statusResponse = await fetch(API_ENDPOINTS.getPreviewHlsStatus(project.id));
-          const statusData = await statusResponse.json();
-          if (statusData.success && statusData.ready && statusData.playlistUrl) {
-            const absolutePlaylistUrl = `${API_BASE_URL}${statusData.playlistUrl}?t=${Date.now()}`;
-            setPreviewVideoSrc(absolutePlaylistUrl);
-            setIsGeneratingPreview(false);
-            setIsPlaying(true);
-            setTimeout(() => previewPlayerRef.current?.requestPlay?.(seekTo ?? playheadTime), 300);
-            setMessage({ type: 'success', text: 'Preview ready!' });
-            setTimeout(() => setMessage(null), 2000);
-            return;
-          }
           await fetch(API_ENDPOINTS.generatePreviewHls(project.id), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -135,7 +129,6 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
           };
           hlsPollIntervalRef.current = setInterval(pollForHls, 1000);
         } catch (error) {
-          console.error('[EditorLayout] Preview generation error:', error);
           setMessage({ type: 'error', text: error instanceof Error ? error.message : 'Failed to generate preview' });
           setTimeout(() => setMessage(null), 5000);
           setIsGeneratingPreview(false);
@@ -235,7 +228,6 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       const temps = data.templates || data.videos || [];
       setTemplates(temps);
     } catch (error) {
-      console.error('Failed to fetch templates:', error);
     }
   };
 
@@ -246,7 +238,6 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       const sessions = data.success ? data.sessions : data.sessions || [];
       setAudioSessions(sessions);
     } catch (error) {
-      console.error('Failed to fetch audio sessions:', error);
     }
   };
 
@@ -301,27 +292,10 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       duration: totalDuration,
       tracks,
     };
-    console.log('[EditorLayout] buildAudioOnlyTimeline returning:', {
-      duration: timeline.duration,
-      tracksCount: timeline.tracks.length,
-      tracks: timeline.tracks.map(t => ({
-        id: t.id,
-        name: t.name,
-        type: t.type,
-        clipsCount: t.clips.length,
-        clips: t.clips
-      }))
-    });
     return timeline;
   };
 
   const handleChangeTemplate = async (templatePath: string, templateLabel: string) => {
-    console.log('[EditorLayout] handleChangeTemplate called:', {
-      templatePath,
-      templateLabel,
-      projectId: project.id,
-      currentProjectTemplate: project.template
-    });
     setChangingTemplate(true);
     setMessage(null);
 
@@ -345,15 +319,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       }
 
       const data = await response.json();
-      console.log('[EditorLayout] Template API response:', {
-        success: data.success,
-        hasProject: !!data.project,
-        projectData: data.project,
-        error: data.error
-      });
       if (data.success) {
         setMessage({ type: 'success', text: `Template changed to ${templateLabel}` });
-        console.log('[EditorLayout] Calling onProjectUpdate after template change, hasCallback:', !!onProjectUpdate);
         const updated = await onProjectUpdate?.();
         if (updated) setDraftProject(updated);
 
@@ -368,17 +335,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
           const timelineIsEmpty = timelineTracks.length === 0 || timelineTracks.every((t: any) => (t.clips || []).length === 0);
           const hasOverlayTrack = timelineTracks.some((t: any) => t.type === 'overlay');
           const templateNeedsTrack = timelineIsEmpty || !hasOverlayTrack;
-          
-          console.log('[EditorLayout] Checking if template needs track:', {
-            timelineIsEmpty,
-            hasOverlayTrack,
-            templateNeedsTrack,
-            tracksCount: timelineTracks.length,
-            currentDuration: updatedProject?.timeline?.duration
-          });
 
           if (templateNeedsTrack) {
-            console.log('[EditorLayout] Creating overlay track for template');
             try {
               // Use session/timeline duration so template is cut to audio size (never longer than session)
               const audioTrack = timelineTracks.find((t: any) => t.type === 'audio');
@@ -422,26 +380,10 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
                 tracks: updatedTracks,
               };
 
-              console.log('[EditorLayout] Saving timeline with template overlay track:', {
-                duration: timeline.duration,
-                tracksCount: timeline.tracks.length,
-                tracks: timeline.tracks.map((t: any) => ({
-                  id: t.id,
-                  name: t.name,
-                  type: t.type,
-                  clipsCount: t.clips.length
-                }))
-              });
-
               const saveResponse = await fetch(API_ENDPOINTS.saveTimeline(project.id), {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ timeline }),
-              });
-
-              console.log('[EditorLayout] Save timeline response:', {
-                status: saveResponse.status,
-                ok: saveResponse.ok
               });
 
               if (!saveResponse.ok) {
@@ -449,12 +391,9 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
               }
 
               const saveData = await saveResponse.json();
-              console.log('[EditorLayout] Save timeline response data:', saveData);
-              console.log('[EditorLayout] Calling onProjectUpdate after saving template timeline');
               const updatedAfterSave = await onProjectUpdate?.();
               if (updatedAfterSave) setDraftProject(updatedAfterSave);
             } catch (timelineError) {
-              console.error('[EditorLayout] Template timeline build/save failed:', timelineError);
               // Don't show error to user, template was still updated successfully
             }
           }
@@ -463,7 +402,6 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         throw new Error(data.error || 'Failed to change template');
       }
     } catch (error) {
-      console.error('Error changing template:', error);
       setMessage({ type: 'error', text: 'Failed to change template' });
     } finally {
       setChangingTemplate(false);
@@ -498,7 +436,6 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         if (updated) setDraftProject(updated);
       }
     } catch (e) {
-      console.error('Failed to update video start:', e);
     }
   }, [project.id, draftProject.template, onProjectUpdate]);
 
@@ -521,15 +458,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       }
 
       const data = await response.json();
-      console.log('[EditorLayout] Audio session API response:', {
-        success: data.success,
-        hasProject: !!data.project,
-        projectData: data.project,
-        error: data.error
-      });
       if (data.success) {
         setMessage({ type: 'success', text: `Audio session changed to ${sessionName}` });
-        console.log('[EditorLayout] Calling onProjectUpdate after audio session change, hasCallback:', !!onProjectUpdate);
         
         // Clear old preview since audio session changed
         setPreviewVideoSrc(null);
@@ -553,32 +483,13 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         const timelineIsEmpty = currentTracks.length === 0 || currentTracks.every((t: any) => (t.clips || []).length === 0);
         const hasAudioTrackWithClips = currentTracks.some((t: any) => t.type === 'audio' && (t.clips || []).length > 0);
         const needsAudioTrack = timelineIsEmpty || !hasAudioTrackWithClips;
-        console.log('[EditorLayout] Checking timeline after audio session change:', {
-          timelineIsEmpty,
-          hasAudioTrackWithClips,
-          needsAudioTrack,
-          tracksCount: currentTracks.length,
-          clipsCount: currentTracks.reduce((sum: number, t: any) => sum + (t.clips || []).length, 0),
-          tracks: currentTracks.map((t: any) => ({ id: t.id, name: t.name, type: t.type, clipsCount: (t.clips || []).length }))
-        });
         if (needsAudioTrack) {
           try {
-            console.log('[EditorLayout] Building audio-only timeline for session:', audioSessionId);
             const timeline = await buildAudioOnlyTimeline(audioSessionId, sessionName, currentTracks);
-            console.log('[EditorLayout] Built audio-only timeline:', {
-              duration: timeline.duration,
-              tracksCount: timeline.tracks.length,
-              tracks: timeline.tracks.map(t => ({ id: t.id, name: t.name, clipsCount: t.clips.length, clips: t.clips }))
-            });
             const saveResponse = await fetch(API_ENDPOINTS.saveTimeline(project.id), {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ timeline }),
-            });
-
-            console.log('[EditorLayout] Save timeline response:', {
-              status: saveResponse.status,
-              ok: saveResponse.ok
             });
 
             if (!saveResponse.ok) {
@@ -586,14 +497,11 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             }
 
             const saveData = await saveResponse.json();
-            console.log('[EditorLayout] Save timeline response data:', saveData);
-            console.log('[EditorLayout] Calling onProjectUpdate after saving timeline');
             const updatedAfterSave = await onProjectUpdate?.();
             if (updatedAfterSave) setDraftProject(updatedAfterSave);
             
             // Proactively generate preview in background if we have template + audio session
             if (updatedProject?.template?.src) {
-              console.log('[EditorLayout] Auto-generating preview in background...');
               setIsGeneratingPreview(true);
               setMessage({ type: 'info', text: 'Preparing preview...' });
               
@@ -610,9 +518,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
                     setTimeout(() => setMessage(null), 3000);
                   }
                 })
-                .catch(err => {
-                  console.error('[EditorLayout] Background preview generation failed:', err);
-                })
+                .catch(() => {})
                 .finally(() => {
                   setIsGeneratingPreview(false);
                 });
@@ -624,7 +530,6 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         throw new Error(data.error || 'Failed to change audio session');
       }
     } catch (error) {
-      console.error('Error changing audio session:', error);
       setMessage({ type: 'error', text: 'Failed to change audio session' });
     } finally {
       setChangingAudioSession(false);
@@ -661,10 +566,130 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         throw new Error(data.error || 'Failed to upload template');
       }
     } catch (error) {
-      console.error('Error uploading template:', error);
       setMessage({ type: 'error', text: 'Failed to upload template' });
     } finally {
       setUploadingTemplate(false);
+    }
+  };
+
+  const addSfxToTimeline = (asset: { filename: string; path: string }) => {
+    const defaultDuration = 2; // seconds; user can resize on timeline
+    let selectedRef: ClipRef | null = null;
+    setDraftProject((p) => {
+      const duration = Math.max(1, p.duration || 0);
+      const existingTrack = p.tracks.find((t) => t.type === 'sfx');
+      const clipId = `sfx_${Date.now()}`;
+      const newClip: Clip = {
+        id: clipId,
+        kind: 'sfx',
+        start: 0,
+        duration: defaultDuration,
+        path: asset.path,
+        volume: 0.8,
+      };
+
+      let tracks = p.tracks.map((t) => ({ ...t, clips: [...t.clips] }));
+      if (existingTrack) {
+        tracks = tracks.map((t) => {
+          if (t.type !== 'sfx') return t;
+          selectedRef = { trackId: t.id, clipId };
+          return { ...t, clips: [...t.clips, newClip] };
+        });
+      } else {
+        const sfxTrack: Track = {
+          id: 't_sfx',
+          type: 'sfx',
+          name: 'SFX',
+          clips: [newClip],
+        };
+        selectedRef = { trackId: sfxTrack.id, clipId };
+        tracks = [...tracks, sfxTrack];
+      }
+
+      return { ...p, tracks: sortTracks(tracks) };
+    });
+
+    setIsDirty(true);
+    setMessage({ type: 'success', text: `SFX added: ${asset.filename}` });
+    setTimeout(() => setMessage(null), 2000);
+    if (selectedRef) queueMicrotask(() => setSelected(selectedRef));
+  };
+
+  const addBackgroundMusic = (asset: { filename: string; path: string }) => {
+    console.log('[EditorLayout] addBackgroundMusic called', {
+      filename: asset.filename,
+      path: asset.path,
+    });
+    let selectedRef: ClipRef | null = null;
+    setDraftProject((p) => {
+      console.log('[EditorLayout] addBackgroundMusic before', {
+        duration: p.duration,
+        tracks: p.tracks.map((t) => ({ id: t.id, type: t.type, clips: t.clips.length })),
+      });
+      const duration = Math.max(1, p.duration || 0);
+      const existingTrack = p.tracks.find((t) => t.type === 'music');
+      const clipId = `music_${Date.now()}`;
+      const newClip: Clip = {
+        id: clipId,
+        kind: 'music',
+        start: 0,
+        duration,
+        path: asset.path,
+        volume: 0.35,
+      };
+
+      let tracks = p.tracks.map((t) => ({ ...t, clips: [...t.clips] }));
+      if (existingTrack) {
+        tracks = tracks.map((t) => {
+          if (t.type !== 'music') return t;
+          const hasSame = t.clips.find((c) => c.kind === 'music' && (c as any).path === asset.path);
+          if (hasSame) {
+            selectedRef = { trackId: t.id, clipId: hasSame.id };
+            console.log('[EditorLayout] addBackgroundMusic updating existing clip', {
+              trackId: t.id,
+              clipId: hasSame.id,
+            });
+            return {
+              ...t,
+              clips: t.clips.map((c) =>
+                c.id === hasSame.id ? ({ ...c, start: 0, duration, path: asset.path } as Clip) : c
+              ),
+            };
+          }
+          selectedRef = { trackId: t.id, clipId: clipId };
+          console.log('[EditorLayout] addBackgroundMusic appending new clip', {
+            trackId: t.id,
+            clipId,
+          });
+          return { ...t, clips: [...t.clips, newClip] };
+        });
+      } else {
+        const musicTrack: Track = {
+          id: 't_music',
+          type: 'music',
+          name: 'Music',
+          clips: [newClip],
+        };
+        selectedRef = { trackId: musicTrack.id, clipId: clipId };
+        console.log('[EditorLayout] addBackgroundMusic created music track', {
+          trackId: musicTrack.id,
+          clipId,
+        });
+        tracks = [...tracks, musicTrack];
+      }
+
+      const next = { ...p, tracks: sortTracks(tracks) };
+      console.log('[EditorLayout] addBackgroundMusic after', {
+        tracks: next.tracks.map((t) => ({ id: t.id, type: t.type, clips: t.clips.length })),
+      });
+      return next;
+    });
+
+    setIsDirty(true);
+    setMessage({ type: 'success', text: `Background music added: ${asset.filename}` });
+    setTimeout(() => setMessage(null), 2000);
+    if (selectedRef) {
+      queueMicrotask(() => setSelected(selectedRef));
     }
   };
 
@@ -703,6 +728,20 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     });
     setIsDirty(true);
   };
+
+  const deleteClip = useCallback((ref: ClipRef) => {
+    setDraftProject((p) => {
+      const tracks = p.tracks.map((t) => {
+        if (t.id !== ref.trackId) return t;
+        const nextClips = t.clips.filter((c) => c.id !== ref.clipId);
+        return nextClips.length === t.clips.length ? t : { ...t, clips: nextClips };
+      });
+      const cleaned = tracks.filter((t) => !(t.isAutoCreated && t.clips.length === 0));
+      return { ...p, tracks: cleaned };
+    });
+    if (selected?.trackId === ref.trackId && selected?.clipId === ref.clipId) setSelected(null);
+    setIsDirty(true);
+  }, [selected]);
 
   const deleteTrack = (trackId: string) => {
     setDraftProject((p) => ({
@@ -837,6 +876,20 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     }
   }, [isPlaying, draftProject.duration]);
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!selected) return;
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || target?.isContentEditable) return;
+      e.preventDefault();
+      deleteClip(selected);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selected, deleteClip]);
+
   // Subtitles & characters generated (t_subs or t_chars have clips)
   const hasSubtitlesAndChars = draftProject.tracks.some(t =>
     (t.type === 'subtitle' || t.type === 'character') && t.clips.length > 0
@@ -858,6 +911,11 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       });
 
       if (!response.ok) {
+        console.error('[EditorLayout] /api/project/:id/ai-draft HTTP error', {
+          projectId: project.id,
+          status: response.status,
+          statusText: response.statusText,
+        });
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
@@ -869,10 +927,14 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         if (updated) setDraftProject(updated);
         setTimeout(() => setMessage(null), 3000);
       } else {
+        console.error('[EditorLayout] AI draft response indicated failure', {
+          projectId: project.id,
+          response: data,
+        });
         throw new Error(data.error || 'Failed to generate');
       }
     } catch (error) {
-      console.error('Error generating subtitles & characters:', error);
+      console.error('[EditorLayout] Failed to generate subtitles & characters', error);
       setMessage({
         type: 'error',
         text: error instanceof Error ? error.message : 'Failed to generate',
@@ -908,13 +970,47 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         throw new Error(data.error || 'Failed to generate image plan');
       }
     } catch (error) {
-      console.error('Error generating image plan:', error);
       setMessage({
         type: 'error',
         text: error instanceof Error ? error.message : 'Failed to generate image plan',
       });
     } finally {
       setIsGeneratingImagePlan(false);
+    }
+  };
+
+  const handleGenerateSfxPlan = async () => {
+    setIsGeneratingSfxPlan(true);
+    setMessage({ type: 'info', text: 'Generating SFX plan...' });
+
+    try {
+      const response = await fetch(API_ENDPOINTS.generateSfxPlan(project.id), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data.success && data.project) {
+        setMessage({ type: 'success', text: 'SFX plan generated!' });
+        const updated = await onProjectUpdate?.();
+        if (updated) setDraftProject(updated);
+        setTimeout(() => setMessage(null), 3000);
+      } else {
+        throw new Error(data.error || 'Failed to generate SFX plan');
+      }
+    } catch (error) {
+      console.error('Error generating SFX plan:', error);
+      setMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : 'Failed to generate SFX plan',
+      });
+    } finally {
+      setIsGeneratingSfxPlan(false);
     }
   };
 
@@ -952,7 +1048,6 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         throw new Error(data.error || 'Failed to save timeline');
       }
     } catch (error) {
-      console.error('Error saving timeline:', error);
       setMessage({ 
         type: 'error', 
         text: error instanceof Error ? error.message : 'Failed to save timeline' 
@@ -1019,19 +1114,16 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             setIsExporting(false);
           }
         } catch (err) {
-          console.error('Error parsing SSE message:', err);
         }
       };
 
       eventSource.onerror = () => {
         eventSource.close();
         if (completed) return; // Ignore: we already got success, onerror fires when closing
-        console.error('SSE connection error');
         setIsExporting(false);
         setMessage({ type: 'error', text: 'Lost connection to server' });
       };
     } catch (error) {
-      console.error('Error starting export:', error);
       setMessage({ 
         type: 'error', 
         text: error instanceof Error ? error.message : 'Failed to start export' 
@@ -1057,6 +1149,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
               if (tab === 'audioSession') fetchAudioSessions();
               if (tab === 'template') fetchTemplates();
             }}
+            onAddBackgroundMusic={addBackgroundMusic}
+            onAddSfx={addSfxToTimeline}
             onChangeAudioSession={async (sessionId) => {
               const session = audioSessions.find(s => s.sessionId === sessionId);
               await handleChangeAudioSession(sessionId, session?.name || sessionId);
@@ -1095,6 +1189,10 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
               if (!selected) return;
               updateClip(selected, patch);
             }}
+            onDeleteClip={() => {
+              if (!selected) return;
+              deleteClip(selected);
+            }}
             projectId={project.id}
             project={draftProject}
             onVideoStartChange={handleVideoStartChange}
@@ -1103,7 +1201,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         </div>
 
         {/* Timeline Section */}
-        <VideoTimelinePanel
+          <VideoTimelinePanel
           project={draftProject}
           height={timelineHeight}
           isPlaying={isPlaying}
@@ -1114,9 +1212,11 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
           onExport={handleExport}
           onSaveTimeline={handleSaveTimeline}
           onGenerateSubtitlesAndChars={handleGenerateSubtitlesAndChars}
-          onGenerateImagePlan={handleGenerateImagePlan}
-          isGeneratingDraft={isGeneratingDraft}
-          isGeneratingImagePlan={isGeneratingImagePlan}
+            onGenerateImagePlan={handleGenerateImagePlan}
+            onGenerateSfxPlan={handleGenerateSfxPlan}
+            isGeneratingDraft={isGeneratingDraft}
+            isGeneratingImagePlan={isGeneratingImagePlan}
+            isGeneratingSfxPlan={isGeneratingSfxPlan}
           isExporting={isExporting}
           exportProgress={exportProgress}
           hasSubtitlesAndChars={hasSubtitlesAndChars}
@@ -1136,6 +1236,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
           onUpdateClip={updateClip}
           onAddTrack={addTrack}
           onDeleteTrack={deleteTrack}
+          onDeleteClip={deleteClip}
           onMoveClipToNewTrack={moveClipToNewTrack}
           onMoveClipBackToTrack={moveClipBackToTrack}
           onMoveClipToTrack={moveClipToTrack}

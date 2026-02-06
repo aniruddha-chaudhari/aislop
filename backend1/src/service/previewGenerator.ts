@@ -3,8 +3,9 @@ import * as path from 'path';
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
 import { PrismaClient } from '../generated/prisma';
-import type { Project, SubtitleClip, OverlayClip, CharacterClip } from '../schema/project';
+import type { Project, SubtitleClip, OverlayClip, CharacterClip, MusicClip, SfxClip } from '../schema/project';
 import { getCharacterImagePath } from '../utils/characterImages';
+import { computeOverlayPlacement } from './overlayTransform';
 
 const prisma = new PrismaClient();
 const TEMP_DIR = path.join(process.cwd(), 'storage', 'temp');
@@ -25,10 +26,10 @@ const PREVIEW_HEIGHT = 640;
 const SCALE = PREVIEW_HEIGHT / 1920; // Same proportion as timelineCompiler 1080x1920
 const PREVIEW_BITRATE = '500k'; // Low bitrate for fast generation
 
-// Overlay placement: match imageEmbedder (backend) - center horizontally, fixed from top
-const OVERLAY_SCALE_W = Math.floor(960 * (PREVIEW_WIDTH / 1080)); // 320 at 360px width
-const OVERLAY_SCALE_H = Math.floor(720 * (PREVIEW_HEIGHT / 1920)); // 240 at 640px height
-const OVERLAY_Y_TOP = Math.floor(40 * (PREVIEW_HEIGHT / 1920)); // 13 at 640px height (~40px at 1920)
+// Overlay base size (legacy default scale=0.5) and legacy top offset.
+const OVERLAY_BASE_W = Math.floor(960 * (PREVIEW_WIDTH / 1080)); // 320 at 360px width
+const OVERLAY_BASE_H = Math.floor(720 * (PREVIEW_HEIGHT / 1920)); // 240 at 640px height
+const OVERLAY_LEGACY_TOP_Y = Math.floor(40 * (PREVIEW_HEIGHT / 1920)); // 13 at 640px height (~40px at 1920)
 
 // Ensure preview directory exists
 if (!fs.existsSync(PREVIEW_DIR)) {
@@ -361,6 +362,98 @@ function resolveTemplatePath(templatePath: string): string {
   return fs.existsSync(inCwd) ? inCwd : templatePath;
 }
 
+function resolveAudioClipPath(clipPath: string): string | null {
+  if (!clipPath) return null;
+  if (/^https?:\/\//i.test(clipPath)) return clipPath;
+  const normalized = clipPath.replace(/\\/g, '/');
+  if (fs.existsSync(clipPath)) return clipPath;
+  const inCwd = path.join(process.cwd(), clipPath);
+  if (fs.existsSync(inCwd)) return inCwd;
+  // If clipPath already starts with audio_assets/, resolve from storage/
+  if (normalized.startsWith('audio_assets/')) {
+    const inStorage = path.join(process.cwd(), 'storage', normalized);
+    if (fs.existsSync(inStorage)) return inStorage;
+  }
+  if (normalized.startsWith('storage/audio_assets/')) {
+    const inStorage = path.join(process.cwd(), normalized);
+    if (fs.existsSync(inStorage)) return inStorage;
+  }
+  const inAudioAssets = path.join(process.cwd(), 'storage', 'audio_assets', clipPath);
+  if (fs.existsSync(inAudioAssets)) return inAudioAssets;
+  return null;
+}
+
+type AudioInputRef = { clip: MusicClip | SfxClip; inputIndex: number; kind: 'music' | 'sfx' };
+
+function buildAudioMixFilter(
+  dialogueInputIndex: number | null,
+  musicInputs: AudioInputRef[],
+  sfxInputs: AudioInputRef[]
+): { filter: string | null; outputLabel: string | null } {
+  const filters: string[] = [];
+  const labels: string[] = [];
+
+  if (dialogueInputIndex !== null) {
+    filters.push(
+      `[${dialogueInputIndex}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a_dialogue]`
+    );
+    labels.push('[a_dialogue]');
+  }
+
+  const addClip = (clip: MusicClip | SfxClip, inputIndex: number, prefix: string, index: number) => {
+    const label = `${prefix}_${index}`;
+    const duration = typeof clip.duration === 'number' && clip.duration > 0 ? clip.duration : null;
+    const volume = typeof clip.volume === 'number' && Number.isFinite(clip.volume) ? Math.max(0, clip.volume) : 1;
+    const delayMs = Math.max(0, Math.round((clip.start || 0) * 1000));
+
+    const chain: string[] = [];
+    if (duration) chain.push(`atrim=0:${duration}`);
+    chain.push('asetpts=PTS-STARTPTS');
+    if (volume !== 1) chain.push(`volume=${volume}`);
+    if (delayMs > 0) chain.push(`adelay=${delayMs}|${delayMs}`);
+    chain.push('aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo');
+
+    filters.push(`[${inputIndex}:a]${chain.join(',')}[${label}]`);
+    labels.push(`[${label}]`);
+  };
+
+  musicInputs.forEach((input, i) => addClip(input.clip, input.inputIndex, 'a_music', i));
+  sfxInputs.forEach((input, i) => addClip(input.clip, input.inputIndex, 'a_sfx', i));
+
+  if (labels.length === 0) return { filter: null, outputLabel: null };
+  if (labels.length === 1) return { filter: filters.join(';'), outputLabel: labels[0] };
+
+  filters.push(`${labels.join('')}amix=inputs=${labels.length}:duration=longest:dropout_transition=0[a_mix]`);
+  return { filter: filters.join(';'), outputLabel: '[a_mix]' };
+}
+
+function sliceAudioClipsToWindow<T extends { start: number; duration?: number }>(
+  clips: T[],
+  segmentStart: number,
+  segmentEnd: number
+): T[] {
+  const result: T[] = [];
+  for (const clip of clips) {
+    const clipDuration = typeof clip.duration === 'number' && clip.duration > 0 ? clip.duration : null;
+    const clipEnd = clipDuration ? clip.start + clipDuration : clip.start;
+    const overlaps = clipDuration
+      ? clipEnd > segmentStart && clip.start < segmentEnd
+      : clip.start < segmentEnd;
+    if (!overlaps) continue;
+
+    const localStart = Math.max(0, clip.start - segmentStart);
+    const remaining = Math.max(0.05, segmentEnd - Math.max(clip.start, segmentStart));
+    const localDuration = clipDuration ? Math.max(0.05, Math.min(clipDuration, remaining)) : remaining;
+
+    result.push({
+      ...clip,
+      start: localStart,
+      duration: localDuration,
+    });
+  }
+  return result;
+}
+
 /**
  * Generate timeline-aware preview with subtitles, overlay images, and character images
  */
@@ -425,11 +518,15 @@ export async function generateTimelinePreview(
 
     const imageOverlayTracks = (timeline?.tracks ?? []).filter((t: any) => t.type === 'overlay' && (t.id === 't_imgs' || /^t_imgs_\d+$/.test(t.id)));
     const characterTrack = timeline?.tracks?.find((t: any) => t.type === 'character');
+    const musicTracks = (timeline?.tracks ?? []).filter((t: any) => t.type === 'music');
+    const sfxTracks = (timeline?.tracks ?? []).filter((t: any) => t.type === 'sfx');
     const subtitleTrack = timeline?.tracks?.find((t: any) => t.type === 'subtitle');
 
     const overlayClips = imageOverlayTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'overlay') || [])) as OverlayClip[];
     const characterClips = (characterTrack?.clips?.filter((c: any) => c.kind === 'character') || []) as CharacterClip[];
     let subtitleClips = (subtitleTrack?.clips?.filter((c: any) => c.kind === 'subtitle') || []) as SubtitleClip[];
+    const musicClips = musicTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'music') || [])) as MusicClip[];
+    const sfxClips = sfxTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'sfx') || [])) as SfxClip[];
 
     onProgress?.(15, 'Fetching word timings for karaoke...');
     subtitleClips = await enrichSubtitleClipsWithWords(session, subtitleClips);
@@ -451,17 +548,47 @@ export async function generateTimelinePreview(
     }
     command.input(concatenatedAudioPath).inputOptions(['-t', duration.toString()]);
 
+    let nextInputIndex = 2;
+    const musicInputs: AudioInputRef[] = [];
+    for (const clip of musicClips) {
+      const resolved = resolveAudioClipPath(clip.path);
+      console.log('[Preview] music clip', {
+        path: clip.path,
+        resolved,
+        start: clip.start,
+        duration: clip.duration,
+        volume: (clip as any).volume,
+      });
+      if (!resolved) continue;
+      command.input(resolved);
+      musicInputs.push({ clip, inputIndex: nextInputIndex++, kind: 'music' });
+    }
+
+    const sfxInputs: AudioInputRef[] = [];
+    for (const clip of sfxClips) {
+      const resolved = resolveAudioClipPath(clip.path);
+      console.log('[Preview] sfx clip', {
+        path: clip.path,
+        resolved,
+        start: clip.start,
+        duration: clip.duration,
+        volume: (clip as any).volume,
+      });
+      if (!resolved) continue;
+      command.input(resolved);
+      sfxInputs.push({ clip, inputIndex: nextInputIndex++, kind: 'sfx' });
+    }
+
     const overlayInputs: { clip: OverlayClip; inputIndex: number }[] = [];
     overlayClips.forEach((clip: OverlayClip) => {
       const imagePath = clip.path ?? path.join(IMAGE_UPLOAD_DIR, audioSessionId, `${clip.assetId}.png`);
       if (fs.existsSync(imagePath)) {
         command.input(imagePath);
-        // Use actual FFmpeg input order: 0=template, 1=audio, 2+=overlays (so first overlay = 2, second = 3, ...)
-        overlayInputs.push({ clip, inputIndex: 2 + overlayInputs.length });
+        overlayInputs.push({ clip, inputIndex: nextInputIndex++ });
       }
     });
-
-    let nextIdx = 2 + overlayInputs.length;
+    
+    let nextIdx = nextInputIndex;
     const charInputs: { clip: CharacterClip; inputIndex: number }[] = [];
     for (const clip of characterClips) {
       const charPath = getCharacterImagePath(clip.character);
@@ -493,9 +620,16 @@ export async function generateTimelinePreview(
     }
 
     overlayInputs.forEach(({ clip, inputIndex }, index) => {
-      // Match imageEmbedder placement: scale to fixed size, center x, fixed y from top
-      filterComplex += `;[${inputIndex}:v]scale=${OVERLAY_SCALE_W}:${OVERLAY_SCALE_H}:force_original_aspect_ratio=decrease[ov${index}]`;
-      filterComplex += `;[${lastLabel}][ov${index}]overlay=(W-w)/2:${OVERLAY_Y_TOP}:enable='between(t,${clip.start},${clip.start + clip.duration})'[vo${index}]`;
+      const placement = computeOverlayPlacement(
+        clip,
+        PREVIEW_WIDTH,
+        PREVIEW_HEIGHT,
+        OVERLAY_BASE_W,
+        OVERLAY_BASE_H,
+        OVERLAY_LEGACY_TOP_Y
+      );
+      filterComplex += `;[${inputIndex}:v]scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[ov${index}]`;
+      filterComplex += `;[${lastLabel}][ov${index}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})'[vo${index}]`;
       lastLabel = `vo${index}`;
     });
 
@@ -538,11 +672,33 @@ export async function generateTimelinePreview(
     onProgress?.(50, 'Encoding preview...');
 
     filterComplex += `;[${lastLabel}]format=yuv420p,setsar=1[out]`;
+    const needsAudioMixing = musicInputs.length > 0 || sfxInputs.length > 0;
+    console.log('[Preview] audio mix', {
+      musicInputs: musicInputs.length,
+      sfxInputs: sfxInputs.length,
+      needsAudioMixing,
+    });
+    const audioMix = needsAudioMixing
+      ? buildAudioMixFilter(1, musicInputs, sfxInputs)
+      : { filter: null, outputLabel: null };
+    if (audioMix.filter) {
+      filterComplex += `;${audioMix.filter}`;
+    }
 
     // FFmpeg debug logs
     const allInputs = [
       { index: 0, type: 'Template', path: templatePath },
       { index: 1, type: 'Audio', path: concatenatedAudioPath },
+      ...musicInputs.map(({ clip, inputIndex }) => ({
+        index: inputIndex,
+        type: 'Music',
+        path: clip.path
+      })),
+      ...sfxInputs.map(({ clip, inputIndex }) => ({
+        index: inputIndex,
+        type: 'SFX',
+        path: clip.path
+      })),
       ...overlayInputs.map(({ clip, inputIndex }) => ({
         index: inputIndex,
         type: 'Overlay',
@@ -564,7 +720,7 @@ export async function generateTimelinePreview(
       .complexFilter(filterComplex)
       .outputOptions([
         '-map', '[out]',  // Map filter output for video
-        '-map', '1:a',    // Map audio from concatenated input
+        '-map', audioMix.outputLabel ?? '1:a',    // Map audio from concatenated input
         '-t', duration.toString(),
         // Use GPU encoding (h264_nvenc) for timeline-aware preview as well.
         '-c:v', 'h264_nvenc',
@@ -624,6 +780,7 @@ export async function generateTimelinePreviewHls(
   version: string,
   onProgress?: (percent: number, message: string) => void
 ): Promise<{ success: boolean; playlistPath?: string; error?: string }> {
+  console.log('[HLS Preview] start', { projectId: project.id, version });
   const { id: projectId, template, audioSessionId, timeline } = project;
 
   try {
@@ -690,10 +847,14 @@ export async function generateTimelinePreviewHls(
     const imageOverlayTracks = (timeline?.tracks ?? []).filter((t: any) => t.type === 'overlay' && (t.id === 't_imgs' || /^t_imgs_\d+$/.test(t.id)));
     const characterTrack = timeline?.tracks?.find((t: any) => t.type === 'character');
     const subtitleTrack = timeline?.tracks?.find((t: any) => t.type === 'subtitle');
+    const musicTracks = (timeline?.tracks ?? []).filter((t: any) => t.type === 'music');
+    const sfxTracks = (timeline?.tracks ?? []).filter((t: any) => t.type === 'sfx');
 
     const overlayClips = imageOverlayTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'overlay') || [])) as OverlayClip[];
     const characterClips = (characterTrack?.clips?.filter((c: any) => c.kind === 'character') || []) as CharacterClip[];
     let subtitleClips = (subtitleTrack?.clips?.filter((c: any) => c.kind === 'subtitle') || []) as SubtitleClip[];
+    const musicClips = musicTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'music') || [])) as MusicClip[];
+    const sfxClips = sfxTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'sfx') || [])) as SfxClip[];
 
     onProgress?.(15, 'Fetching word timings for HLS karaoke...');
     subtitleClips = await enrichSubtitleClipsWithWords(session, subtitleClips);
@@ -715,16 +876,47 @@ export async function generateTimelinePreviewHls(
     }
     command.input(concatenatedAudioPath).inputOptions(['-t', duration.toString()]);
 
+    let nextInputIndex = 2;
+    const musicInputs: AudioInputRef[] = [];
+    for (const clip of musicClips) {
+      const resolved = resolveAudioClipPath(clip.path);
+      console.log('[HLS Preview] music clip', {
+        path: clip.path,
+        resolved,
+        start: clip.start,
+        duration: clip.duration,
+        volume: (clip as any).volume,
+      });
+      if (!resolved) continue;
+      command.input(resolved);
+      musicInputs.push({ clip, inputIndex: nextInputIndex++, kind: 'music' });
+    }
+
+    const sfxInputs: AudioInputRef[] = [];
+    for (const clip of sfxClips) {
+      const resolved = resolveAudioClipPath(clip.path);
+      console.log('[HLS Preview] sfx clip', {
+        path: clip.path,
+        resolved,
+        start: clip.start,
+        duration: clip.duration,
+        volume: (clip as any).volume,
+      });
+      if (!resolved) continue;
+      command.input(resolved);
+      sfxInputs.push({ clip, inputIndex: nextInputIndex++, kind: 'sfx' });
+    }
+
     const overlayInputs: { clip: OverlayClip; inputIndex: number }[] = [];
     overlayClips.forEach((clip: OverlayClip) => {
       const imagePath = clip.path ?? path.join(IMAGE_UPLOAD_DIR, audioSessionId, `${clip.assetId}.png`);
       if (fs.existsSync(imagePath)) {
         command.input(imagePath);
-        overlayInputs.push({ clip, inputIndex: 2 + overlayInputs.length });
+        overlayInputs.push({ clip, inputIndex: nextInputIndex++ });
       }
     });
 
-    let nextIdx = 2 + overlayInputs.length;
+    let nextIdx = nextInputIndex;
     const charInputs: { clip: CharacterClip; inputIndex: number }[] = [];
     for (const clip of characterClips) {
       const charPath = getCharacterImagePath(clip.character);
@@ -755,8 +947,16 @@ export async function generateTimelinePreviewHls(
     }
 
     overlayInputs.forEach(({ clip, inputIndex }, index) => {
-      filterComplex += `;[${inputIndex}:v]scale=${OVERLAY_SCALE_W}:${OVERLAY_SCALE_H}:force_original_aspect_ratio=decrease[ov${index}]`;
-      filterComplex += `;[${lastLabel}][ov${index}]overlay=(W-w)/2:${OVERLAY_Y_TOP}:enable='between(t,${clip.start},${clip.start + clip.duration})'[vo${index}]`;
+      const placement = computeOverlayPlacement(
+        clip,
+        PREVIEW_WIDTH,
+        PREVIEW_HEIGHT,
+        OVERLAY_BASE_W,
+        OVERLAY_BASE_H,
+        OVERLAY_LEGACY_TOP_Y
+      );
+      filterComplex += `;[${inputIndex}:v]scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[ov${index}]`;
+      filterComplex += `;[${lastLabel}][ov${index}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})'[vo${index}]`;
       lastLabel = `vo${index}`;
     });
 
@@ -799,6 +999,18 @@ export async function generateTimelinePreviewHls(
     onProgress?.(50, 'Encoding HLS preview...');
 
     filterComplex += `;[${lastLabel}]format=yuv420p,setsar=1[out]`;
+    const needsAudioMixing = musicInputs.length > 0 || sfxInputs.length > 0;
+    console.log('[HLS Preview] audio mix', {
+      musicInputs: musicInputs.length,
+      sfxInputs: sfxInputs.length,
+      needsAudioMixing,
+    });
+    const audioMix = needsAudioMixing
+      ? buildAudioMixFilter(1, musicInputs, sfxInputs)
+      : { filter: null, outputLabel: null };
+    if (audioMix.filter) {
+      filterComplex += `;${audioMix.filter}`;
+    }
 
     const timeout = setTimeout(() => {}, 600000);
 
@@ -809,7 +1021,7 @@ export async function generateTimelinePreviewHls(
       .complexFilter(filterComplex)
       .outputOptions([
         '-map', '[out]',
-        '-map', '1:a',
+        '-map', audioMix.outputLabel ?? '1:a',
         '-t', duration.toString(),
         '-c:v', 'h264_nvenc',
         '-b:v', PREVIEW_BITRATE,
@@ -871,6 +1083,11 @@ export async function generateTimelinePreviewHls(
     onProgress?.(100, 'HLS preview ready!');
     return { success: true, playlistPath };
   } catch (error) {
+    console.error('[HLS Preview] generate error', {
+      projectId: project.id,
+      message: error instanceof Error ? error.message : error,
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'
@@ -993,6 +1210,16 @@ export async function generateTimelineSegmentPreview(
     const characterClips = sliceClipsToWindow(
       (characterTrack?.clips?.filter((c: any) => c.kind === 'character') || []) as CharacterClip[]
     );
+    const musicClips = sliceAudioClipsToWindow(
+      musicTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'music') || [])) as MusicClip[],
+      segmentStart,
+      segmentEnd
+    );
+    const sfxClips = sliceAudioClipsToWindow(
+      sfxTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'sfx') || [])) as SfxClip[],
+      segmentStart,
+      segmentEnd
+    );
 
     const command = ffmpeg();
     const isImage = /\.(jpe?g|png|gif|webp)$/i.test(templatePath);
@@ -1011,17 +1238,47 @@ export async function generateTimelineSegmentPreview(
       .input(concatenatedAudioPath)
       .inputOptions(['-ss', segmentStart.toString(), '-t', segmentDuration.toString()]);
 
+    let nextInputIndex = 2;
+    const musicInputs: AudioInputRef[] = [];
+    for (const clip of musicClips) {
+      const resolved = resolveAudioClipPath(clip.path);
+      console.log('[Segment Preview] music clip', {
+        path: clip.path,
+        resolved,
+        start: clip.start,
+        duration: clip.duration,
+        volume: (clip as any).volume,
+      });
+      if (!resolved) continue;
+      command.input(resolved);
+      musicInputs.push({ clip, inputIndex: nextInputIndex++, kind: 'music' });
+    }
+
+    const sfxInputs: AudioInputRef[] = [];
+    for (const clip of sfxClips) {
+      const resolved = resolveAudioClipPath(clip.path);
+      console.log('[Segment Preview] sfx clip', {
+        path: clip.path,
+        resolved,
+        start: clip.start,
+        duration: clip.duration,
+        volume: (clip as any).volume,
+      });
+      if (!resolved) continue;
+      command.input(resolved);
+      sfxInputs.push({ clip, inputIndex: nextInputIndex++, kind: 'sfx' });
+    }
+
     const overlayInputs: { clip: OverlayClip; inputIndex: number }[] = [];
     overlayClips.forEach((clip: OverlayClip) => {
       const imagePath = clip.path ?? path.join(IMAGE_UPLOAD_DIR, audioSessionId, `${clip.assetId}.png`);
       if (fs.existsSync(imagePath)) {
         command.input(imagePath);
-        // Use actual FFmpeg input order: 0=template, 1=audio, 2+=overlays (so first overlay = 2, second = 3, ...)
-        overlayInputs.push({ clip, inputIndex: 2 + overlayInputs.length });
+        overlayInputs.push({ clip, inputIndex: nextInputIndex++ });
       }
     });
 
-    let nextIdx = 2 + overlayInputs.length;
+    let nextIdx = nextInputIndex;
     const charInputs: { clip: CharacterClip; inputIndex: number }[] = [];
     for (const clip of characterClips) {
       const charPath = getCharacterImagePath(clip.character);
@@ -1056,10 +1313,16 @@ export async function generateTimelineSegmentPreview(
 
     // Overlays in local segment time.
     overlayInputs.forEach(({ clip, inputIndex }, index) => {
-      filterComplex += `;[${inputIndex}:v]scale=${OVERLAY_SCALE_W}:${OVERLAY_SCALE_H}:force_original_aspect_ratio=decrease[ov${index}]`;
-      filterComplex += `;[${lastLabel}][ov${index}]overlay=(W-w)/2:${OVERLAY_Y_TOP}:enable='between(t,${clip.start},${
-        clip.start + clip.duration
-      })'[vo${index}]`;
+      const placement = computeOverlayPlacement(
+        clip,
+        PREVIEW_WIDTH,
+        PREVIEW_HEIGHT,
+        OVERLAY_BASE_W,
+        OVERLAY_BASE_H,
+        OVERLAY_LEGACY_TOP_Y
+      );
+      filterComplex += `;[${inputIndex}:v]scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[ov${index}]`;
+      filterComplex += `;[${lastLabel}][ov${index}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})'[vo${index}]`;
       lastLabel = `vo${index}`;
     });
 
@@ -1103,6 +1366,18 @@ export async function generateTimelineSegmentPreview(
     onProgress?.(50, 'Encoding segment preview...');
 
     filterComplex += `;[${lastLabel}]format=yuv420p,setsar=1[out]`;
+    const needsAudioMixing = musicInputs.length > 0 || sfxInputs.length > 0;
+    console.log('[Segment Preview] audio mix', {
+      musicInputs: musicInputs.length,
+      sfxInputs: sfxInputs.length,
+      needsAudioMixing,
+    });
+    const audioMix = needsAudioMixing
+      ? buildAudioMixFilter(1, musicInputs, sfxInputs)
+      : { filter: null, outputLabel: null };
+    if (audioMix.filter) {
+      filterComplex += `;${audioMix.filter}`;
+    }
 
     const timeout = setTimeout(() => {}, 60000);
 
@@ -1113,7 +1388,7 @@ export async function generateTimelineSegmentPreview(
       .complexFilter(filterComplex)
       .outputOptions([
         '-map', '[out]',  // Map filter output for video
-        '-map', '1:a',    // Map audio from concatenated input (already trimmed)
+        '-map', audioMix.outputLabel ?? '1:a',    // Map audio from concatenated input (already trimmed)
         '-t', segmentDuration.toString(),
         '-c:v', 'h264_nvenc',
         '-b:v', PREVIEW_BITRATE,
@@ -1158,4 +1433,3 @@ export async function generateTimelineSegmentPreview(
     };
   }
 }
-

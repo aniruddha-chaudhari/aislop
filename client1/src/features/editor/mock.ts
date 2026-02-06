@@ -21,6 +21,23 @@ export function makeMockProject(id: string): EditorProject {
         locked: true,
       },
       {
+        id: 't_music',
+        type: 'music',
+        name: 'Music',
+        clips: [
+          { id: 'm1', kind: 'music', start: 0, duration: 60, path: 'audio_assets/music/chill_bed.mp3', volume: 0.35 },
+        ],
+      },
+      {
+        id: 't_sfx',
+        type: 'sfx',
+        name: 'SFX',
+        clips: [
+          { id: 'sfx1', kind: 'sfx', start: 6, duration: 1.2, path: 'audio_assets/sfx/whoosh.wav', volume: 0.8 },
+          { id: 'sfx2', kind: 'sfx', start: 18, duration: 0.6, path: 'audio_assets/sfx/pop.wav', volume: 0.7 },
+        ],
+      },
+      {
         id: 't_subs',
         type: 'subtitle',
         name: 'Subtitles',
@@ -52,4 +69,3 @@ export function makeMockProject(id: string): EditorProject {
     ],
   };
 }
-

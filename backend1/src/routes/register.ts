@@ -5,6 +5,7 @@ import { register } from '../router';
 import { jsonResponse } from '../utils/http';
 import * as assistant from '../controllers/assistantController';
 import * as audio from '../controllers/audioController';
+import * as audioAssets from '../controllers/audioAssetsController';
 import { generateImage } from '../controllers/imageController';
 import * as video from '../controllers/videoController';
 import * as stream from '../controllers/streamController';
@@ -43,6 +44,10 @@ register([
   { method: 'DELETE', pattern: '/api/audio/files/:filename', handler: audio.deleteAudioFile },
   { method: 'DELETE', pattern: '/api/audio/session/:sessionId', handler: audio.deleteAudioSession },
   { method: 'GET', pattern: '/api/audio/cleanup', handler: audio.cleanupAudioFiles },
+
+  // Audio Assets (music + sfx)
+  { method: 'GET', pattern: '/api/audio-assets/music', handler: audioAssets.listMusicAssets },
+  { method: 'GET', pattern: '/api/audio-assets/sfx', handler: audioAssets.listSfxAssets },
 
   // Image
   { method: 'POST', pattern: '/api/image/generate', handler: generateImage },
@@ -85,6 +90,7 @@ register([
   { method: 'GET', pattern: '/api/project/:id/image/:assetId', handler: project.serveProjectImage },
   { method: 'POST', pattern: '/api/project/:id/ai-draft', handler: project.generateAiDraftForProject },
   { method: 'POST', pattern: '/api/project/:id/image-plan', handler: project.generateImagePlanForProject },
+  { method: 'POST', pattern: '/api/project/:id/sfx-plan', handler: project.generateSfxPlanForProject },
   { method: 'POST', pattern: '/api/project/:id/preview', handler: project.generateProjectPreview },
   { method: 'GET', pattern: '/api/project/:id/preview', handler: project.serveProjectPreview },
   { method: 'POST', pattern: '/api/project/:id/preview/hls', handler: project.generateProjectPreviewHls },

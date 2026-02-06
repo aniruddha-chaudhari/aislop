@@ -59,7 +59,6 @@ export default function CreateProjectPage() {
         throw new Error(data.error || 'Failed to create project');
       }
     } catch (err) {
-      console.error('Error creating project:', err);
       setError(err instanceof Error ? err.message : 'Failed to create project');
       setCreating(false);
     }

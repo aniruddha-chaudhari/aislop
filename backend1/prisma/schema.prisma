@@ -8,6 +8,7 @@ generator client {
 
 datasource db {
   provider = "sqlite"
+  url      = env("DATABASE_URL")
 }
 
 model Session {
@@ -100,4 +101,17 @@ model SubtitleCache {
 
   @@unique([sessionId, dialogueHash])
   @@map("subtitle_cache")
+}
+
+model SfxAsset {
+  id             String   @id @default(cuid())
+  filename       String   @unique
+  description    String
+  durationText   String?
+  durationSeconds Float?
+  filePath       String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("sfx_assets")
 }

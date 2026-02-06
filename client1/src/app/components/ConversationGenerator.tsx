@@ -122,8 +122,6 @@ export default function ConversationGenerator() {
     setAudioFiles([]);
 
     try {
-      console.log('Generating conversation with audio...');
-
       const response = await fetch(API_ENDPOINTS.script, {
         method: 'POST',
         headers: {
@@ -143,8 +141,6 @@ export default function ConversationGenerator() {
         mode: 'cors',
         credentials: 'include',
       });
-
-      console.log('Response status:', response.status);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -170,7 +166,6 @@ export default function ConversationGenerator() {
         setError('Failed to generate conversation script');
       }
     } catch (error) {
-      console.error('Error generating script:', error);
       setError('Failed to connect to server. Make sure the backend is running.');
     } finally {
       setLoading(false);
@@ -188,7 +183,6 @@ export default function ConversationGenerator() {
       const data = await response.json();
       return data.success === true;
     } catch (error) {
-      console.error('Error checking TTS connection:', error);
       return false;
     }
   };
@@ -206,7 +200,6 @@ export default function ConversationGenerator() {
     }
 
     // Check TTS connection before attempting to generate audio
-    console.log('Checking TTS connection...');
     const ttsConnected = await checkTTSConnection();
     if (!ttsConnected) {
       setError('TTS API is not available. Please ensure the Chatterbox TTS server is running on port 8000.\n\nYou can start it by running: cd F:\\Aniruddha\\AI\\chatterbox && .venv\\Scripts\\Activate.ps1 && python fastapi_tts_server.py');
@@ -215,15 +208,6 @@ export default function ConversationGenerator() {
     }
 
     try {
-      console.log('Generating audio for approved script...');
-      console.log('Payload trace (frontend):', {
-        topic,
-        topicLength: topic?.length,
-        conversationLines: conversation.length,
-        sampleLine: conversation[0]?.dialogue?.slice(0, 80),
-        parameters: ttsParameters
-      });
-
       const response = await fetch(API_ENDPOINTS.audioFromScript, {
         method: 'POST',
         headers: {
@@ -266,12 +250,7 @@ export default function ConversationGenerator() {
 
       if (data.success) {
         const newSessionId = data.sessionId || sessionId;
-        console.log('Audio generation started:', {
-          returnedSessionId: newSessionId,
-          streamEndpoint: data.streamEndpoint,
-          note: data.note
-        });
-        
+
         setSessionId(newSessionId);
         if (newSessionId) {
           localStorage.setItem('audioSessionId', newSessionId);
@@ -287,7 +266,6 @@ export default function ConversationGenerator() {
         // Connect to SSE stream FIRST, then navigate to page
         // This ensures SSE connection is established before any messages are published
         if (data.streamEndpoint && newSessionId) {
-          console.log('Setting up SSE connection before navigating...');
           connectToStream(newSessionId);
           
           // Small delay to ensure SSE connection is established
@@ -308,7 +286,6 @@ export default function ConversationGenerator() {
         setError('Failed to generate audio files');
       }
     } catch (error) {
-      console.error('Error generating audio:', error);
       const errorMessage = error instanceof Error ? error.message : 'Failed to generate audio. Please try again.';
       setError(errorMessage);
     } finally {
@@ -341,15 +318,12 @@ export default function ConversationGenerator() {
     }
 
     const streamUrl = API_ENDPOINTS.streamFileUpdates(sessionId);
-    console.log('[SSE] Connecting to stream:', streamUrl);
-    
+
     try {
       const eventSource = new EventSource(streamUrl);
       eventSourceRef.current = eventSource;
 
-      eventSource.onopen = () => {
-        console.log('[SSE] ✅ Connection opened successfully');
-      };
+      eventSource.onopen = () => {};
 
       eventSource.onmessage = (event) => {
       try {
@@ -359,7 +333,6 @@ export default function ConversationGenerator() {
         }
 
         const update = JSON.parse(event.data);
-        console.log('SSE update received:', update);
 
         if (update.type === 'started') {
           const total = update.total || conversation.length;
@@ -498,27 +471,20 @@ export default function ConversationGenerator() {
           setError(`Error generating ${update.filename}: ${update.error}`);
         }
       } catch (error) {
-        console.error('Error parsing SSE message:', error);
       }
     };
 
-      eventSource.onerror = (error) => {
-        console.error('[SSE] ❌ Connection error:', error);
-        console.error('[SSE] ReadyState:', eventSource.readyState);
+      eventSource.onerror = () => {
         // EventSource.readyState: 0 = CONNECTING, 1 = OPEN, 2 = CLOSED
         if (eventSource.readyState === EventSource.CLOSED) {
-          console.error('[SSE] Connection closed, attempting to reconnect...');
-          // Try to reconnect after a delay
           setTimeout(() => {
             if (sessionId) {
-              console.log('[SSE] Reconnecting...');
               connectToStream(sessionId);
             }
           }, 3000);
         }
       };
     } catch (error) {
-      console.error('[SSE] Failed to create EventSource:', error);
     }
   };
 
@@ -569,8 +535,6 @@ export default function ConversationGenerator() {
     setSuccessMessage('');
 
     try {
-      console.log('Generating video with embedded images...');
-
       const response = await fetch(API_ENDPOINTS.generateVideo, {
         method: 'POST',
         headers: {
@@ -592,8 +556,6 @@ export default function ConversationGenerator() {
       const data: VideoResponse = await response.json();
 
       if (data.success) {
-        console.log('Video generation successful:', data);
-
         // Display user image feedback if available
         if (data.userImagesSummary && data.userImageDecisions) {
           const { totalProvided, accepted, rejected } = data.userImagesSummary;
@@ -606,18 +568,6 @@ export default function ConversationGenerator() {
 
             // Store decisions for display
             setUserImageDecisions(data.userImageDecisions);
-
-            // Show detailed decisions
-            console.log(' User Image Decisions:');
-            data.userImageDecisions.forEach((decision, index) => {
-              const status = decision.useImage ? ' ACCEPTED' : ' REJECTED';
-              console.log(`${index + 1}. ${decision.userImageLabel}: ${status}`);
-              console.log(`   Reason: ${decision.reasoning}`);
-              if (decision.useImage && decision.timestamp) {
-                console.log(`   Will appear at: ${decision.timestamp.toFixed(1)}s`);
-              }
-              console.log('');
-            });
           } else {
             feedbackMessage += 'You can now download it.';
           }
@@ -632,7 +582,6 @@ export default function ConversationGenerator() {
         setError(data.error || 'Failed to generate video');
       }
     } catch (error) {
-      console.error('Error generating video:', error);
       setError('Failed to generate video. Please try again.');
     } finally {
       setLoading(false);
@@ -650,7 +599,6 @@ export default function ConversationGenerator() {
       setSuccessMessage('Conversation JSON copied to clipboard!');
       setTimeout(() => setSuccessMessage(''), 3000);
     } catch (err) {
-      console.error('Failed to copy JSON:', err);
       setError('Failed to copy JSON to clipboard');
     }
   };
@@ -682,15 +630,13 @@ export default function ConversationGenerator() {
       setSuccessMessage('Conversation imported successfully!');
       setTimeout(() => setSuccessMessage(''), 3000);
     } catch (err) {
-      console.error('Failed to import JSON:', err);
       setError(`Failed to import JSON: ${err instanceof Error ? err.message : 'Invalid JSON format'}`);
     }
   };
 
   const playAudio = (filename: string) => {
     const audio = new Audio(`${API_BASE_URL}/api/audio/download/${filename}`);
-    audio.play().catch(err => {
-      console.error('Error playing audio:', err);
+    audio.play().catch(() => {
       setError('Failed to play audio file');
     });
   };
@@ -729,14 +675,10 @@ export default function ConversationGenerator() {
 
       const data = await response.json();
       if (data.success) {
-        // Update the audio file timestamp or refresh the list
-        // For now, we'll just show success message
-        console.log('Audio regenerated successfully');
       } else {
         setError('Failed to regenerate audio');
       }
     } catch (error) {
-      console.error('Error regenerating audio:', error);
       setError('Failed to regenerate audio. Please try again.');
     } finally {
       setRegeneratingIndex(null);
@@ -747,8 +689,6 @@ export default function ConversationGenerator() {
   const handleDeleteAudio = async (filename: string) => {
     if (!confirm('Are you sure you want to delete this audio file?')) return;
 
-    console.log('Deleting audio file:', { filename, sessionId });
-
     try {
       const response = await fetch(`${API_BASE_URL}/api/audio/files/${filename}?sessionId=${sessionId}`, {
         method: 'DELETE',
@@ -756,16 +696,12 @@ export default function ConversationGenerator() {
 
       if (!response.ok) {
         const errorData = await response.json();
-        console.error('Delete response error:', errorData);
         throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
       }
 
       // Remove the deleted audio file from the state
       setAudioFiles(prev => prev.filter(file => file.filename !== filename));
-
-      console.log('Audio file deleted successfully');
     } catch (error) {
-      console.error('Error deleting audio file:', error);
       setError('Failed to delete audio file. Please try again.');
     }
   };
@@ -1143,8 +1079,6 @@ export default function ConversationGenerator() {
                           </button>
                           <button
                             onClick={() => {
-                              console.log('Current sessionId:', sessionId);
-                              console.log('Audio file to delete:', fileToUse.filename);
                               handleDeleteAudio(fileToUse.filename);
                             }}
                             className="px-3 py-2 bg-red-500 hover:bg-red-600 text-white text-xs sm:text-sm rounded-md transition-colors flex items-center gap-1 min-w-[60px] sm:min-w-0"

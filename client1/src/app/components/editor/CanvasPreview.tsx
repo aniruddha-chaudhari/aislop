@@ -130,28 +130,22 @@ export default function CanvasPreview({
       hls.attachMedia(video);
       
       hls.on(Hls.Events.ERROR, (event, data) => {
-        console.error('[CanvasPreview] HLS error', { event, data });
         if (data.fatal) {
           switch (data.type) {
             case Hls.ErrorTypes.NETWORK_ERROR:
-              console.error('[CanvasPreview] HLS network error, trying to recover...');
               hls.startLoad();
               break;
             case Hls.ErrorTypes.MEDIA_ERROR:
-              console.error('[CanvasPreview] HLS media error, trying to recover...');
               hls.recoverMediaError();
               break;
             default:
-              console.error('[CanvasPreview] HLS fatal error, destroying...');
               hls.destroy();
               break;
           }
         }
       });
-      
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        console.log('[CanvasPreview] HLS manifest parsed successfully');
-      });
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {});
 
       return () => {
         hls.destroy();
@@ -172,22 +166,13 @@ export default function CanvasPreview({
         const video = getVideoElement();
         if (!video) return;
         const t = seekToSeconds ?? playheadTime;
-        
-        console.log('[CanvasPreview] requestPlay', {
-          seekToSeconds,
-          playheadTime,
-          used: t,
-          videoCurrentTimeBefore: video.currentTime,
-          readyState: video.readyState,
-          duration: video.duration,
-        });
-        
+
         // Update intended position
         lastIntendedPlayheadRef.current = t;
         isSyncingFromTimelineRef.current = true;
 
         const doPlay = () => {
-          video.play().catch((err) => console.warn('[CanvasPreview] requestPlay play() failed', err));
+          video.play().catch(() => {});
         };
 
         // Seek is async: wait for 'seeked' before play() so we don't start from 0.
@@ -195,23 +180,19 @@ export default function CanvasPreview({
         if (needSeek) {
           try {
             video.currentTime = t;
-            console.log('[CanvasPreview] requestPlay set currentTime to', t, 'waiting for seeked...');
             const onSeeked = () => {
               video.removeEventListener('seeked', onSeeked);
               clearTimeout(timeoutId);
               isSyncingFromTimelineRef.current = false;
-              console.log('[CanvasPreview] requestPlay seeked, now playing from', video.currentTime);
               doPlay();
             };
             const timeoutId = setTimeout(() => {
               video.removeEventListener('seeked', onSeeked);
               isSyncingFromTimelineRef.current = false;
-              console.warn('[CanvasPreview] requestPlay seeked timeout, playing anyway from', video.currentTime);
               doPlay();
             }, 2000);
             video.addEventListener('seeked', onSeeked, { once: true });
           } catch (err) {
-            console.warn('[CanvasPreview] requestPlay set currentTime threw', err);
             isSyncingFromTimelineRef.current = false;
             doPlay();
           }
@@ -246,15 +227,7 @@ export default function CanvasPreview({
     
     const applyPlay = () => {
       const targetTime = lastIntendedPlayheadRef.current;
-      
-      console.log('[CanvasPreview] applyPlay', {
-        videoCurrentTime: video.currentTime,
-        targetTime,
-        playheadTime,
-        readyState: video.readyState,
-        willSeek: Number.isFinite(targetTime) && Math.abs(video.currentTime - targetTime) > 0.05,
-      });
-      
+
       const needSeek = Number.isFinite(targetTime) &&
         Math.abs(video.currentTime - targetTime) > 0.05 &&
         video.readyState >= 1 &&
@@ -264,29 +237,25 @@ export default function CanvasPreview({
         isSyncingFromTimelineRef.current = true;
         try {
           video.currentTime = targetTime;
-          console.log('[CanvasPreview] applyPlay set currentTime to', targetTime, 'waiting for seeked...');
           const onSeeked = () => {
             video.removeEventListener('seeked', onSeeked);
             clearTimeout(timeoutId);
             isSyncingFromTimelineRef.current = false;
-            console.log('[CanvasPreview] applyPlay seeked, now playing from', video.currentTime);
-            video.play().catch((err) => console.warn('[CanvasPreview] applyPlay play() failed', err));
+            video.play().catch(() => {});
           };
           const timeoutId = setTimeout(() => {
             video.removeEventListener('seeked', onSeeked);
             isSyncingFromTimelineRef.current = false;
-            console.warn('[CanvasPreview] applyPlay seeked timeout, playing from', video.currentTime);
             video.play().catch(() => {});
           }, 2000);
           video.addEventListener('seeked', onSeeked, { once: true });
         } catch (err) {
-          console.warn('[CanvasPreview] applyPlay set currentTime threw', err);
           isSyncingFromTimelineRef.current = false;
           video.play().catch(() => {});
         }
       } else {
         isSyncingFromTimelineRef.current = false;
-        video.play().catch((err) => console.warn('[CanvasPreview] applyPlay play() failed', err));
+        video.play().catch(() => {});
       }
     };
     
@@ -321,19 +290,8 @@ export default function CanvasPreview({
 
     // Check if video is ready for seeking
     if (video.readyState < 1 || !Number.isFinite(video.duration)) {
-      console.log('[CanvasPreview] Sync timeline→video video not ready', { 
-        readyState: video.readyState, 
-        duration: video.duration 
-      });
       return;
     }
-
-    console.log('[CanvasPreview] Sync timeline→video', {
-      videoTime: video.currentTime,
-      targetTime: playheadTime,
-      diff,
-      readyState: video.readyState,
-    });
 
     // Check if target is buffered
     const isBuffered = video.buffered.length > 0 && 
@@ -345,33 +303,26 @@ export default function CanvasPreview({
       isSyncingFromTimelineRef.current = true;
       try {
         video.currentTime = playheadTime;
-        console.log('[CanvasPreview] Sync timeline→video set currentTime to', playheadTime, 'actual:', video.currentTime);
       } catch (err) {
-        console.warn('[CanvasPreview] Sync timeline→video seek failed:', err);
       }
     } else {
       // Target not buffered - need to play first so video can buffer to that position
-      console.log('[CanvasPreview] Target not buffered, playing to buffer...');
       isBufferingToSeekRef.current = true;
       isSyncingFromTimelineRef.current = true;
-      
+
       // Play and seek to target, then pause when we reach it
       try {
         video.currentTime = playheadTime;
       } catch (err) {
-        console.warn('[CanvasPreview] Initial seek failed:', err);
       }
-      
-      video.play().catch(() => {
-        console.warn('[CanvasPreview] Play failed during buffering seek');
-      });
+
+      video.play().catch(() => {});
 
       // Listen for timeupdate to pause when we reach target
       const onTimeUpdate = () => {
         const distToTarget = Math.abs(video.currentTime - playheadTime);
-        
+
         if (distToTarget < 0.1) {
-          console.log('[CanvasPreview] Reached buffered target, pausing');
           video.removeEventListener('timeupdate', onTimeUpdate);
           video.pause();
           isBufferingToSeekRef.current = false;
@@ -411,12 +362,6 @@ export default function CanvasPreview({
                 onLoadedMetadata={handleReady}
                 onSeeking={() => {
                   isSeekingRef.current = true;
-                  const v = getVideoElement();
-                  console.log('[CanvasPreview] onSeeking', {
-                    videoCurrentTime: v?.currentTime,
-                    intended: lastIntendedPlayheadRef.current,
-                    readyState: v?.readyState,
-                  });
                 }}
                 onSeeked={() => {
                   const wasSyncingFromTimeline = isSyncingFromTimelineRef.current;
@@ -428,24 +373,15 @@ export default function CanvasPreview({
                   if (!video || !Number.isFinite(video.currentTime)) return;
 
                   const diffFromIntended = Math.abs(video.currentTime - lastIntendedPlayheadRef.current);
-                  console.log('[CanvasPreview] onSeeked', {
-                    videoCurrentTime: video.currentTime,
-                    intended: lastIntendedPlayheadRef.current,
-                    diffFromIntended,
-                    wasSyncingFromTimeline,
-                    readyState: video.readyState,
-                  });
 
                   // Don't sync timeline to video if this was a programmatic seek
                   if (wasSyncingFromTimeline) {
-                    console.log('[CanvasPreview] Ignoring seeked - was programmatic sync');
                     return;
                   }
 
                   // If video position is very different from intended, it might be a user-initiated
                   // seek on the video element itself - sync timeline to match
                   if (diffFromIntended > 0.5) {
-                    console.log('[CanvasPreview] Video seeked independently, syncing timeline');
                     lastIntendedPlayheadRef.current = video.currentTime;
                     onPlayheadChange(video.currentTime);
                   }
@@ -462,9 +398,7 @@ export default function CanvasPreview({
                 onEnded={() => {
                   if (isPlaying) onPlayPause();
                 }}
-                onError={(err) => {
-                  console.warn('[CanvasPreview] Video failed to load:', videoSrc, err);
-                }}
+                onError={() => {}}
               />
             ) : project.template.type === 'image' && hasVideoSrc && !previewVideoSrc ? (
               // eslint-disable-next-line @next/next/no-img-element

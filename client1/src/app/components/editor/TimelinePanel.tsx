@@ -26,6 +26,10 @@ function trackIcon(type: Track['type']): string {
   switch (type) {
     case 'audio':
       return '🎵';
+    case 'music':
+      return 'M';
+    case 'sfx':
+      return 'S';
     case 'subtitle':
       return '📝';
     case 'overlay':
@@ -37,10 +41,18 @@ function trackIcon(type: Track['type']): string {
   }
 }
 
+function clipPathLabel(path?: string, fallback: string = 'Audio'): string {
+  if (!path) return fallback;
+  const parts = path.split(/[\\/]/);
+  return parts[parts.length - 1] || fallback;
+}
+
 function clipLabel(c: Clip): string {
   if (c.kind === 'subtitle') return c.speaker;
   if (c.kind === 'overlay') return c.label;
   if (c.kind === 'character') return c.character;
+  if (c.kind === 'music') return clipPathLabel(c.path, 'Music');
+  if (c.kind === 'sfx') return clipPathLabel(c.path, 'SFX');
   return c.label;
 }
 
@@ -50,6 +62,10 @@ function clipBackground(kind: Clip['kind']): string {
   switch (kind) {
     case 'audio':
       return 'var(--studio-teal)';
+    case 'music':
+      return 'M';
+    case 'sfx':
+      return 'S';
     case 'subtitle':
       return 'oklch(0.6 0 0)'; // mid gray for text lanes
     case 'overlay':

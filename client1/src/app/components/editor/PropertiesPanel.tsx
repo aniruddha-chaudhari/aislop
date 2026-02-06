@@ -85,6 +85,24 @@ export default function PropertiesPanel({ selected }: Props) {
             </div>
           )}
 
+          {(selected.kind === 'music' || selected.kind === 'sfx') && (
+            <div className="rounded-xl border border-[var(--border)] bg-black/20 p-3">
+              <div className="text-[11px] font-semibold text-[var(--editor-muted)]">
+                {selected.kind === 'music' ? 'Music' : 'SFX'}
+              </div>
+              <div className="mt-2 text-xs">
+                <div className="text-[var(--editor-muted)]">Path</div>
+                <div className="mt-1 rounded-lg border border-[var(--border)] bg-[color-mix(in_srgb,var(--editor-fg)_5%,transparent)] px-3 py-2 font-medium">
+                  {selected.path || '—'}
+                </div>
+                <div className="mt-3 text-[var(--editor-muted)]">Volume</div>
+                <div className="mt-1 rounded-lg border border-[var(--border)] bg-[color-mix(in_srgb,var(--editor-fg)_5%,transparent)] px-3 py-2">
+                  {selected.volume ?? 1}
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="flex gap-2">
             <button className="flex-1 rounded-xl border border-[var(--border)] bg-[color-mix(in_srgb,var(--editor-fg)_6%,transparent)] px-3 py-2 text-xs font-medium hover:bg-[color-mix(in_srgb,var(--editor-fg)_10%,transparent)]">
               Duplicate
@@ -121,9 +139,8 @@ function OverlayProps({ overlay }: { overlay: OverlayClip }) {
         <Field label="Scale" value={fmt(overlay.scale)} />
       </div>
       <div className="mt-3 text-xs text-[var(--editor-muted)]">
-        Drag the overlay in Preview to update X/Y quickly.
+        Use X/Y/Scale in the properties panel to adjust image transform.
       </div>
     </div>
   );
 }
-
