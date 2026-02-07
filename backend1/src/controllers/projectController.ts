@@ -220,12 +220,7 @@ async function cleanupSessionFilesIfUnused(audioSessionId: string): Promise<void
   }
 }
 
-/**
- * Delete a project
- * DELETE /api/project/:id
- * When the last project for an audio session is deleted, cleans up that session's
- * image plan file and uploaded images so a new project with the same session gets a fresh start.
- */
+
 export async function deleteProject(ctx: HttpContext): Promise<HandlerResult> {
   try {
     const projectId = ctx.params?.id;
@@ -269,10 +264,7 @@ export async function deleteProject(ctx: HttpContext): Promise<HandlerResult> {
   }
 }
 
-/**
- * Generate subtitles and character clips for a project (local WhisperX)
- * POST /api/project/:id/ai-draft
- */
+
 export async function generateAiDraftForProject(ctx: HttpContext): Promise<HandlerResult> {
   try {
     const projectId = ctx.params?.id;
@@ -305,7 +297,7 @@ export async function generateAiDraftForProject(ctx: HttpContext): Promise<Handl
 
     const result = await generateSubtitlesAndCharacters(project.audioSessionId, topic);
 
-    // Merge with existing timeline (keep overlay tracks: template, t_imgs)
+
     const existing = project.timeline;
     const existingTracks = (existing?.tracks ?? []) as Track[];
     const overlayTracks = existingTracks.filter((t) => t.type === 'overlay');
@@ -346,10 +338,7 @@ export async function generateAiDraftForProject(ctx: HttpContext): Promise<Handl
   }
 }
 
-/**
- * Generate image plan overlay clips for a project
- * POST /api/project/:id/image-plan
- */
+
 export async function generateImagePlanForProject(ctx: HttpContext): Promise<HandlerResult> {
   try {
     const projectId = ctx.params?.id;
