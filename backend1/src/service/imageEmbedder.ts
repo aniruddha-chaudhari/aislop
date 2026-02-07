@@ -5,6 +5,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 const ffmpeg = require('fluent-ffmpeg');
 
+// OpenCode imports for agentic image plan generation with web research
+import { opencodeRun, parseOpenCodeJSON, OPENCODE_MODELS } from "../agents/gemini3agent";
+
 // 🎯 USAGE EXAMPLES AND HELPERS
 export class ImageEmbedderExamples {
   // 📖 EXAMPLE: How to use user-provided images
@@ -367,8 +370,8 @@ export class AssFileProcessor {
     for (const entry of entries) {
       // If this is the first entry or a new logical segment (different character or gap > 0.5s)
       if (!currentGroup ||
-          currentGroup.character !== entry.character ||
-          (entry.startTime - currentGroup.endTime) > 0.5) {
+        currentGroup.character !== entry.character ||
+        (entry.startTime - currentGroup.endTime) > 0.5) {
 
         // Save previous group if it exists
         if (currentGroup) {
@@ -419,9 +422,9 @@ export class AssFileProcessor {
   static generateImageTimingFromAss(
     assData: AssFileData,
     imageDensity: 'low' | 'medium' | 'high' | 'ultra' = 'high'
-  ): Array<{startTime: number; endTime: number; text: string; character?: string}> {
+  ): Array<{ startTime: number; endTime: number; text: string; character?: string }> {
     const { entries } = assData;
-    const imageTimings: Array<{startTime: number; endTime: number; text: string; character?: string}> = [];
+    const imageTimings: Array<{ startTime: number; endTime: number; text: string; character?: string }> = [];
 
     // 📏 DENSITY CONFIGURATION - How often to place images (more frequent now)
     const intervals = {
@@ -442,8 +445,8 @@ export class AssFileProcessor {
       // - Text has minimum length (reduced threshold for technical content)
       // - Haven't exceeded max images per minute
       if (entry.startTime - lastImageTime >= interval &&
-          entry.text.length > ASS_CONFIG.minTextLength &&
-          imageTimings.length < maxImages) {
+        entry.text.length > ASS_CONFIG.minTextLength &&
+        imageTimings.length < maxImages) {
 
         const imageStart = Math.max(0, entry.startTime - ASS_CONFIG.imageTimingOffset);
         const imageEnd = Math.min(assData.metadata.duration, entry.endTime + ASS_CONFIG.imageDisplayDuration);
@@ -686,26 +689,10 @@ Return a JSON object with this structure:
       const { entries } = assData;
       const imageTimings = AssFileProcessor.generateImageTimingFromAss(assData, 'ultra'); // Use ultra density for more images
 
-      // CLEAN RESEARCH PROMPT - No contaminating examples
-      const researchPrompt = `Research the technical topic "${topic}" and suggest specific visual diagrams and illustrations that would effectively explain the key technical concepts of this subject.
-
-Focus on identifying:
-1. The main system architecture components and their interactions
-2. The primary processes and technical workflows involved
-3. Key comparisons or trade-offs that would benefit from visual explanation
-4. Technical lifecycle stages or deployment processes
-5. Network topologies or data flow patterns specific to this technology
-
-Provide specific diagram concepts that would work well in educational video content about this particular technology. Focus on diagrams that help explain how the technology actually works and its core concepts.`;
-
-      const researchResult = await withGeminiFallback('models/gemini-3-flash-preview', (model) =>
-        generateText({
-          model,
-          prompt: researchPrompt,
-        })
-      );
-
-      const visualResearch = researchResult.text;
+      // ═══════════════════════════════════════════════════════════════════════════
+      // 🚀 OPENCODE-BASED IMAGE PLAN GENERATION (with Exa MCP web research)
+      // Uses Gemini 3 Pro for smarter analysis + real-time web research
+      // ═══════════════════════════════════════════════════════════════════════════
 
       // 🎯 10. PREPARE ENHANCED DIALOGUE SEQUENCE FOR AI
       // Clean up ASS formatting artifacts from dialogue text
@@ -721,13 +708,6 @@ Provide specific diagram concepts that would work well in educational video cont
           text: cleanedText
         };
       });
-
-      // Debug: Log some entries to understand the ASS file content
-      if (entries.length > 0) {
-        for (let i = 0; i < Math.min(5, entries.length); i++) {
-          const entry = entries[i];
-        }
-      }
 
       // Create comprehensive dialogue sequence with full context
       const dialogueSequence = cleanDialogueEntries
@@ -758,43 +738,131 @@ Provide specific diagram concepts that would work well in educational video cont
         })
         .join('\n');
 
-      const enhancedPrompt = this.IMAGE_ANALYSIS_PROMPT
-        .replace('{{DIALOGUE_SEQUENCE}}', dialogueSequence)
-        .replace('{{TOPIC}}', topic) +
-        `\n\nVISUAL RESEARCH CONTEXT:\n${visualResearch}\n\n` +
-        (userProvidedImages?.length ? `\n\nUSER-PROVIDED IMAGES:\n${userProvidedImages.map(img => `- ${img.label}: ${img.description || 'No description'}`).join('\n')}\n\n` : '') +
-        `Use this research to inspire creative, impactful image suggestions that maximize visual learning and engagement.` +
-        (userProvidedImages?.length ? `\n\nEVALUATE USER IMAGES: The user has explicitly provided ${userProvidedImages.length} images they want to include in the video. These images represent content they consider important for their audience. For each user-provided image, you should STRONGLY CONSIDER including it unless it is completely irrelevant to the technical topic or of very poor quality. If you decide to use a user image, you MUST provide a specific timestamp (in seconds) for when it should appear, based on the most relevant dialogue moment where the concept matches the image content. The timestamp is required, not optional. Give user images the benefit of the doubt and include them when there's reasonable relevance to the dialogue.` : '');
+      // Build user images context
+      const userImagesContext = userProvidedImages?.length
+        ? `\n\nUSER-PROVIDED IMAGES:\n${userProvidedImages.map(img => `- ${img.label}: ${img.description || 'No description'}`).join('\n')}\n\nEVALUATE USER IMAGES: The user has explicitly provided ${userProvidedImages.length} images they want to include. For each user-provided image, you should STRONGLY CONSIDER including it unless it is completely irrelevant. If you decide to use a user image, you MUST provide a specific timestamp (in seconds) for when it should appear.`
+        : '';
 
-      // 🎯 11. TECHNICAL IMAGE REQUIREMENT GENERATION WITH USER IMAGES AND CONTEXT-AWARE DURATIONS
-      const schema = z.object({
-        imageRequirements: z.array(z.object({
-          timestamp: z.number(),
-          dialogueText: z.string().describe("The complete, readable dialogue text being spoken at this timestamp. Must be a full sentence or complete thought, not fragments. Clean up any ASS formatting artifacts like \\N."),
-          character: z.string().describe("The character speaking this dialogue (e.g., 'Peter', 'Stewie')"),
-          // Accept both legacy and improved image type categories
-          imageType: z.enum(['architecture', 'process', 'comparison', 'diagram', 'workflow', 'infrastructure', 'lifecycle', 'concept_diagram', 'smart_code', 'process', 'architecture']),
-          dialogueAtTimestamp: z.string().optional().describe("Optional: The exact dialogue text at this specific timestamp"),
-          title: z.string(),
-          description: z.string(),
-          priority: z.enum(['high', 'medium', 'low']),
-          contextualDuration: z.number().describe("Duration in seconds this image should be visible based on how long the concept is explained in the dialogue (3-15 seconds)"),
-          relevanceReasoning: z.string().describe("Explanation of why this specific duration was chosen based on dialogue analysis")
-        })),
-        userImageDecisions: z.array(z.object({
-          userImageLabel: z.string(),
-          useImage: z.boolean(),
-          timestamp: z.number().describe("Required timestamp in seconds where this user image should appear in the video"),
-          contextualDuration: z.number().optional().describe("Duration based on concept explanation length"),
-          reasoning: z.string()
-        })).optional()
+      // Calculate video duration from dialogue timestamps
+      const timestampMatches = dialogueSequence.match(/\[(\d+\.?\d*)s\]/g);
+      const timestamps = timestampMatches?.map(t => parseFloat(t.replace(/[\[\]s]/g, ''))) || [];
+      const videoDuration = Math.max(...timestamps, 15); // Fallback to 15s if no timestamps
+
+      // Calculate appropriate image count: ~1 image per 5-7 seconds of content
+      const minImages = Math.max(2, Math.floor(videoDuration / 7));
+      const maxImages = Math.max(3, Math.ceil(videoDuration / 4));
+
+      console.log(`📏 [ImagePlan] Video duration: ~${videoDuration.toFixed(1)}s, recommending ${minImages}-${maxImages} images`);
+
+      // 🚀 OPENCODE PROMPT - Combines research + image plan generation
+      const opencodePrompt = `You are an expert visual content strategist for educational Instagram Reels. You have access to web search via Exa MCP - USE IT to research the topic.
+
+TOPIC: "${topic}"
+
+VIDEO DURATION: ~${videoDuration.toFixed(0)} seconds
+
+DIALOGUE SEQUENCE:
+${dialogueSequence}
+
+TASK:
+1. FIRST, use web search (Exa) to research "${topic}" - find current best practices, visual diagram ideas, and educational approaches
+2. Based on your research AND the dialogue, suggest specific educational images/diagrams
+
+For each image recommendation, provide:
+- timestamp: number (when it should appear in seconds)
+- dialogueText: string (the complete dialogue being spoken at this timestamp)
+- character: string (who is speaking - e.g., "Peter", "Stewie")
+- imageType: one of ["architecture", "process", "comparison", "diagram", "workflow", "infrastructure", "lifecycle", "concept_diagram", "smart_code"]
+- title: string (max 4 words)
+- description: string (what the image should show - focus on educational value)
+- priority: "high" | "medium" | "low"
+- contextualDuration: number (3-8 seconds - how long this image should display)
+- relevanceReasoning: string (why this image helps learning)
+${userImagesContext}
+
+RETURN ONLY VALID JSON in this exact format:
+{
+  "imageRequirements": [
+    {
+      "timestamp": 0.0,
+      "dialogueText": "full dialogue text",
+      "character": "Character name",
+      "imageType": "diagram",
+      "title": "Title Here",
+      "description": "Description of what the image shows",
+      "priority": "high",
+      "contextualDuration": 5,
+      "relevanceReasoning": "Why this image is useful"
+    }
+  ],
+  "userImageDecisions": [
+    {
+      "userImageLabel": "label",
+      "useImage": true,
+      "timestamp": 5.0,
+      "contextualDuration": 6,
+      "reasoning": "Why include/exclude"
+    }
+  ]
+}
+
+CRITICAL TIMING RULES:
+- Video is only ${videoDuration.toFixed(0)} seconds long
+- Recommend ONLY ${minImages}-${maxImages} images total (quality over quantity!)
+- Each image should display for 4-6 seconds minimum (viewers need time to read)
+- Space images at least 4 seconds apart
+- Focus on the MOST IMPORTANT concepts only
+- Don't add an image for every dialogue line - be selective!
+- Mobile-optimized: keep diagrams simple (3-5 components max)`;
+
+      console.log('🚀 [ImagePlan] Using OpenCode with Gemini 3 Pro for image plan generation...');
+      console.log('🔍 [ImagePlan] OpenCode will use Exa MCP for web research on:', topic);
+
+      // Run OpenCode with Gemini 3 Pro model
+      const opencodeOutput = await opencodeRun({
+        prompt: opencodePrompt,
+        model: 'pro', // Use Gemini 3 Pro for better analysis
+        format: 'json',
+        quiet: true,
       });
 
-      const result = await generateObject({
-        model: google('models/gemini-3-flash-preview'),
-        schema: schema as any,
-        prompt: enhancedPrompt
-      });
+      console.log('✅ [ImagePlan] OpenCode completed, parsing JSON response...');
+
+      // Parse the JSON from OpenCode output
+      const parsedResult = parseOpenCodeJSON<{
+        imageRequirements: Array<{
+          timestamp: number;
+          dialogueText: string;
+          character: string;
+          imageType: string;
+          dialogueAtTimestamp?: string;
+          title: string;
+          description: string;
+          priority: 'high' | 'medium' | 'low';
+          contextualDuration: number;
+          relevanceReasoning: string;
+        }>;
+        userImageDecisions?: Array<{
+          userImageLabel: string;
+          useImage: boolean;
+          timestamp: number;
+          contextualDuration?: number;
+          reasoning: string;
+        }>;
+      }>(opencodeOutput);
+
+      if (!parsedResult) {
+        console.error('❌ [ImagePlan] Failed to parse OpenCode output, falling back to empty plan');
+        console.error('Raw output:', opencodeOutput.substring(0, 500));
+        throw new Error('Failed to parse OpenCode JSON output for image plan');
+      }
+
+      console.log(`✅ [ImagePlan] Parsed ${parsedResult.imageRequirements?.length || 0} image requirements`);
+
+      // Create a result object compatible with the rest of the code
+      const result = {
+        object: parsedResult
+      };
 
       // Debug: Log the AI response to understand what's being generated
       if (result.object.imageRequirements?.length > 0) {
@@ -807,18 +875,18 @@ Provide specific diagram concepts that would work well in educational video cont
       const imageRequirements: ImageRequirement[] = (result.object as any).imageRequirements?.map((req: any, index: number) => {
         // Find the specific dialogue entry for this timestamp (closest within 5s tolerance)
         let targetEntry: AssSubtitleEntry | undefined = entries.find(entry => Math.abs(entry.startTime - req.timestamp) < 1.0);
-        
+
         // If no exact match within 1s, find the closest entry within 5s
         if (!targetEntry) {
           const sortedEntries = entries.sort((a, b) => Math.abs(a.startTime - req.timestamp) - Math.abs(b.startTime - req.timestamp));
           targetEntry = sortedEntries[0] && Math.abs(sortedEntries[0].startTime - req.timestamp) < 5.0 ? sortedEntries[0] : undefined;
         }
-        
+
         // If still no match, find the entry that contains this timestamp
         if (!targetEntry) {
           targetEntry = entries.find(entry => entry.startTime <= req.timestamp && entry.endTime >= req.timestamp);
         }
-        
+
         // If still no match, use the closest entry by time
         if (!targetEntry && entries.length > 0) {
           const sortedEntries = entries.sort((a, b) => Math.abs(a.startTime - req.timestamp) - Math.abs(b.startTime - req.timestamp));
@@ -909,84 +977,84 @@ Provide specific diagram concepts that would work well in educational video cont
       });
 
       // Add user-provided images that AI decided to use
-        userImageDecisions.forEach((decision: any) => {
-          
-          if (decision.useImage && userProvidedImages) {
-            const userImage = userProvidedImages.find(img => img.label === decision.userImageLabel);
-            if (userImage) {
-              // Update the user image with AI-determined timestamp
-              userImage.preferredTimestamp = decision.timestamp || userImage.preferredTimestamp || 0;
-              userImage.contextualDuration = decision.contextualDuration || userImage.contextualDuration || 8;
-              userImage.relevanceReasoning = decision.reasoning || userImage.relevanceReasoning;
-              
-              const finalTimestamp = userImage.preferredTimestamp;
-              
-              const imageReq: ImageRequirement = {
-                id: `user_${sessionId}_${userProvidedUsed}`,
-                timestamp: finalTimestamp || 0,
-                dialogueText: userImage.description || userImage.label,
-                character: 'System',
-                imageType: 'diagram', // Default type for user images
-                title: userImage.label,
-                description: userImage.description || `User-provided image: ${userImage.label}`,
-                priority: userImage.priority || 'medium',
-                uploaded: true,
-                imagePath: userImage.imagePath,
-                contextualDuration: decision.contextualDuration || 8, // AI-determined duration for user images
-                relevanceReasoning: decision.reasoning || 'User-provided image with AI timing analysis'
-              };
-              imageRequirements.push(imageReq);
-              userProvidedUsed++;
-            }
-          }
-        });      // 🎯 FALLBACK: If AI rejected all user images but user images exist, try to place them based on keyword matching
-        if (userProvidedImages && userProvidedImages.length > 0 && userProvidedUsed === 0) {
-          
-          userProvidedImages.forEach((userImage, index) => {
-            // Try to find a reasonable timestamp based on keywords in the dialogue
-            let fallbackTimestamp = 10 + (index * 15); // Default spacing
-            let foundMatch = false;
-            
-            // Look for keywords in the image label/description in the dialogue
-            const keywords = userImage.label.toLowerCase().split(/[\s\-_]+/).filter(word => word.length > 3);
-            
-            for (const entry of entries) {
-              const dialogueText = entry.text.toLowerCase();
-              if (keywords.some(keyword => dialogueText.includes(keyword))) {
-                fallbackTimestamp = entry.startTime + 2; // Show 2 seconds after the mention
-                foundMatch = true;
-                break;
-              }
-            }
-            
-            // Update the user image with fallback timestamp
-            userImage.preferredTimestamp = fallbackTimestamp;
-            userImage.contextualDuration = 8;
-            userImage.relevanceReasoning = foundMatch ? 
-              `Fallback placement: Keyword match found in dialogue` : 
-              `Fallback placement: Spaced placement for user-provided image`;
-            
-            
+      userImageDecisions.forEach((decision: any) => {
+
+        if (decision.useImage && userProvidedImages) {
+          const userImage = userProvidedImages.find(img => img.label === decision.userImageLabel);
+          if (userImage) {
+            // Update the user image with AI-determined timestamp
+            userImage.preferredTimestamp = decision.timestamp || userImage.preferredTimestamp || 0;
+            userImage.contextualDuration = decision.contextualDuration || userImage.contextualDuration || 8;
+            userImage.relevanceReasoning = decision.reasoning || userImage.relevanceReasoning;
+
+            const finalTimestamp = userImage.preferredTimestamp;
+
             const imageReq: ImageRequirement = {
-              id: `user_fallback_${sessionId}_${userProvidedUsed}`,
-              timestamp: fallbackTimestamp,
+              id: `user_${sessionId}_${userProvidedUsed}`,
+              timestamp: finalTimestamp || 0,
               dialogueText: userImage.description || userImage.label,
               character: 'System',
-              imageType: 'diagram',
+              imageType: 'diagram', // Default type for user images
               title: userImage.label,
               description: userImage.description || `User-provided image: ${userImage.label}`,
               priority: userImage.priority || 'medium',
               uploaded: true,
               imagePath: userImage.imagePath,
-              contextualDuration: 8,
-              relevanceReasoning: userImage.relevanceReasoning
+              contextualDuration: decision.contextualDuration || 8, // AI-determined duration for user images
+              relevanceReasoning: decision.reasoning || 'User-provided image with AI timing analysis'
             };
             imageRequirements.push(imageReq);
             userProvidedUsed++;
-          });
-          
+          }
         }
-        
+      });      // 🎯 FALLBACK: If AI rejected all user images but user images exist, try to place them based on keyword matching
+      if (userProvidedImages && userProvidedImages.length > 0 && userProvidedUsed === 0) {
+
+        userProvidedImages.forEach((userImage, index) => {
+          // Try to find a reasonable timestamp based on keywords in the dialogue
+          let fallbackTimestamp = 10 + (index * 15); // Default spacing
+          let foundMatch = false;
+
+          // Look for keywords in the image label/description in the dialogue
+          const keywords = userImage.label.toLowerCase().split(/[\s\-_]+/).filter(word => word.length > 3);
+
+          for (const entry of entries) {
+            const dialogueText = entry.text.toLowerCase();
+            if (keywords.some(keyword => dialogueText.includes(keyword))) {
+              fallbackTimestamp = entry.startTime + 2; // Show 2 seconds after the mention
+              foundMatch = true;
+              break;
+            }
+          }
+
+          // Update the user image with fallback timestamp
+          userImage.preferredTimestamp = fallbackTimestamp;
+          userImage.contextualDuration = 8;
+          userImage.relevanceReasoning = foundMatch ?
+            `Fallback placement: Keyword match found in dialogue` :
+            `Fallback placement: Spaced placement for user-provided image`;
+
+
+          const imageReq: ImageRequirement = {
+            id: `user_fallback_${sessionId}_${userProvidedUsed}`,
+            timestamp: fallbackTimestamp,
+            dialogueText: userImage.description || userImage.label,
+            character: 'System',
+            imageType: 'diagram',
+            title: userImage.label,
+            description: userImage.description || `User-provided image: ${userImage.label}`,
+            priority: userImage.priority || 'medium',
+            uploaded: true,
+            imagePath: userImage.imagePath,
+            contextualDuration: 8,
+            relevanceReasoning: userImage.relevanceReasoning
+          };
+          imageRequirements.push(imageReq);
+          userProvidedUsed++;
+        });
+
+      }
+
       // DEDUPLICATE REQUIREMENTS BY TIMESTAMP + CONTEXT to avoid repeated items
       const normalizeText = (t: string | undefined) => (t || '')
         .toLowerCase()
@@ -1008,14 +1076,14 @@ Provide specific diagram concepts that would work well in educational video cont
 
       // 🎯 14. MATCH EXISTING IMAGES TO REQUIREMENTS
 
-        // Save updated user images with AI-determined timestamps back to file
-        if (userProvidedImages?.length) {
-          userProvidedImages.forEach(img => {
-          });
-          UserImageManager.saveUserImages(userProvidedImages, sessionId);
-        }
+      // Save updated user images with AI-determined timestamps back to file
+      if (userProvidedImages?.length) {
+        userProvidedImages.forEach(img => {
+        });
+        UserImageManager.saveUserImages(userProvidedImages, sessionId);
+      }
 
-      
+
       const sessionImageDir = path.join(process.cwd(), 'storage', 'images', sessionId);
       if (fs.existsSync(sessionImageDir)) {
         const existingImages = fs.readdirSync(sessionImageDir)
@@ -1029,7 +1097,7 @@ Provide specific diagram concepts that would work well in educational video cont
 
         // Match existing images to requirements
         workingImageRequirements.forEach(req => {
-          const matchingImage = existingImages.find(img => 
+          const matchingImage = existingImages.find(img =>
             img.title.toLowerCase().includes(req.title.toLowerCase().substring(0, 10)) ||
             req.title.toLowerCase().includes(img.title.toLowerCase().substring(0, 10))
           );
@@ -1298,7 +1366,7 @@ export class ImageEmbeddingService {
 
           totalDuration += cleanResult.total_duration || 0;
         } else {
-          
+
           // Fallback to basic duration estimation
           const ffmpeg = require('fluent-ffmpeg');
           const audioDuration = await new Promise<number>((resolve, reject) => {
@@ -1532,7 +1600,7 @@ export class ImageEmbeddingService {
         const userImagesFile = path.join(process.cwd(), 'storage', 'temp', `${sessionId}_user_images.json`);
         if (fs.existsSync(userImagesFile)) {
           const allUserImages = UserImageManager.loadUserImages(userImagesFile);
-          
+
           // Only include user images that are NOT already in the image requirements
           // (approved user images are already in imageRequirements with proper timestamps)
           const approvedImagePaths = new Set(
@@ -1784,12 +1852,12 @@ export class ImageEmbeddingService {
 
         // Use AI-determined contextual duration instead of spacing-based calculation
         let duration = image.contextualDuration || 6; // Use AI-determined duration, fallback to 6 seconds
-        
+
         // Optional: Still respect spacing constraints to prevent overlaps
         if (index < allImages.length - 1) {
           const nextImageTime = allImages[index + 1].timestamp;
           const timeUntilNext = nextImageTime - startTime;
-          
+
           // If AI duration would cause overlap, reduce it
           if (duration > timeUntilNext) {
             duration = Math.max(timeUntilNext * 0.9, 2); // Leave small gap, minimum 2 seconds
@@ -1850,7 +1918,7 @@ export class ImageEmbeddingService {
       }
 
       // Execute FFmpeg command
-      
+
       return new Promise((resolve) => {
         ffmpegCommand
           .outputOptions([
@@ -1934,8 +2002,8 @@ CRITICAL: You must ONLY analyze placement suggestions for THIS SPECIFIC IMAGE. T
 
 Available dialogue segments:
 ${dialogueEntries.map((entry: any, index: number) =>
-  `${index + 1}. [${entry.startTime.toFixed(1)}s-${entry.endTime.toFixed(1)}s] ${entry.character || 'Speaker'}: "${entry.text}"`
-).join('\n')}
+    `${index + 1}. [${entry.startTime.toFixed(1)}s-${entry.endTime.toFixed(1)}s] ${entry.character || 'Speaker'}: "${entry.text}"`
+  ).join('\n')}
 
 ANALYSIS GUIDELINES:
 1. ONLY suggest placements for the image with label "${userImage.label}"
@@ -1972,7 +2040,7 @@ Return your analysis focusing on how well THIS SPECIFIC user-labeled image match
         entry.text && entry.text.length > 10 // Filter meaningful dialogue
       );
 
-      
+
       // Log a few more entries to help debug
       for (let i = 0; i < Math.min(10, dialogueEntries.length); i++) {
         const entry = dialogueEntries[i];
@@ -2007,23 +2075,23 @@ Return your analysis focusing on how well THIS SPECIFIC user-labeled image match
           });
 
           const result = analysis.object;
-          
+
 
           // Validate and get the selected dialogue
           // AI returns 1-based index, convert to 0-based array index
           let dialogueIndex = Math.max(0, Math.min(result.bestDialogueIndex - 1, dialogueEntries.length - 1));
-          
+
           // Additional validation: if AI returned an invalid index, default to index 0
           if (result.bestDialogueIndex < 1 || result.bestDialogueIndex > dialogueEntries.length) {
             dialogueIndex = 0;
           }
-          
+
           let bestDialogue = dialogueEntries[dialogueIndex];
 
-          
+
           // If this timestamp is too close to an already used one, try alternatives
           if (usedTimestamps.has(Math.round(bestDialogue.startTime))) {
-            
+
             for (const altIndex of result.alternativeIndices) {
               // Convert 1-based AI index to 0-based array index
               const arrayIndex = altIndex - 1;
@@ -2037,7 +2105,7 @@ Return your analysis focusing on how well THIS SPECIFIC user-labeled image match
               }
             }
           }
-          
+
           if (!result.isRelevant || result.relevanceScore < 1) {
             continue; // Skip irrelevant images
           }
@@ -2132,41 +2200,41 @@ Return your analysis focusing on how well THIS SPECIFIC user-labeled image match
         // since the user explicitly uploaded it
         const hasSuggestion = suggestions.some(s => s.userImageId === userImage.id);
         if (!hasSuggestion) {
-          
+
           // Find a reasonable placement - prefer dialogue that mentions the topic or related terms
           let bestPlacement = { index: 0, score: 0 };
-          
+
           dialogueEntries.forEach((entry, index) => {
             if (usedTimestamps.has(Math.round(entry.startTime))) return;
-            
+
             let score = 0;
             const dialogueText = entry.text.toLowerCase();
-            
+
             // Check if dialogue mentions the image label or related terms
             const labelWords = userImage.label.toLowerCase().split(/\s+/);
             labelWords.forEach(word => {
               if (word.length > 3 && dialogueText.includes(word)) score += 3;
             });
-            
+
             // Check topic relevance
             const topicWords = topic.toLowerCase().split(/\s+/);
             topicWords.forEach(word => {
               if (word.length > 3 && dialogueText.includes(word)) score += 1;
             });
-            
+
             if (score > bestPlacement.score) {
               bestPlacement = { index, score };
             }
           });
-          
+
           // If no good match, just pick a middle timestamp
           if (bestPlacement.score === 0) {
             bestPlacement.index = Math.floor(dialogueEntries.length / 2);
           }
-          
+
           const placementDialogue = dialogueEntries[bestPlacement.index];
           usedTimestamps.add(Math.round(placementDialogue.startTime));
-          
+
           suggestions.push({
             userImageId: userImage.id,
             userImageLabel: userImage.label,
@@ -2179,28 +2247,28 @@ Return your analysis focusing on how well THIS SPECIFIC user-labeled image match
             suggestedDuration: 4.0,
             alternativePlacements: []
           });
-          
+
         }
       }
 
       // Remove duplicate suggestions and sort by relevance
-      const uniqueSuggestions = suggestions.filter((suggestion, index, self) => 
-        index === self.findIndex(s => 
-          s.userImageId === suggestion.userImageId && 
+      const uniqueSuggestions = suggestions.filter((suggestion, index, self) =>
+        index === self.findIndex(s =>
+          s.userImageId === suggestion.userImageId &&
           Math.abs(s.suggestedTimestamp - suggestion.suggestedTimestamp) < 5 // Merge suggestions within 5 seconds
         )
       );
-      
+
       uniqueSuggestions.sort((a, b) => b.relevanceScore - a.relevanceScore);
 
-      
+
       // Return all suggestions without artificial limits
       if (uniqueSuggestions.length > 0) {
         uniqueSuggestions.forEach((s, i) => {
         });
         return uniqueSuggestions;
       }
-      
+
       return uniqueSuggestions;
 
     } catch (error) {

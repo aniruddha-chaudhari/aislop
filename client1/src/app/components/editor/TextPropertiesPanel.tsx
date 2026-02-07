@@ -54,6 +54,7 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
   }, [showVideoStart, selectedRef?.trackId, selectedRef?.clipId]);
   const [isResizing, setIsResizing] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [removingImage, setRemovingImage] = useState(false);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -129,6 +130,27 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
     } finally {
       setUploadingImage(false);
     }
+  };
+
+  const handleRemoveImage = async () => {
+    if (!selected || selected.kind !== 'overlay' || isTemplateClip) return;
+    const overlay = selected as OverlayClip;
+    if (!window.confirm('Remove this image from the overlay? The clip will stay; you can upload a new image later.')) return;
+    setRemovingImage(true);
+    try {
+      const response = await fetch(API_ENDPOINTS.deleteProjectImage(projectId, overlay.assetId), {
+        method: 'DELETE',
+      });
+      if (!response.ok) throw new Error('Failed to remove image');
+      onUpdateClip({ path: undefined } as Partial<Clip>);
+      setImagePreview(null);
+      onProjectUpdate?.();
+    } catch {
+      setRemovingImage(false);
+      window.alert('Failed to remove image. Please try again.');
+      return;
+    }
+    setRemovingImage(false);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -212,13 +234,23 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
                     onError={() => setImagePreview(null)}
                   />
                   <div className="text-[10px] text-muted-foreground">Image uploaded</div>
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={uploadingImage}
-                    className="w-full px-3 py-2 text-xs bg-muted hover:bg-accent/10 border border-border rounded transition"
-                  >
-                    {uploadingImage ? 'Uploading...' : 'Replace Image'}
-                  </button>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploadingImage}
+                      className="px-3 py-2 text-xs bg-muted hover:bg-accent/10 border border-border rounded transition"
+                    >
+                      {uploadingImage ? 'Uploading...' : 'Replace'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleRemoveImage}
+                      disabled={removingImage}
+                      className="px-3 py-2 text-xs font-medium rounded border border-red-700/50 bg-red-600/15 text-red-700 hover:bg-red-600/25 transition disabled:opacity-50"
+                    >
+                      {removingImage ? 'Removing...' : 'Remove image'}
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="space-y-2">

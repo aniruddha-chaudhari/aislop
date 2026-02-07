@@ -96,4 +96,5 @@ export const API_ENDPOINTS = {
   uploadProjectImage: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/upload-image`,
   projectImages: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/images`,
   serveProjectImage: (projectId: string, assetId: string) => `${API_BASE_URL}/api/project/${projectId}/image/${encodeURIComponent(assetId)}`,
+  deleteProjectImage: (projectId: string, assetId: string) => `${API_BASE_URL}/api/project/${projectId}/image/${encodeURIComponent(assetId)}`,
 } as const;

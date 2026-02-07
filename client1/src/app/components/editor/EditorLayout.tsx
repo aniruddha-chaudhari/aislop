@@ -984,9 +984,10 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     setMessage({ type: 'info', text: 'Generating SFX plan...' });
 
     try {
-      const response = await fetch(API_ENDPOINTS.generateSfxPlan(project.id), {
+      const response = await fetch(`${API_ENDPOINTS.generateSfxPlan(project.id)}?t=${Date.now()}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
       });
 
       if (!response.ok) {

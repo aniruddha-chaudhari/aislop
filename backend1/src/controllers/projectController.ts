@@ -3,7 +3,7 @@ import { jsonResponse } from '../utils/http';
 import * as projectService from '../service/projectService';
 import { generateSubtitlesAndCharacters, generateImagePlan } from '../service/aiDraftService';
 import { getSessionDuration } from '../service/sessionDuration';
-import type { Track } from '../schema/project';
+import type { Track, SubtitleClip, OverlayClip } from '../schema/project';
 import { compileTimeline } from '../service/timelineCompiler';
 import { generatePreview, generateTimelinePreview, generateTimelineSegmentPreview, generateTimelinePreviewHls } from '../service/previewGenerator';
 import { ProjectSchema, TimelineSchema } from '../schema/project';
@@ -189,9 +189,42 @@ export async function updateProject(ctx: HttpContext): Promise<HandlerResult> {
   }
 }
 
+const TEMP_DIR = path.join(process.cwd(), 'storage', 'temp');
+const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
+
+/**
+ * Remove session-level image plan and uploaded images when no project uses this session.
+ * Call after deleting a project so a new project with the same session gets a fresh plan.
+ */
+async function cleanupSessionFilesIfUnused(audioSessionId: string): Promise<void> {
+  if (!audioSessionId || audioSessionId === 'no-session') return;
+  const projects = await projectService.listProjects();
+  const otherWithSession = projects.some((p) => p.audioSessionId === audioSessionId);
+  if (otherWithSession) return;
+
+  try {
+    const planPath = path.join(TEMP_DIR, `${audioSessionId}_image_plan.json`);
+    if (fs.existsSync(planPath)) {
+      fs.unlinkSync(planPath);
+    }
+    const sessionImageDir = path.join(IMAGE_UPLOAD_DIR, audioSessionId);
+    if (fs.existsSync(sessionImageDir)) {
+      const files = fs.readdirSync(sessionImageDir);
+      for (const file of files) {
+        fs.unlinkSync(path.join(sessionImageDir, file));
+      }
+      fs.rmdirSync(sessionImageDir);
+    }
+  } catch {
+    // Non-fatal: log and continue
+  }
+}
+
 /**
  * Delete a project
  * DELETE /api/project/:id
+ * When the last project for an audio session is deleted, cleans up that session's
+ * image plan file and uploaded images so a new project with the same session gets a fresh start.
  */
 export async function deleteProject(ctx: HttpContext): Promise<HandlerResult> {
   try {
@@ -204,6 +237,15 @@ export async function deleteProject(ctx: HttpContext): Promise<HandlerResult> {
       });
     }
 
+    const project = await projectService.getProject(projectId);
+    if (!project) {
+      return jsonResponse(404, {
+        success: false,
+        error: 'Project not found',
+      });
+    }
+
+    const audioSessionId = project.audioSessionId;
     const deleted = await projectService.deleteProject(projectId);
 
     if (!deleted) {
@@ -212,6 +254,8 @@ export async function deleteProject(ctx: HttpContext): Promise<HandlerResult> {
         error: 'Project not found',
       });
     }
+
+    await cleanupSessionFilesIfUnused(audioSessionId ?? '');
 
     return jsonResponse(200, {
       success: true,
@@ -383,6 +427,7 @@ export async function generateImagePlanForProject(ctx: HttpContext): Promise<Han
 export async function generateSfxPlanForProject(ctx: HttpContext): Promise<HandlerResult> {
   try {
     const projectId = ctx.params?.id;
+    const body = (ctx.body as any) || {};
     if (!projectId) {
       return jsonResponse(400, { success: false, error: 'Project ID is required' });
     }
@@ -399,13 +444,21 @@ export async function generateSfxPlanForProject(ctx: HttpContext): Promise<Handl
 
     const overlayTracks = timeline.tracks.filter((t: any) => t.type === 'overlay');
     const subtitleTrack = timeline.tracks.find((t: any) => t.type === 'subtitle');
-    const overlayClips = overlayTracks.flatMap((t: any) => (t.clips ?? []).filter((c: any) => c.kind === 'overlay'));
-    const subtitleClips = (subtitleTrack?.clips ?? []).filter((c: any) => c.kind === 'subtitle');
+    const overlayClips = overlayTracks.flatMap((t: any) => (t.clips ?? []).filter((c: any) => c.kind === 'overlay')) as OverlayClip[];
+    const subtitleClips = (subtitleTrack?.clips ?? []).filter((c: any): c is SubtitleClip => c.kind === 'subtitle');
 
     const sfxTrack = await generateSfxTrack({
+      topic: body.topic || project.name || 'Educational short video',
       overlayClips,
       subtitleClips,
       duration: timeline.duration ?? 0,
+    });
+
+    console.log('[SFX Plan] generating fresh', {
+      projectId,
+      timestamp: new Date().toISOString(),
+      overlayClips: overlayClips.length,
+      subtitleClips: subtitleClips.length,
     });
 
     const tracksWithoutSfx = timeline.tracks.filter((t: any) => t.type !== 'sfx');
@@ -421,11 +474,19 @@ export async function generateSfxPlanForProject(ctx: HttpContext): Promise<Handl
       project: updatedProject,
       timeline: nextTimeline,
       message: 'SFX plan generated successfully',
+    }, {
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      Pragma: 'no-cache',
+      Expires: '0',
     });
   } catch (error) {
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to generate SFX plan',
+    }, {
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      Pragma: 'no-cache',
+      Expires: '0',
     });
   }
 }
@@ -798,6 +859,64 @@ export async function serveProjectImage(ctx: HttpContext): Promise<HandlerResult
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to serve image',
+    });
+  }
+}
+
+/**
+ * Delete overlay image for a project by assetId
+ * DELETE /api/project/:id/image/:assetId
+ */
+export async function deleteProjectImage(ctx: HttpContext): Promise<HandlerResult> {
+  try {
+    const projectId = ctx.params?.id;
+    const assetId = ctx.params?.assetId;
+
+    if (!projectId || !assetId) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Project ID and assetId are required',
+      });
+    }
+
+    const project = await projectService.getProject(projectId);
+
+    if (!project) {
+      return jsonResponse(404, {
+        success: false,
+        error: 'Project not found',
+      });
+    }
+
+    const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
+    const sessionDir = path.join(IMAGE_UPLOAD_DIR, project.audioSessionId);
+
+    if (!fs.existsSync(sessionDir)) {
+      return jsonResponse(200, {
+        success: true,
+        message: 'Image already removed or not found',
+      });
+    }
+
+    const extensions = ['.png', '.jpg', '.jpeg'];
+    let removed = false;
+    for (const ext of extensions) {
+      const filePath = path.join(sessionDir, `${assetId}${ext}`);
+      if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+        fs.unlinkSync(filePath);
+        removed = true;
+        break;
+      }
+    }
+
+    return jsonResponse(200, {
+      success: true,
+      message: removed ? 'Image removed' : 'Image already removed or not found',
+    });
+  } catch (error) {
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to delete image',
     });
   }
 }

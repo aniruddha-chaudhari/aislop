@@ -88,6 +88,7 @@ register([
   { method: 'GET', pattern: '/api/project/:id/export/status', handler: project.getExportStatus },
   { method: 'GET', pattern: '/api/project/:id/images', handler: project.listProjectImages },
   { method: 'GET', pattern: '/api/project/:id/image/:assetId', handler: project.serveProjectImage },
+  { method: 'DELETE', pattern: '/api/project/:id/image/:assetId', handler: project.deleteProjectImage },
   { method: 'POST', pattern: '/api/project/:id/ai-draft', handler: project.generateAiDraftForProject },
   { method: 'POST', pattern: '/api/project/:id/image-plan', handler: project.generateImagePlanForProject },
   { method: 'POST', pattern: '/api/project/:id/sfx-plan', handler: project.generateSfxPlanForProject },
