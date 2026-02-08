@@ -35,14 +35,17 @@ type Props = {
   onSaveTimeline?: () => void;
   onGenerateSubtitlesAndChars?: () => void;
   onGenerateImagePlan?: () => void;
+  onGenerateAnimationPlan?: () => void;
   onGenerateSfxPlan?: () => void;
   isGeneratingDraft?: boolean;
   isGeneratingImagePlan?: boolean;
+  isGeneratingAnimationPlan?: boolean;
   isGeneratingSfxPlan?: boolean;
   isExporting?: boolean;
   exportProgress?: number;
   hasSubtitlesAndChars?: boolean;
   hasImagePlan?: boolean;
+  hasAnimationPlan?: boolean;
   message?: { type: 'info' | 'error' | 'success'; text: string } | null;
   exportedVideoFilename?: string | null;
   onDownloadExported?: () => void;
@@ -190,14 +193,17 @@ export default function VideoTimelinePanel({
   onSaveTimeline,
   onGenerateSubtitlesAndChars,
   onGenerateImagePlan,
+  onGenerateAnimationPlan,
   onGenerateSfxPlan,
   isGeneratingDraft,
   isGeneratingImagePlan,
+  isGeneratingAnimationPlan,
   isGeneratingSfxPlan,
   isExporting,
   exportProgress,
   hasSubtitlesAndChars,
   hasImagePlan,
+  hasAnimationPlan,
   message,
   exportedVideoFilename,
   onDownloadExported,
@@ -519,7 +525,7 @@ export default function VideoTimelinePanel({
           </div>
         </div>
 
-        {/* Center: Subtitles & Characters + Image Plan buttons */}
+        {/* Center: plan generation buttons */}
         <div className="flex-1 flex justify-center items-center gap-2">
           {!hasSubtitlesAndChars && onGenerateSubtitlesAndChars && (
             <button
@@ -549,6 +555,16 @@ export default function VideoTimelinePanel({
               className="px-3 py-1.5 text-xs font-semibold bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed shadow"
             >
               {isGeneratingSfxPlan ? 'Generating...' : ' SFX Plan'}
+            </button>
+          )}
+          {!hasAnimationPlan && onGenerateAnimationPlan && (
+            <button
+              type="button"
+              onClick={onGenerateAnimationPlan}
+              disabled={isGeneratingAnimationPlan}
+              className="px-3 py-1.5 text-xs font-semibold bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed shadow"
+            >
+              {isGeneratingAnimationPlan ? 'Generating...' : ' Animation Plan'}
             </button>
           )}
         </div>

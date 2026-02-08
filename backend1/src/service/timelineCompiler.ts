@@ -50,6 +50,18 @@ function resolveAudioClipPath(clipPath: string): string | null {
   return null;
 }
 
+function isStillImageAsset(filePath: string): boolean {
+  return /\.(png|jpe?g|gif|webp)$/i.test(filePath);
+}
+
+function addOverlayInput(command: any, overlayPath: string, durationSeconds: number): void {
+  if (isStillImageAsset(overlayPath)) {
+    command.input(overlayPath).inputOptions(['-loop', '1', '-t', durationSeconds.toString()]);
+    return;
+  }
+  command.input(overlayPath).inputOptions(['-stream_loop', '-1', '-t', durationSeconds.toString()]);
+}
+
 type AudioInputRef = { clip: MusicClip | SfxClip; inputIndex: number; kind: 'music' | 'sfx' };
 
 function buildAudioMixFilter(
@@ -228,13 +240,13 @@ export async function compileTimeline(
       sfxInputs.push({ clip, inputIndex: nextInputIndex++, kind: 'sfx' });
     }
 
-    // Overlay images (step 3+): -loop 1 so overlay filter gets frames at any timestamp
+    // Overlay media (images/videos) for image and animation plans.
     const overlayInputs: { clip: OverlayClip; inputIndex: number }[] = [];
     if (exportStep >= 3) {
       overlayClips.forEach((clip) => {
-        const imagePath = clip.path ?? path.join(IMAGE_UPLOAD_DIR, project.audioSessionId, `${clip.assetId}.png`);
-        if (fs.existsSync(imagePath)) {
-          command.input(imagePath).inputOptions(['-loop', '1']);
+        const overlayPath = clip.path ?? path.join(IMAGE_UPLOAD_DIR, project.audioSessionId, `${clip.assetId}.png`);
+        if (fs.existsSync(overlayPath)) {
+          addOverlayInput(command, overlayPath, duration);
           overlayInputs.push({ clip, inputIndex: nextInputIndex++ });
         }
       });

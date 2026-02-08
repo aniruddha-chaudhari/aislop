@@ -3,6 +3,8 @@ import path from 'path';
 import { Project, ProjectSchema, Timeline } from '../schema/project';
 
 const PROJECTS_DIR = path.join(process.cwd(), 'storage', 'projects');
+const REMOTION_ANIMATION_DIR = path.join(process.cwd(), 'storage', 'remotion-animation');
+const RENDERED_ANIMATIONS_DIR = path.join(process.cwd(), 'storage', 'rendered-animations');
 
 // Ensure projects directory exists
 if (!fs.existsSync(PROJECTS_DIR)) {
@@ -21,6 +23,18 @@ function generateProjectId(): string {
  */
 function getProjectPath(projectId: string): string {
   return path.join(PROJECTS_DIR, `${projectId}.json`);
+}
+
+function getAnimationFolderName(projectId: string): string {
+  if (!projectId) return 'proj_unknown';
+  const safe = projectId.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+  if (!safe) return 'proj_unknown';
+  return safe.startsWith('proj_') ? safe : `proj_${safe}`;
+}
+
+function removeDirIfExists(dirPath: string): void {
+  if (!fs.existsSync(dirPath)) return;
+  fs.rmSync(dirPath, { recursive: true, force: true });
 }
 
 /**
@@ -177,6 +191,9 @@ export async function deleteProject(projectId: string): Promise<boolean> {
 
   try {
     fs.unlinkSync(projectPath);
+    const folder = getAnimationFolderName(projectId);
+    removeDirIfExists(path.join(REMOTION_ANIMATION_DIR, folder));
+    removeDirIfExists(path.join(RENDERED_ANIMATIONS_DIR, folder));
     return true;
   } catch (error) {
     return false;

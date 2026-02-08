@@ -527,6 +527,70 @@ Return your suggestions in a structured format.`;
 }
 
 /**
+ * Generate animation overlay moments using OpenCode.
+ * Returns JSON describing time ranges and content for animation clips.
+ */
+export async function generateAnimationPlanWithResearch(
+    topic: string,
+    dialogueContext: string,
+    options?: {
+        model?: string;
+        videoDurationSeconds?: number;
+        maxMoments?: number;
+        promptTemplate?: string;
+    }
+): Promise<string> {
+    const model = options?.model || "pro";
+    const videoDurationSeconds = options?.videoDurationSeconds ?? 60;
+    const maxMoments = options?.maxMoments ?? 8;
+
+    const fallbackPrompt = `You are an expert short-form video animation planner.
+Use the Remotion skill/tools while planning so the output is practical for Remotion rendering.
+
+TOPIC: "${topic}"
+VIDEO_DURATION_SECONDS: ${videoDurationSeconds}
+MAX_MOMENTS: ${maxMoments}
+
+DIALOGUE CONTEXT:
+${dialogueContext || "No subtitle context provided"}
+
+TASK:
+Plan animation overlay moments that make the video more engaging.
+
+Rules:
+- Output only JSON.
+- Keep moments within the video duration.
+- Moment duration should be 1 to 6 seconds.
+- Use at most MAX_MOMENTS moments.
+- Content should be concise and readable in an overlay.
+
+Return exactly this JSON shape:
+{
+  "videoDurationSeconds": ${videoDurationSeconds},
+  "moments": [
+    {
+      "start": 0.0,
+      "duration": 2.5,
+      "type": "callout",
+      "content": "Short overlay text"
+    }
+  ]
+}
+`;
+
+    const prompt = options?.promptTemplate || fallbackPrompt;
+
+    const result = await opencodeRun({
+        prompt,
+        model,
+        format: 'json',
+        quiet: true,
+    });
+
+    return result;
+}
+
+/**
  * Generate SFX suggestions using OpenCode with web research
  * Can research trending sounds and best practices
  */

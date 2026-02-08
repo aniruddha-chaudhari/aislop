@@ -390,7 +390,7 @@ export default function VideoGenerator() {
     setPlanProgress(null);
 
     try {
-      const response = await fetch(API_ENDPOINTS.generateImagePlan, {
+      const response = await fetch(API_ENDPOINTS.generateVideoImagePlan, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -10,6 +10,7 @@ import { ProjectSchema, TimelineSchema } from '../schema/project';
 import fs from 'fs';
 import path from 'path';
 import { generateSfxTrack } from '../service/sfxService';
+import { generateAnimationPlanAndRender, isAnimationOverlayTrack } from '../service/animationPlanService';
 
 /**
  * Create a new project
@@ -405,6 +406,94 @@ export async function generateImagePlanForProject(ctx: HttpContext): Promise<Han
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to generate image plan',
+    });
+  }
+}
+
+export async function generateAnimationPlanForProject(ctx: HttpContext): Promise<HandlerResult> {
+  try {
+    const projectId = ctx.params?.id;
+    const body = (ctx.body as any) || {};
+
+    if (!projectId) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Project ID is required',
+      });
+    }
+
+    const project = await projectService.getProject(projectId);
+    if (!project) {
+      return jsonResponse(404, {
+        success: false,
+        error: 'Project not found',
+      });
+    }
+
+    const subtitleTrack = project.timeline?.tracks?.find((t) => t.type === 'subtitle');
+    const subtitleClips = (subtitleTrack?.clips ?? []).filter((c): c is SubtitleClip => c.kind === 'subtitle');
+    if (subtitleClips.length === 0) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Subtitles are required before generating animation plan',
+      });
+    }
+
+    const existingDuration = project.timeline?.duration;
+    const duration =
+      typeof existingDuration === 'number' && existingDuration > 0
+        ? existingDuration
+        : (await getSessionDuration(project.audioSessionId)) || 60;
+
+    const topic = body.topic || project.name || 'Educational short video';
+    const result = await generateAnimationPlanAndRender({
+      projectId,
+      topic,
+      subtitleClips,
+      videoDurationSeconds: duration,
+    });
+
+    const existingTracks = (project.timeline?.tracks ?? []) as Track[];
+    const firstAnimIndex = existingTracks.findIndex((t) => isAnimationOverlayTrack(t));
+    const isImageOverlayTrack = (t: Track) =>
+      t.type === 'overlay' && (t.id === 't_imgs' || /^t_imgs_\d+$/.test(t.id));
+
+    let tracks: Track[];
+    if (firstAnimIndex >= 0) {
+      const before = existingTracks.slice(0, firstAnimIndex).filter((t) => !isAnimationOverlayTrack(t));
+      const after = existingTracks.slice(firstAnimIndex).filter((t) => !isAnimationOverlayTrack(t));
+      tracks = [...before, ...result.overlayTracks, ...after];
+    } else {
+      const withoutAnim = existingTracks.filter((t) => !isAnimationOverlayTrack(t));
+      const lastImageIndex = withoutAnim.reduce(
+        (idx, track, i) => (isImageOverlayTrack(track) ? i : idx),
+        -1
+      );
+      if (lastImageIndex >= 0) {
+        tracks = [
+          ...withoutAnim.slice(0, lastImageIndex + 1),
+          ...result.overlayTracks,
+          ...withoutAnim.slice(lastImageIndex + 1),
+        ];
+      } else {
+        tracks = [...withoutAnim, ...result.overlayTracks];
+      }
+    }
+
+    const timeline = { duration, tracks };
+    const updatedProject = await projectService.updateTimeline(projectId, timeline);
+
+    return jsonResponse(200, {
+      success: true,
+      animationPlan: result.animationPlan,
+      project: updatedProject,
+      timeline,
+      message: 'Animation plan generated successfully',
+    });
+  } catch (error) {
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to generate animation plan',
     });
   }
 }
@@ -947,9 +1036,6 @@ export async function generateProjectPreview(ctx: HttpContext): Promise<HandlerR
         error: 'Project has no audio session assigned',
       });
     }
-
-    const imageOverlayTracks = (project.timeline?.tracks ?? []).filter((t: { type: string; id: string }) => t.type === 'overlay' && (t.id === 't_imgs' || /^t_imgs_\d+$/.test(t.id)));
-    const overlayClips = imageOverlayTracks.flatMap((t: { clips?: { kind?: string }[] }) => t.clips?.filter((c: { kind?: string }) => c.kind === 'overlay') ?? []);
 
     // Optional: playhead time from client so we can render a short segment preview.
     const body = (ctx.body as any) || {};

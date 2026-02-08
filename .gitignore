@@ -77,6 +77,7 @@ Thumbs.db
 
 .cursor
 .agents
+.opencode
 
 # Yarn Integrity file
 .yarn-integrity
@@ -106,3 +107,9 @@ captions.md
 image_analysis_prompt.md
 index.html
 stewie_peter_tech_prompt.md
+
+docs
+
+# Generated animation artifacts
+backend1/storage/remotion-animation/proj_*/
+backend1/storage/rendered-animations/proj_*/

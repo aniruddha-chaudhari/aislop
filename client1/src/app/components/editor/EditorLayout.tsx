@@ -55,6 +55,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const router = useRouter();
   const [isGeneratingDraft, setIsGeneratingDraft] = useState(false);
   const [isGeneratingImagePlan, setIsGeneratingImagePlan] = useState(false);
+  const [isGeneratingAnimationPlan, setIsGeneratingAnimationPlan] = useState(false);
   const [isGeneratingSfxPlan, setIsGeneratingSfxPlan] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
@@ -898,6 +899,10 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const hasImagePlan = draftProject.tracks.some(t =>
     t.type === 'overlay' && (t.id === 't_imgs' || /^t_imgs_\d+$/.test(t.id)) && t.clips.length > 0
   );
+  // Animation plan generated (any animation overlay track t_anim / t_anim_N has clips)
+  const hasAnimationPlan = draftProject.tracks.some(t =>
+    t.type === 'overlay' && (t.id === 't_anim' || /^t_anim_\d+$/.test(t.id)) && t.clips.length > 0
+  );
 
   const handleGenerateSubtitlesAndChars = async () => {
     setIsGeneratingDraft(true);
@@ -976,6 +981,42 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       });
     } finally {
       setIsGeneratingImagePlan(false);
+    }
+  };
+
+  const handleGenerateAnimationPlan = async () => {
+    setIsGeneratingAnimationPlan(true);
+    setMessage({ type: 'info', text: 'Generating animation plan...' });
+
+    try {
+      const response = await fetch(`${API_ENDPOINTS.generateAnimationPlan(project.id)}?t=${Date.now()}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: project.name }),
+        cache: 'no-store',
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data.success && data.project) {
+        setMessage({ type: 'success', text: 'Animation plan generated!' });
+        const updated = await onProjectUpdate?.();
+        if (updated) setDraftProject(updated);
+        setTimeout(() => setMessage(null), 3000);
+      } else {
+        throw new Error(data.error || 'Failed to generate animation plan');
+      }
+    } catch (error) {
+      setMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : 'Failed to generate animation plan',
+      });
+    } finally {
+      setIsGeneratingAnimationPlan(false);
     }
   };
 
@@ -1212,16 +1253,19 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
           onBack={() => router.back()}
           onExport={handleExport}
           onSaveTimeline={handleSaveTimeline}
-          onGenerateSubtitlesAndChars={handleGenerateSubtitlesAndChars}
+            onGenerateSubtitlesAndChars={handleGenerateSubtitlesAndChars}
             onGenerateImagePlan={handleGenerateImagePlan}
+            onGenerateAnimationPlan={handleGenerateAnimationPlan}
             onGenerateSfxPlan={handleGenerateSfxPlan}
             isGeneratingDraft={isGeneratingDraft}
             isGeneratingImagePlan={isGeneratingImagePlan}
+            isGeneratingAnimationPlan={isGeneratingAnimationPlan}
             isGeneratingSfxPlan={isGeneratingSfxPlan}
           isExporting={isExporting}
           exportProgress={exportProgress}
           hasSubtitlesAndChars={hasSubtitlesAndChars}
           hasImagePlan={hasImagePlan}
+          hasAnimationPlan={hasAnimationPlan}
           message={message}
           exportedVideoFilename={exportedVideoFilename}
           onDownloadExported={exportedVideoFilename ? () => {

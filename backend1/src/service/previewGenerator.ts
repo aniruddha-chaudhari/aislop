@@ -31,6 +31,36 @@ const OVERLAY_BASE_W = Math.floor(960 * (PREVIEW_WIDTH / 1080)); // 320 at 360px
 const OVERLAY_BASE_H = Math.floor(720 * (PREVIEW_HEIGHT / 1920)); // 240 at 640px height
 const OVERLAY_LEGACY_TOP_Y = Math.floor(40 * (PREVIEW_HEIGHT / 1920)); // 13 at 640px height (~40px at 1920)
 
+function isImageOverlayTrackId(trackId: string): boolean {
+  return trackId === 't_imgs' || /^t_imgs_\d+$/.test(trackId);
+}
+
+function isAnimationOverlayTrackId(trackId: string): boolean {
+  return trackId === 't_anim' || /^t_anim_\d+$/.test(trackId);
+}
+
+function isPlanOverlayTrack(track: { type?: string; id?: string }): boolean {
+  if (track.type !== 'overlay') return false;
+  if (!track.id || track.id === 't_overlay_template') return false;
+  return isImageOverlayTrackId(track.id) || isAnimationOverlayTrackId(track.id);
+}
+
+function resolveOverlayAssetPath(clip: OverlayClip, audioSessionId: string): string {
+  return clip.path ?? path.join(IMAGE_UPLOAD_DIR, audioSessionId, `${clip.assetId}.png`);
+}
+
+function isStillImageAsset(filePath: string): boolean {
+  return /\.(png|jpe?g|gif|webp)$/i.test(filePath);
+}
+
+function addOverlayInput(command: any, overlayPath: string, durationSeconds: number): void {
+  if (isStillImageAsset(overlayPath)) {
+    command.input(overlayPath).inputOptions(['-loop', '1', '-t', durationSeconds.toString()]);
+    return;
+  }
+  command.input(overlayPath).inputOptions(['-stream_loop', '-1', '-t', durationSeconds.toString()]);
+}
+
 // Ensure preview directory exists
 if (!fs.existsSync(PREVIEW_DIR)) {
   fs.mkdirSync(PREVIEW_DIR, { recursive: true });
@@ -516,13 +546,13 @@ export async function generateTimelinePreview(
       concatCmd.run();
     });
 
-    const imageOverlayTracks = (timeline?.tracks ?? []).filter((t: any) => t.type === 'overlay' && (t.id === 't_imgs' || /^t_imgs_\d+$/.test(t.id)));
+    const planOverlayTracks = (timeline?.tracks ?? []).filter((t: any) => isPlanOverlayTrack(t));
     const characterTrack = timeline?.tracks?.find((t: any) => t.type === 'character');
     const musicTracks = (timeline?.tracks ?? []).filter((t: any) => t.type === 'music');
     const sfxTracks = (timeline?.tracks ?? []).filter((t: any) => t.type === 'sfx');
     const subtitleTrack = timeline?.tracks?.find((t: any) => t.type === 'subtitle');
 
-    const overlayClips = imageOverlayTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'overlay') || [])) as OverlayClip[];
+    const overlayClips = planOverlayTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'overlay') || [])) as OverlayClip[];
     const characterClips = (characterTrack?.clips?.filter((c: any) => c.kind === 'character') || []) as CharacterClip[];
     let subtitleClips = (subtitleTrack?.clips?.filter((c: any) => c.kind === 'subtitle') || []) as SubtitleClip[];
     const musicClips = musicTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'music') || [])) as MusicClip[];
@@ -581,9 +611,9 @@ export async function generateTimelinePreview(
 
     const overlayInputs: { clip: OverlayClip; inputIndex: number }[] = [];
     overlayClips.forEach((clip: OverlayClip) => {
-      const imagePath = clip.path ?? path.join(IMAGE_UPLOAD_DIR, audioSessionId, `${clip.assetId}.png`);
-      if (fs.existsSync(imagePath)) {
-        command.input(imagePath);
+      const overlayPath = resolveOverlayAssetPath(clip, audioSessionId);
+      if (fs.existsSync(overlayPath)) {
+        addOverlayInput(command, overlayPath, duration);
         overlayInputs.push({ clip, inputIndex: nextInputIndex++ });
       }
     });
@@ -702,7 +732,7 @@ export async function generateTimelinePreview(
       ...overlayInputs.map(({ clip, inputIndex }) => ({
         index: inputIndex,
         type: 'Overlay',
-        path: clip.path ?? path.join(IMAGE_UPLOAD_DIR, audioSessionId, `${clip.assetId}.png`)
+        path: resolveOverlayAssetPath(clip, audioSessionId)
       })),
       ...charInputs.map(({ clip, inputIndex }) => ({
         index: inputIndex,
@@ -844,13 +874,13 @@ export async function generateTimelinePreviewHls(
       concatCmd.run();
     });
 
-    const imageOverlayTracks = (timeline?.tracks ?? []).filter((t: any) => t.type === 'overlay' && (t.id === 't_imgs' || /^t_imgs_\d+$/.test(t.id)));
+    const planOverlayTracks = (timeline?.tracks ?? []).filter((t: any) => isPlanOverlayTrack(t));
     const characterTrack = timeline?.tracks?.find((t: any) => t.type === 'character');
-    const subtitleTrack = timeline?.tracks?.find((t: any) => t.type === 'subtitle');
     const musicTracks = (timeline?.tracks ?? []).filter((t: any) => t.type === 'music');
     const sfxTracks = (timeline?.tracks ?? []).filter((t: any) => t.type === 'sfx');
+    const subtitleTrack = timeline?.tracks?.find((t: any) => t.type === 'subtitle');
 
-    const overlayClips = imageOverlayTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'overlay') || [])) as OverlayClip[];
+    const overlayClips = planOverlayTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'overlay') || [])) as OverlayClip[];
     const characterClips = (characterTrack?.clips?.filter((c: any) => c.kind === 'character') || []) as CharacterClip[];
     let subtitleClips = (subtitleTrack?.clips?.filter((c: any) => c.kind === 'subtitle') || []) as SubtitleClip[];
     const musicClips = musicTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'music') || [])) as MusicClip[];
@@ -909,9 +939,9 @@ export async function generateTimelinePreviewHls(
 
     const overlayInputs: { clip: OverlayClip; inputIndex: number }[] = [];
     overlayClips.forEach((clip: OverlayClip) => {
-      const imagePath = clip.path ?? path.join(IMAGE_UPLOAD_DIR, audioSessionId, `${clip.assetId}.png`);
-      if (fs.existsSync(imagePath)) {
-        command.input(imagePath);
+      const overlayPath = resolveOverlayAssetPath(clip, audioSessionId);
+      if (fs.existsSync(overlayPath)) {
+        addOverlayInput(command, overlayPath, duration);
         overlayInputs.push({ clip, inputIndex: nextInputIndex++ });
       }
     });
@@ -1180,8 +1210,10 @@ export async function generateTimelineSegmentPreview(
       concatCmd.run();
     });
 
-    const imageOverlayTracks = (timeline?.tracks ?? []).filter((t: any) => t.type === 'overlay' && (t.id === 't_imgs' || /^t_imgs_\d+$/.test(t.id)));
+    const planOverlayTracks = (timeline?.tracks ?? []).filter((t: any) => isPlanOverlayTrack(t));
     const characterTrack = timeline?.tracks?.find((t: any) => t.type === 'character');
+    const musicTracks = (timeline?.tracks ?? []).filter((t: any) => t.type === 'music');
+    const sfxTracks = (timeline?.tracks ?? []).filter((t: any) => t.type === 'sfx');
 
     const sliceClipsToWindow = <T extends { start: number; duration: number }>(clips: T[]): T[] => {
       const result: T[] = [];
@@ -1205,7 +1237,7 @@ export async function generateTimelineSegmentPreview(
     };
 
     const overlayClips = sliceClipsToWindow(
-      imageOverlayTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'overlay') || [])) as OverlayClip[]
+      planOverlayTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'overlay') || [])) as OverlayClip[]
     );
     const characterClips = sliceClipsToWindow(
       (characterTrack?.clips?.filter((c: any) => c.kind === 'character') || []) as CharacterClip[]
@@ -1271,9 +1303,9 @@ export async function generateTimelineSegmentPreview(
 
     const overlayInputs: { clip: OverlayClip; inputIndex: number }[] = [];
     overlayClips.forEach((clip: OverlayClip) => {
-      const imagePath = clip.path ?? path.join(IMAGE_UPLOAD_DIR, audioSessionId, `${clip.assetId}.png`);
-      if (fs.existsSync(imagePath)) {
-        command.input(imagePath);
+      const overlayPath = resolveOverlayAssetPath(clip, audioSessionId);
+      if (fs.existsSync(overlayPath)) {
+        addOverlayInput(command, overlayPath, segmentDuration);
         overlayInputs.push({ clip, inputIndex: nextInputIndex++ });
       }
     });
