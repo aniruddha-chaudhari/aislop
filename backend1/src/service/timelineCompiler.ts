@@ -62,6 +62,30 @@ function addOverlayInput(command: any, overlayPath: string, durationSeconds: num
   command.input(overlayPath).inputOptions(['-stream_loop', '-1', '-t', durationSeconds.toString()]);
 }
 
+type TimeRange = { start: number; end: number };
+
+function isReplaceOverlayClip(clip: OverlayClip): boolean {
+  return clip.displayMode === 'replace';
+}
+
+function buildReplaceOverlayRanges(clips: OverlayClip[]): TimeRange[] {
+  return clips
+    .filter(isReplaceOverlayClip)
+    .map((clip) => ({
+      start: clip.start,
+      end: clip.start + clip.duration,
+    }));
+}
+
+function excludeSubtitlesInRanges(subtitleClips: SubtitleClip[], excludedRanges: TimeRange[]): SubtitleClip[] {
+  if (excludedRanges.length === 0) return subtitleClips;
+  return subtitleClips.filter((clip) => {
+    const clipStart = clip.start;
+    const clipEnd = clip.start + clip.duration;
+    return !excludedRanges.some((range) => clipStart < range.end && range.start < clipEnd);
+  });
+}
+
 type AudioInputRef = { clip: MusicClip | SfxClip; inputIndex: number; kind: 'music' | 'sfx' };
 
 function buildAudioMixFilter(
@@ -181,11 +205,15 @@ export async function compileTimeline(
     let subtitleClips = (subtitleTrack?.clips.filter(c => c.kind === 'subtitle') as SubtitleClip[] || []).map(c => ({ ...c }));
 
     if (subtitleClips.length > 0 && exportStep >= 2) {
+      const replaceOverlayRanges = buildReplaceOverlayRanges(overlayClips);
+      subtitleClips = excludeSubtitlesInRanges(subtitleClips, replaceOverlayRanges);
       const session = await loadSessionForExport(project.audioSessionId);
-      if (session) {
+      if (session && subtitleClips.length > 0) {
         subtitleClips = await enrichSubtitleClipsWithWords(session, subtitleClips);
       }
-      assPath = await generateKaraokeAssSubtitles(subtitleClips, project.id);
+      if (subtitleClips.length > 0) {
+        assPath = await generateKaraokeAssSubtitles(subtitleClips, project.id);
+      }
     }
 
     const templatePath = resolveTemplatePath(project.template.path);
@@ -253,9 +281,14 @@ export async function compileTimeline(
     }
 
     // Character images (step 4): -loop 1 so overlay filter gets frames at any timestamp
+    // For narrator-only audio, we intentionally skip adding any character image overlays.
     const characterInputs: { clip: CharacterClip; inputIndex: number }[] = [];
     if (exportStep >= 4) {
       for (const clip of characterClips) {
+        if (clip.character === 'Narrator') {
+          // Do not add a character image for Narrator audio; keep visuals template/overlays only.
+          continue;
+        }
         const charPath = getCharacterImagePath(clip.character);
         if (charPath) {
           command.input(charPath).inputOptions(['-loop', '1']);
@@ -291,6 +324,18 @@ export async function compileTimeline(
     const OVERLAY_LEGACY_TOP_Y = 40;
     if (exportStep >= 3) {
       overlayInputs.forEach(({ clip, inputIndex }, index) => {
+        const isReplace = isReplaceOverlayClip(clip);
+        const scaledLabel = isReplace ? `replace_scaled_${index}` : `scaled_${index}`;
+        const overlayLabel = isReplace ? `with_replace_${index}` : `with_overlay_${index}`;
+
+        if (isReplace) {
+          // Preserve full overlay frame (no destructive crop) and letterbox/pillarbox into 9:16.
+          filterComplex += `;[${inputIndex}:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:0x101014[${scaledLabel}]`;
+          filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
+          lastLabel = overlayLabel;
+          return;
+        }
+
         const placement = computeOverlayPlacement(
           clip,
           1080,
@@ -299,8 +344,6 @@ export async function compileTimeline(
           OVERLAY_BASE_H,
           OVERLAY_LEGACY_TOP_Y
         );
-        const scaledLabel = `scaled_${index}`;
-        const overlayLabel = `with_overlay_${index}`;
         filterComplex += `;[${inputIndex}:v]scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
         filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
         lastLabel = overlayLabel;
@@ -311,29 +354,40 @@ export async function compileTimeline(
     if (exportStep >= 4 && characterInputs.length > 0) {
       const stewieClips = characterInputs.filter(c => c.clip.character === 'Stewie');
       const peterClips = characterInputs.filter(c => c.clip.character === 'Peter');
+      const otherClips = characterInputs.filter(c => c.clip.character !== 'Stewie' && c.clip.character !== 'Peter');
 
       const stewieRanges: string[] = [];
       const peterRanges: string[] = [];
+      const otherRanges: string[] = [];
       stewieClips.forEach(({ clip }) => {
         stewieRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
       });
       peterClips.forEach(({ clip }) => {
         peterRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
       });
+      otherClips.forEach(({ clip }) => {
+        otherRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
+      });
 
       const stewieEnable = stewieRanges.length > 0 ? stewieRanges.join('+') : '0';
       const peterEnable = peterRanges.length > 0 ? peterRanges.join('+') : '0';
+      const otherEnable = otherRanges.length > 0 ? otherRanges.join('+') : '0';
 
       const stewieScaleW = 500;
       const stewieScaleH = 600;
       const peterScaleW = 580;
       const peterScaleH = 720;
+      const otherScaleW = 560;
+      const otherScaleH = 760;
       const stewieX = 300;
       const stewieY = 1350;
       const peterX = 300;
       const peterY = 1250;
+      const otherX = 260;
+      const otherY = 1160;
       const stewieInputIndex = stewieClips[0]?.inputIndex;
       const peterInputIndex = peterClips[0]?.inputIndex;
+      const otherInputIndex = otherClips[0]?.inputIndex;
 
       if (stewieInputIndex !== undefined) {
         filterComplex += `;[${stewieInputIndex}:v]scale=${stewieScaleW}:${stewieScaleH}:force_original_aspect_ratio=decrease[stewie_scaled]`;
@@ -345,6 +399,12 @@ export async function compileTimeline(
         filterComplex += `;[${peterInputIndex}:v]scale=${peterScaleW}:${peterScaleH}:force_original_aspect_ratio=decrease[peter_scaled]`;
         filterComplex += `;[${lastLabel}][peter_scaled]overlay=${peterX}:${peterY}:enable='${peterEnable}'[with_characters]`;
         lastLabel = 'with_characters';
+      }
+
+      if (otherInputIndex !== undefined) {
+        filterComplex += `;[${otherInputIndex}:v]scale=${otherScaleW}:${otherScaleH}:force_original_aspect_ratio=decrease[other_scaled]`;
+        filterComplex += `;[${lastLabel}][other_scaled]overlay=${otherX}:${otherY}:enable='${otherEnable}'[with_other_characters]`;
+        lastLabel = 'with_other_characters';
       }
     }
 

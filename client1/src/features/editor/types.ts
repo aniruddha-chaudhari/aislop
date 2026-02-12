@@ -27,7 +27,7 @@ export type WordTimestamp = { word: string; start: number; end: number };
 
 export type SubtitleClip = BaseClip & {
   kind: 'subtitle';
-  speaker: 'Stewie' | 'Peter' | 'Narrator';
+  speaker: string;
   text: string;
   /** Word-level timestamps for karaoke effect */
   words?: WordTimestamp[];
@@ -40,13 +40,15 @@ export type OverlayClip = BaseClip & {
   x: number;
   y: number;
   scale: number;
+  /** `replace` means full-frame B-roll replacement for the clip time range. */
+  displayMode?: 'overlay' | 'replace';
   /** When set, export uses this path instead of storage/images/{sessionId}/{assetId}.png */
   path?: string;
 };
 
 export type CharacterClip = BaseClip & {
   kind: 'character';
-  character: 'Stewie' | 'Peter';
+  character: string;
   x: number;
   y: number;
   scale: number;

@@ -5,8 +5,27 @@ import { API_ENDPOINTS, API_BASE_URL } from '../../config/api';
 import ImageUpload from './ImageUpload';
 
 interface ConversationItem {
-  character: 'Stewie' | 'Peter';
+  character: string;
   dialogue: string;
+}
+
+interface VideoStyleOption {
+  id: string;
+  name: string;
+  description: string;
+  characterSet?: 'single' | 'duo';
+  defaultCharacter?: string;
+  supportedCharacters?: string[];
+}
+
+interface AudioGenerationConfigResponse {
+  success: boolean;
+  styles?: VideoStyleOption[];
+  characters?: string[];
+  defaults?: {
+    videoStyle?: string;
+    singleVoiceCharacter?: string;
+  };
 }
 
 interface UserProvidedImage {
@@ -74,7 +93,7 @@ export default function ConversationGenerator() {
   const [regeneratingIndex, setRegeneratingIndex] = useState<number | null>(null);
   const [showRegenerateDropdown, setShowRegenerateDropdown] = useState<number | null>(null);
   const [regenerateParams, setRegenerateParams] = useState({
-    exaggeration: 0.6,
+    exaggeration: 0.7,
     temperature: 1.5,
     seedNum: 0,
     cfgWeight: 0.4,
@@ -82,9 +101,29 @@ export default function ConversationGenerator() {
     topP: 1.0,
     repetitionPenalty: 1.2
   });
-  const [selectedCharacter, setSelectedCharacter] = useState<'Stewie' | 'Peter'>('Stewie');
+  const [videoStyles, setVideoStyles] = useState<VideoStyleOption[]>([
+    {
+      id: 'standard',
+      name: 'Stewie + Peter',
+      description: 'Two-character educational dialogue',
+      characterSet: 'duo',
+      supportedCharacters: ['Stewie', 'Peter'],
+    },
+    {
+      id: 'single_voice',
+      name: 'Single Voice Character',
+      description: 'Single-speaker educational reel script',
+      characterSet: 'single',
+      defaultCharacter: 'Narrator',
+      supportedCharacters: ['Narrator', 'Stewie', 'Peter'],
+    },
+  ]);
+  const [videoStyle, setVideoStyle] = useState<string>('standard');
+  const [availableCharacters, setAvailableCharacters] = useState<string[]>(['Stewie', 'Peter', 'Narrator']);
+  const [singleVoiceCharacter, setSingleVoiceCharacter] = useState<string>('Narrator');
+  const [selectedCharacter, setSelectedCharacter] = useState<string>('Stewie');
   const [ttsParameters, setTtsParameters] = useState({
-    exaggeration: 0.6,
+    exaggeration: 0.7,
     temperature: 1.5,
     seedNum: 0,
     cfgWeight: 0.4,
@@ -108,6 +147,67 @@ export default function ConversationGenerator() {
     reasoning: string;
     timestamp?: number;
   }>>([]);
+  const isSingleVoiceStyle = videoStyle === 'single_voice';
+  const activeCharacters = availableCharacters.length > 0 ? availableCharacters : ['Stewie', 'Peter', 'Narrator'];
+
+  const getCharacterTheme = (character: string): { border: string; text: string; bubble: string } => {
+    if (character === 'Stewie') {
+      return {
+        border: 'border-purple-400',
+        text: 'text-purple-300',
+        bubble: 'bg-purple-50 dark:bg-purple-900/20 border-purple-400',
+      };
+    }
+    if (character === 'Peter') {
+      return {
+        border: 'border-emerald-400',
+        text: 'text-emerald-300',
+        bubble: 'bg-green-50 dark:bg-green-900/20 border-green-400',
+      };
+    }
+    return {
+      border: 'border-sky-400',
+      text: 'text-sky-300',
+      bubble: 'bg-sky-50 dark:bg-sky-900/20 border-sky-400',
+    };
+  };
+
+  useEffect(() => {
+    const loadAudioConfig = async () => {
+      try {
+        const response = await fetch(API_ENDPOINTS.audioConfig, { method: 'GET' });
+        if (!response.ok) return;
+        const data = (await response.json()) as AudioGenerationConfigResponse;
+        if (!data.success) return;
+
+        if (Array.isArray(data.styles) && data.styles.length > 0) {
+          setVideoStyles(data.styles);
+        }
+        if (Array.isArray(data.characters) && data.characters.length > 0) {
+          setAvailableCharacters(data.characters);
+          if (!data.characters.includes(selectedCharacter)) {
+            setSelectedCharacter(data.characters[0]);
+          }
+        }
+        if (data.defaults?.videoStyle) {
+          setVideoStyle(data.defaults.videoStyle);
+        }
+        if (data.defaults?.singleVoiceCharacter) {
+          setSingleVoiceCharacter(data.defaults.singleVoiceCharacter);
+        }
+      } catch {
+        // Use local fallback options when config endpoint is unavailable.
+      }
+    };
+
+    loadAudioConfig();
+  }, []);
+
+  useEffect(() => {
+    if (isSingleVoiceStyle) {
+      setSelectedCharacter(singleVoiceCharacter);
+    }
+  }, [isSingleVoiceStyle, singleVoiceCharacter]);
 
   const handleGenerateScript = async () => {
     if (!prompt.trim()) {
@@ -130,7 +230,10 @@ export default function ConversationGenerator() {
         },
         body: JSON.stringify({
           text: prompt.trim(),
-          exaggeration: 0.6,
+          videoStyle,
+          characterSet: isSingleVoiceStyle ? 'single' : 'duo',
+          character: isSingleVoiceStyle ? singleVoiceCharacter : undefined,
+          exaggeration: 0.7,
           temperature: 1.5,
           seedNum: 0,
           cfgWeight: 0.4,
@@ -150,10 +253,31 @@ export default function ConversationGenerator() {
       const data = await response.json();
 
       if (data.success) {
-        setConversation(data.data.conversation);
+        const generatedConversation: ConversationItem[] = (data.data?.conversation || []).map((rawItem: unknown) => {
+          const item = (rawItem || {}) as { character?: string; dialogue?: string; text?: string };
+          if (typeof item?.dialogue === 'string') {
+            return {
+              character: typeof item.character === 'string'
+                ? item.character
+                : (isSingleVoiceStyle ? singleVoiceCharacter : selectedCharacter),
+              dialogue: item.dialogue,
+            };
+          }
+          return {
+            character: typeof item?.character === 'string'
+              ? item.character
+              : (isSingleVoiceStyle ? singleVoiceCharacter : selectedCharacter),
+            dialogue: typeof item?.text === 'string' ? item.text : '',
+          };
+        });
+
+        setConversation(generatedConversation);
         setTopic(data.data.topic);
         setAudioFiles(data.audioFiles || []);
         setSessionId(data.sessionId || `session_${Date.now()}`);
+        if (isSingleVoiceStyle && data.selectedCharacter) {
+          setSingleVoiceCharacter(data.selectedCharacter);
+        }
         if (data.sessionId) {
           localStorage.setItem('audioSessionId', data.sessionId);
         }
@@ -217,8 +341,14 @@ export default function ConversationGenerator() {
         body: JSON.stringify({
           conversation: {
             conversation,
-            topic
+            topic,
+            videoStyle,
+            characterSet: isSingleVoiceStyle ? 'single' : 'duo',
+            selectedCharacter: isSingleVoiceStyle ? singleVoiceCharacter : undefined,
           },
+          videoStyle,
+          characterSet: isSingleVoiceStyle ? 'single' : 'duo',
+          character: isSingleVoiceStyle ? singleVoiceCharacter : undefined,
           ...ttsParameters
         }),
         mode: 'cors',
@@ -300,7 +430,8 @@ export default function ConversationGenerator() {
   };
 
   const handleAddDialogue = () => {
-    const newItem: ConversationItem = { character: selectedCharacter, dialogue: '' };
+    const character = isSingleVoiceStyle ? singleVoiceCharacter : selectedCharacter;
+    const newItem: ConversationItem = { character, dialogue: '' };
     setConversation([...conversation, newItem]);
   };
 
@@ -515,9 +646,12 @@ export default function ConversationGenerator() {
     setSessionId('');
     setUserImages([]);
     setGenerationProgress(null);
+    setVideoStyle('standard');
+    setSingleVoiceCharacter('Narrator');
+    setSelectedCharacter('Stewie');
     localStorage.removeItem('audioSessionId');
     setTtsParameters({
-      exaggeration: 0.6,
+      exaggeration: 0.7,
       temperature: 1.5,
       seedNum: 0,
       cfgWeight: 0.4,
@@ -612,16 +746,35 @@ export default function ConversationGenerator() {
       }
 
       // Validate conversation items
+      const allowedCharacters = new Set(activeCharacters);
+      const normalizedConversation: ConversationItem[] = [];
       for (const item of parsedData.conversation) {
-        if (!item.character || !item.dialogue) {
-          throw new Error('Invalid conversation item: missing character or dialogue');
+        const dialogueText =
+          typeof item?.dialogue === 'string'
+            ? item.dialogue
+            : (typeof item?.text === 'string' ? item.text : '');
+        if (!dialogueText || dialogueText.trim() === '') {
+          throw new Error('Invalid conversation item: missing dialogue text');
         }
-        if (!['Stewie', 'Peter'].includes(item.character)) {
-          throw new Error('Invalid character: must be Stewie or Peter');
+
+        const importedCharacter =
+          typeof item?.character === 'string' && item.character.trim() !== ''
+            ? item.character
+            : (isSingleVoiceStyle ? singleVoiceCharacter : '');
+        if (!importedCharacter) {
+          throw new Error('Invalid conversation item: missing character');
         }
+        if (!allowedCharacters.has(importedCharacter)) {
+          throw new Error(`Invalid character "${importedCharacter}". Allowed: ${[...allowedCharacters].join(', ')}`);
+        }
+
+        normalizedConversation.push({
+          character: importedCharacter,
+          dialogue: dialogueText.trim(),
+        });
       }
 
-      setConversation(parsedData.conversation);
+      setConversation(normalizedConversation);
       setTopic(parsedData.topic || '');
       setPrompt(''); // Clear prompt when importing
       setJsonImportText('');
@@ -712,6 +865,54 @@ export default function ConversationGenerator() {
         Generate New Conversation
       </h2>
 
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label htmlFor="videoStyle" className="mb-2 block text-sm font-medium text-[var(--foreground)]">
+            Video Style
+          </label>
+          <select
+            id="videoStyle"
+            value={videoStyle}
+            onChange={(e) => setVideoStyle(e.target.value)}
+            className="w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm text-[var(--foreground)] focus:border-transparent focus:ring-2 focus:ring-[var(--ring)]"
+            disabled={loading}
+          >
+            {videoStyles.map((style) => (
+              <option key={style.id} value={style.id}>
+                {style.name}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-[var(--editor-muted)]">
+            {videoStyles.find((style) => style.id === videoStyle)?.description || 'Choose a generation style.'}
+          </p>
+        </div>
+
+        {isSingleVoiceStyle && (
+          <div>
+            <label htmlFor="singleVoiceCharacter" className="mb-2 block text-sm font-medium text-[var(--foreground)]">
+              Single Voice Character
+            </label>
+            <select
+              id="singleVoiceCharacter"
+              value={singleVoiceCharacter}
+              onChange={(e) => setSingleVoiceCharacter(e.target.value)}
+              className="w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm text-[var(--foreground)] focus:border-transparent focus:ring-2 focus:ring-[var(--ring)]"
+              disabled={loading}
+            >
+              {activeCharacters.map((character) => (
+                <option key={character} value={character}>
+                  {character}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-[var(--editor-muted)]">
+              Character image upload for this style is a placeholder in this phase.
+            </p>
+          </div>
+        )}
+      </div>
+
       <div>
         <label htmlFor="prompt" className="mb-2 block text-sm font-medium text-[var(--foreground)]">
           Enter a technology topic or question:
@@ -749,7 +950,7 @@ export default function ConversationGenerator() {
                 // Clear any previous errors when user starts typing
                 if (error) setError('');
               }}
-              placeholder='Paste your conversation JSON here. Format: {"topic": "Your Topic", "conversation": [{"character": "Stewie", "dialogue": "Hello"}, {"character": "Peter", "dialogue": "Hi"}]}'
+              placeholder='Paste your conversation JSON. Format: {"topic":"Your Topic","conversation":[{"character":"Narrator","dialogue":"Hello"}]}'
               className="w-full resize-none rounded-md border border-[var(--border)] bg-[var(--input)] p-2 text-sm text-[var(--foreground)] focus:border-transparent focus:ring-2 focus:ring-[var(--ring)] sm:p-3 sm:text-base"
               rows={6}
             />
@@ -843,7 +1044,7 @@ export default function ConversationGenerator() {
                 // Clear any previous errors when user starts typing
                 if (error) setError('');
               }}
-              placeholder='Paste your conversation JSON here. Format: {"topic": "Your Topic", "conversation": [{"character": "Stewie", "dialogue": "Hello"}, {"character": "Peter", "dialogue": "Hi"}]}'
+              placeholder='Paste your conversation JSON. Format: {"topic":"Your Topic","conversation":[{"character":"Narrator","dialogue":"Hello"}]}'
               className="w-full resize-none rounded-md border border-[var(--border)] bg-[var(--input)] p-2 text-sm text-[var(--foreground)] focus:border-transparent focus:ring-2 focus:ring-[var(--ring)] sm:p-3 sm:text-base"
               rows={6}
             />
@@ -871,7 +1072,7 @@ export default function ConversationGenerator() {
       <div className="rounded-md border border-[var(--border)] bg-[var(--secondary)] p-3 sm:p-4">
         <p className="text-sm text-[var(--editor-muted)] sm:text-base">
           <strong>Review the script below:</strong> You can edit any dialogue by clicking on it.
-          Once you're satisfied with the script, click "Approve & Generate Audio" to create the audio files.
+          Once you&apos;re satisfied with the script, click &quot;Approve & Generate Audio&quot; to create the audio files.
         </p>
       </div>
 
@@ -882,16 +1083,11 @@ export default function ConversationGenerator() {
             {conversation.map((item, index) => (
               <div
                 key={index}
-                className={`p-4 rounded-lg border-l-4 bg-black/30 ${
-                  item.character === 'Stewie' ? 'border-purple-400' : 'border-emerald-400'
-                }`}
+                className={`p-4 rounded-lg border-l-4 bg-black/30 ${getCharacterTheme(item.character).border}`}
               >
                 <div className="mb-2 flex items-center justify-between">
                   <span
-                    className={`font-semibold text-lg ${item.character === 'Stewie'
-                        ? 'text-purple-300'
-                        : 'text-emerald-300'
-                      }`}
+                    className={`font-semibold text-lg ${getCharacterTheme(item.character).text}`}
                   >
                     {item.character}:
                   </span>
@@ -918,11 +1114,15 @@ export default function ConversationGenerator() {
       <div className="mb-4 flex flex-col items-center space-y-2 xs:flex-row xs:space-y-0 xs:space-x-4">
         <select
           value={selectedCharacter}
-          onChange={(e) => setSelectedCharacter(e.target.value as 'Stewie' | 'Peter')}
+          onChange={(e) => setSelectedCharacter(e.target.value)}
+          disabled={isSingleVoiceStyle}
           className="w-full xs:w-auto rounded-md border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm text-[var(--foreground)] focus:border-transparent focus:ring-2 focus:ring-[var(--ring)] sm:text-base"
         >
-          <option value="Stewie">Stewie</option>
-          <option value="Peter">Peter</option>
+          {activeCharacters.map((character) => (
+            <option key={character} value={character}>
+              {character}
+            </option>
+          ))}
         </select>
         <button
           onClick={handleAddDialogue}
@@ -930,6 +1130,11 @@ export default function ConversationGenerator() {
         >
           Add Dialogue
         </button>
+        {isSingleVoiceStyle && (
+          <span className="text-xs text-[var(--editor-muted)]">
+            Single voice mode locks speaker to {singleVoiceCharacter}.
+          </span>
+        )}
       </div>
 
       <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-4">
@@ -1015,7 +1220,7 @@ export default function ConversationGenerator() {
       {isGenerating && (
         <div className="rounded-md border border-yellow-800 bg-yellow-900/20 p-4">
           <p className="text-yellow-200">
-            <strong>Generating audio files...</strong> Files will appear here as they're generated. You can start reviewing completed files while others are still being processed.
+            <strong>Generating audio files...</strong> Files will appear here as they&apos;re generated. You can start reviewing completed files while others are still being processed.
           </p>
         </div>
       )}
@@ -1027,17 +1232,11 @@ export default function ConversationGenerator() {
             {conversation.map((item, index) => (
               <div
                 key={index}
-                className={`p-4 rounded-lg border-l-4 ${item.character === 'Stewie'
-                    ? 'bg-purple-50 dark:bg-purple-900/20 border-purple-400'
-                    : 'bg-green-50 dark:bg-green-900/20 border-green-400'
-                  }`}
+                className={`p-4 rounded-lg border-l-4 ${getCharacterTheme(item.character).bubble}`}
               >
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
                   <span
-                    className={`font-semibold text-lg flex-shrink-0 ${item.character === 'Stewie'
-                        ? 'text-purple-700 dark:text-purple-300'
-                        : 'text-green-700 dark:text-green-300'
-                      }`}
+                    className={`font-semibold text-lg flex-shrink-0 ${getCharacterTheme(item.character).text}`}
                   >
                     {item.character}:
                   </span>

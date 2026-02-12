@@ -20,6 +20,15 @@ export const TTS_CONFIG = {
       referenceAudio: 'F:\\Aniruddha\\AI\\testdata\\petersmall.ogg',
       promptText: "Oh, this seems like it'd be a great place to work. But I. I didn't go to college. When I set my mind to something, I am not easily deterred. Like when I tried out to be an Olympic gymnast.",
       promptLang: 'en'
+    },
+    Narrator: {
+      // Placeholder model paths for single-voice style; replace with actual narrator weights when available.
+      gpt: 'F:\\Aniruddha\\AI\\gptsovits\\GPT_weights_v2ProPlus\\peter1-e15.ckpt',
+      sovits: 'F:\\Aniruddha\\AI\\gptsovits\\SoVITS_weights_v2ProPlus\\peter1_e8_s280.pth',
+      // Updated to use the curated narrator reference audio stored in the backend storage directory.
+      referenceAudio: 'F:\\Aniruddha\\code\\webdev\\PROJECTS\\aislop\\backend1\\storage\\reference_audio\\final.wav',
+      promptText: 'Today we are breaking down a technical topic in a clear and practical way for an Instagram reel audience.',
+      promptLang: 'en'
     }
   },
   

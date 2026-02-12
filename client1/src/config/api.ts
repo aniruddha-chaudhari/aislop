@@ -30,6 +30,7 @@ export const API_ENDPOINTS = {
   audio: `${API_BASE_URL}/api/audio/files`,
   audioFromScript: `${API_BASE_URL}/api/audio/generate-audio`,
   generateScript: `${API_BASE_URL}/api/audio/generate-script`,
+  audioConfig: `${API_BASE_URL}/api/audio/config`,
   regenerateAudio: (sessionId: string, filename: string) =>
     `${API_BASE_URL}/api/audio/regenerate/${sessionId}/${filename}`,
   audioSession: (sessionId: string) => `${API_BASE_URL}/api/audio/session/${sessionId}`,

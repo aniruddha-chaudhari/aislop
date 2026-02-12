@@ -545,7 +545,7 @@ export async function generateAnimationPlanWithResearch(
     const maxMoments = options?.maxMoments ?? 8;
 
     const fallbackPrompt = `You are an expert short-form video animation planner.
-Use the Remotion skill/tools while planning so the output is practical for Remotion rendering.
+Plan B-roll moments for a VERTICAL 9:16 educational video where animations replace the background.
 
 TOPIC: "${topic}"
 VIDEO_DURATION_SECONDS: ${videoDurationSeconds}
@@ -555,14 +555,16 @@ DIALOGUE CONTEXT:
 ${dialogueContext || "No subtitle context provided"}
 
 TASK:
-Plan animation overlay moments that make the video more engaging.
+Plan concise full-screen moments that improve comprehension and retention.
 
 Rules:
 - Output only JSON.
 - Keep moments within the video duration.
 - Moment duration should be 1 to 6 seconds.
 - Use at most MAX_MOMENTS moments.
-- Content should be concise and readable in an overlay.
+- Content must be static text suitable for full-screen 9:16 (all text visible at once).
+- One key idea per moment, short and punchy.
+- Avoid dense jargon and tiny-text concepts.
 
 Return exactly this JSON shape:
 {

@@ -1,8 +1,9 @@
 import type { HttpContext } from '../utils/http';
 import { jsonResponse } from '../utils/http';
 import type { HandlerResult } from '../utils/http';
-import { generateConversation } from '../service/assistants';
-import type { CharacterName } from '../config/tts-config';
+import { generateConversation, generateSingleCharacterScript } from '../service/assistants';
+import { TTS_CONFIG, type CharacterName } from '../config/tts-config';
+import { getAllVideoStyles, getVideoStylePreset, type CharacterSetId, type VideoStyleId } from '../config/video-styles';
 import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
@@ -28,6 +29,10 @@ try {
 }
 
 const prisma = new PrismaClient();
+const AVAILABLE_CHARACTERS = Object.keys(TTS_CONFIG.characters) as CharacterName[];
+const DEFAULT_SINGLE_VOICE_CHARACTER: CharacterName = (
+  AVAILABLE_CHARACTERS.includes('Narrator' as CharacterName) ? 'Narrator' : AVAILABLE_CHARACTERS[0]
+);
 
 // Helper function to generate meaningful session names
 function generateSessionName(conversation: any): string {
@@ -48,11 +53,98 @@ function generateSessionName(conversation: any): string {
   return `${cleanTopic} - ${date}`;
 }
 
-// Hard-coded reference audio paths for Chatterbox TTS
-const REFERENCE_AUDIO_PATHS = {
-  Stewie: 'src/character_audio/family_guy/stew.mp3',
-  Peter: 'src/character_audio/family_guy/peta.mp3'
+// Reference audio paths for Chatterbox TTS (mirrors TTS config to keep character list in one place).
+const REFERENCE_AUDIO_PATHS = Object.fromEntries(
+  AVAILABLE_CHARACTERS.map((character) => [character, TTS_CONFIG.characters[character].referenceAudio])
+) as Record<CharacterName, string>;
+
+type NormalizedDialogue = {
+  character: CharacterName;
+  dialogue: string;
 };
+
+function isSupportedCharacter(value: unknown): value is CharacterName {
+  return typeof value === 'string' && AVAILABLE_CHARACTERS.includes(value as CharacterName);
+}
+
+function parseVideoStyle(value: unknown): VideoStyleId {
+  return String(value || 'standard') as VideoStyleId;
+}
+
+function getCharacterSetForStyle(style: string): CharacterSetId {
+  const preset = getVideoStylePreset(style);
+  return preset.characterSet;
+}
+
+function pickSingleVoiceCharacter(raw: unknown): CharacterName {
+  if (isSupportedCharacter(raw)) return raw;
+  const presetDefault = getVideoStylePreset('single_voice').defaultCharacter;
+  if (presetDefault && isSupportedCharacter(presetDefault)) return presetDefault;
+  return DEFAULT_SINGLE_VOICE_CHARACTER;
+}
+
+function normalizeConversationLines(
+  rawItems: unknown[],
+  options: { characterSet: CharacterSetId; singleCharacter: CharacterName }
+): { lines: NormalizedDialogue[]; errors: string[] } {
+  const lines: NormalizedDialogue[] = [];
+  const errors: string[] = [];
+
+  for (let i = 0; i < rawItems.length; i++) {
+    const item = (rawItems[i] || {}) as { character?: unknown; dialogue?: unknown; text?: unknown };
+
+    const rawText = typeof item.dialogue === 'string'
+      ? item.dialogue
+      : (typeof item.text === 'string' ? item.text : '');
+    const dialogue = rawText.trim();
+    if (!dialogue) {
+      errors.push(`Line ${i + 1} is missing dialogue text`);
+      continue;
+    }
+
+    const requestedCharacter = item.character;
+    const resolvedCharacter = options.characterSet === 'single'
+      ? options.singleCharacter
+      : requestedCharacter;
+
+    if (!isSupportedCharacter(resolvedCharacter)) {
+      errors.push(`Line ${i + 1} has an invalid character: ${String(requestedCharacter ?? '')}`);
+      continue;
+    }
+
+    lines.push({
+      character: resolvedCharacter,
+      dialogue,
+    });
+  }
+
+  return { lines, errors };
+}
+
+function readSessionConversationMetadata(sessionId: string): {
+  videoStyle?: string;
+  characterSet?: CharacterSetId;
+  selectedCharacter?: string;
+} {
+  try {
+    const conversationPath = path.join(AUDIO_OUTPUT_DIR, sessionId, 'conversation.json');
+    if (!fs.existsSync(conversationPath)) return {};
+
+    const raw = JSON.parse(fs.readFileSync(conversationPath, 'utf8')) as {
+      videoStyle?: string;
+      characterSet?: CharacterSetId;
+      selectedCharacter?: string;
+    };
+
+    return {
+      videoStyle: raw.videoStyle,
+      characterSet: raw.characterSet,
+      selectedCharacter: raw.selectedCharacter,
+    };
+  } catch {
+    return {};
+  }
+}
 
 // Chatterbox TTS API configuration
 const CHATTERBOX_TTS_API = 'http://localhost:8000';
@@ -380,6 +472,9 @@ export async function generateConversationWithAudio(ctx: HttpContext): Promise<H
   try {
     const b = ctx.body as Record<string, unknown>;
     const text = b?.text;
+    const videoStyle = parseVideoStyle(b?.videoStyle);
+    const characterSet = (b?.characterSet as CharacterSetId | undefined) ?? getCharacterSetForStyle(videoStyle);
+    const selectedCharacter = pickSingleVoiceCharacter(b?.character);
     const exaggeration = (b?.exaggeration as number) ?? 0.6;
     const temperature = (b?.temperature as number) ?? 1.5;
     const seedNum = (b?.seedNum as number) ?? 0;
@@ -402,15 +497,42 @@ export async function generateConversationWithAudio(ctx: HttpContext): Promise<H
     if (topP < 0.0 || topP > 1.0) return jsonResponse(400, { error: 'top_p must be between 0.0 and 1.0' });
     if (repetitionPenalty < 1.0 || repetitionPenalty > 2.0) return jsonResponse(400, { error: 'Repetition penalty must be between 1.0 and 2.0' });
 
-    const conversation = await generateConversation(text as string);
-    if (!conversation?.conversation?.length) {
+    let conversationPayload: { topic: string; conversation: Array<{ character: CharacterName; dialogue: string }> };
+    if (videoStyle === 'single_voice' || characterSet === 'single') {
+      const singleCharacterScript = await generateSingleCharacterScript(text as string, selectedCharacter);
+      conversationPayload = {
+        topic: singleCharacterScript.topic,
+        conversation: singleCharacterScript.conversation.map((line: { text: string }) => ({
+          character: selectedCharacter,
+          dialogue: line.text,
+        })),
+      };
+    } else {
+      const conversation = await generateConversation(text as string);
+      conversationPayload = {
+        topic: conversation.topic,
+        conversation: (conversation.conversation || [])
+          .filter((line: { character?: string; dialogue?: string }) =>
+            isSupportedCharacter(line.character) && typeof line.dialogue === 'string' && line.dialogue.trim().length > 0
+          )
+          .map((line: { character: CharacterName; dialogue: string }) => ({
+            character: line.character,
+            dialogue: line.dialogue.trim(),
+          })),
+      };
+    }
+
+    if (!conversationPayload.conversation.length) {
       return jsonResponse(500, { success: false, error: 'Failed to generate conversation script' });
     }
 
     return jsonResponse(200, {
       success: true,
       message: 'Conversation script generated successfully',
-      data: conversation,
+      data: conversationPayload,
+      videoStyle,
+      characterSet,
+      selectedCharacter: characterSet === 'single' ? selectedCharacter : null,
       parameters: { exaggeration, temperature, seedNum, cfgWeight, minP, topP, repetitionPenalty },
     });
   } catch (error) {
@@ -421,7 +543,12 @@ export async function generateConversationWithAudio(ctx: HttpContext): Promise<H
 export async function generateAudioFromScript(ctx: HttpContext): Promise<HandlerResult> {
   try {
     const b = ctx.body as Record<string, unknown>;
-    const conversation = b?.conversation as { conversation: unknown[]; topic?: string } | undefined;
+    const conversation = b?.conversation as { conversation: unknown[]; topic?: string; selectedCharacter?: string } | undefined;
+    const videoStyle = parseVideoStyle(b?.videoStyle ?? (conversation as { videoStyle?: unknown } | undefined)?.videoStyle);
+    const characterSet = (b?.characterSet as CharacterSetId | undefined) ?? getCharacterSetForStyle(videoStyle);
+    const selectedCharacter = pickSingleVoiceCharacter(
+      b?.character ?? conversation?.selectedCharacter ?? (conversation as { character?: unknown } | undefined)?.character
+    );
     const exaggeration = (b?.exaggeration as number) ?? 0.6;
     const temperature = (b?.temperature as number) ?? 1.5;
     const seedNum = (b?.seedNum as number) ?? 0;
@@ -441,18 +568,38 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
     if (topP < 0.0 || topP > 1.0) return jsonResponse(400, { error: 'top_p must be between 0.0 and 1.0' });
     if (repetitionPenalty < 1.0 || repetitionPenalty > 2.0) return jsonResponse(400, { error: 'Repetition penalty must be between 1.0 and 2.0' });
 
+    const { lines, errors } = normalizeConversationLines(conversation.conversation, {
+      characterSet,
+      singleCharacter: selectedCharacter,
+    });
+    if (errors.length > 0) {
+      return jsonResponse(400, { error: errors[0], details: errors });
+    }
+    if (lines.length === 0) {
+      return jsonResponse(400, { error: 'Conversation script has no valid dialogue lines' });
+    }
+
     const apiConnected = await testTTSApiConnection();
     if (!apiConnected) {
       return jsonResponse(503, { success: false, error: 'TTS API is not available. Please ensure the Chatterbox TTS server is running on port 8000.' });
     }
 
-    for (const [char, audioPath] of Object.entries(REFERENCE_AUDIO_PATHS)) {
+    const requiredCharacters = new Set<CharacterName>(lines.map((line) => line.character));
+    for (const char of requiredCharacters) {
+      const audioPath = REFERENCE_AUDIO_PATHS[char];
       if (!fs.existsSync(audioPath)) {
         return jsonResponse(500, { success: false, error: `Reference audio file missing for ${char}: ${audioPath}` });
       }
     }
 
-    const sessionName = generateSessionName(conversation);
+    const normalizedConversationForStorage = {
+      topic: conversation.topic,
+      conversation: lines,
+      videoStyle,
+      characterSet,
+      selectedCharacter: characterSet === 'single' ? selectedCharacter : undefined,
+    };
+    const sessionName = generateSessionName(normalizedConversationForStorage);
     const session = await prisma.session.create({
       data: {
         name: sessionName,
@@ -463,7 +610,7 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
         minP,
         topP,
         repetitionPenalty,
-        totalDialogues: conversation.conversation.length,
+        totalDialogues: lines.length,
         audioFilesGenerated: 0,
         allSuccessful: false
       }
@@ -483,12 +630,11 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
 
     // Save conversation data for regeneration
     const conversationPath = path.join(sessionDir, 'conversation.json');
-    fs.writeFileSync(conversationPath, JSON.stringify(conversation, null, 2));
+    fs.writeFileSync(conversationPath, JSON.stringify(normalizedConversationForStorage, null, 2));
 
     const dialogueRecords: { id: string }[] = [];
-    for (let i = 0; i < conversation.conversation.length; i++) {
-      const item = conversation.conversation[i] as { character: string; dialogue: string };
-      const { character: convCharacter, dialogue } = item;
+    for (let i = 0; i < lines.length; i++) {
+      const { character: convCharacter, dialogue } = lines[i];
 
       const dialogueRecord = await prisma.dialogue.create({
         data: {
@@ -506,22 +652,22 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
     // Publish start event immediately (SSE controller buffers recent messages)
     publishFileUpdate(sessionId, {
       type: 'started',
-      total: conversation.conversation.length
+      total: lines.length
     });
 
-    const totalFiles = conversation.conversation.length;
+    const totalFiles = lines.length;
 
     // Process files in parallel - don't wait for all to complete
     // Use a Set to track completed files atomically
     const completedFiles = new Set<string>();
     
-    const generatePromises = conversation.conversation.map(async (item, i) => {
+    const generatePromises = lines.map(async (item, i) => {
       const dialogueRecord = dialogueRecords[i];
-      const { character: convCharacter, dialogue } = item as { character: string; dialogue: string };
+      const { character: convCharacter, dialogue } = item;
 
 
       // Validate character
-      if (!['Stewie', 'Peter'].includes(convCharacter)) {
+      if (!isSupportedCharacter(convCharacter)) {
         const fileId = `${sessionId}_${i + 1}`;
         completedFiles.add(fileId);
         publishFileUpdate(sessionId, {
@@ -535,7 +681,8 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
       }
 
       // Generate audio
-      const filename = `${sessionId}_${String(i + 1).padStart(2, '0')}_${convCharacter.toLowerCase()}.wav`;
+      const safeCharacterId = convCharacter.toLowerCase().replace(/\s+/g, '_');
+      const filename = `${sessionId}_${String(i + 1).padStart(2, '0')}_${safeCharacterId}.wav`;
       const outputPath = path.join(sessionDir, filename);
       const fileId = `${sessionId}_${i + 1}`;
 
@@ -673,12 +820,44 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
       success: true,
       message: 'Audio generation started',
       sessionId,
+      videoStyle,
+      characterSet,
+      selectedCharacter: characterSet === 'single' ? selectedCharacter : null,
       parameters: { exaggeration, temperature, seedNum, cfgWeight, minP, topP, repetitionPenalty },
       streamEndpoint: `/api/stream/${sessionId}/files`,
       note: 'Files are being generated asynchronously. Connect to the stream endpoint to receive real-time updates.'
     });
   } catch (error) {
     return jsonResponse(500, { success: false, error: 'Internal server error occurred while generating conversation script', details: error instanceof Error ? error.message : 'Unknown error' });
+  }
+}
+
+export async function getAudioGenerationConfig(_ctx: HttpContext): Promise<HandlerResult> {
+  try {
+    const styles = getAllVideoStyles().map((style) => ({
+      id: style.id,
+      name: style.name,
+      description: style.description,
+      characterSet: style.characterSet,
+      defaultCharacter: style.defaultCharacter,
+      supportedCharacters: style.supportedCharacters,
+    }));
+
+    return jsonResponse(200, {
+      success: true,
+      styles,
+      characters: AVAILABLE_CHARACTERS,
+      defaults: {
+        videoStyle: 'standard',
+        singleVoiceCharacter: DEFAULT_SINGLE_VOICE_CHARACTER,
+      },
+    });
+  } catch (error) {
+    return jsonResponse(500, {
+      success: false,
+      error: 'Failed to load audio generation config',
+      details: error instanceof Error ? error.message : 'Unknown error',
+    });
   }
 }
 
@@ -746,10 +925,18 @@ export async function regenerateAudioFile(ctx: HttpContext): Promise<HandlerResu
       return jsonResponse(503, { error: 'TTS API is not available' });
     }
 
+    if (!isSupportedCharacter(dialogueRecord.character)) {
+      return jsonResponse(400, { error: `Unsupported character: ${dialogueRecord.character}` });
+    }
+    const referenceAudioPath = REFERENCE_AUDIO_PATHS[dialogueRecord.character];
+    if (!referenceAudioPath || !fs.existsSync(referenceAudioPath)) {
+      return jsonResponse(500, { error: `Reference audio file missing for ${dialogueRecord.character}: ${referenceAudioPath}` });
+    }
+
     // Regenerate audio
     await generateAudioWithChatterbox(
       finalText,
-      dialogueRecord.character as CharacterName,
+      dialogueRecord.character,
       outputPath,
       {
         exaggeration,
@@ -847,10 +1034,17 @@ export async function getSessionDetails(ctx: HttpContext): Promise<HandlerResult
       return jsonResponse(404, { error: 'Session not found' });
     }
 
+    const sessionMeta = readSessionConversationMetadata(session.id);
+    const fallbackCharacterSet: CharacterSetId =
+      new Set(session.dialogues.map((dialogue) => dialogue.character)).size <= 1 ? 'single' : 'duo';
+
     const formattedSession = {
       sessionId: session.id,
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
+      videoStyle: sessionMeta.videoStyle || (fallbackCharacterSet === 'single' ? 'single_voice' : 'standard'),
+      characterSet: sessionMeta.characterSet || fallbackCharacterSet,
+      selectedCharacter: sessionMeta.selectedCharacter || null,
       parameters: {
         exaggeration: session.exaggeration,
         temperature: session.temperature,
@@ -925,6 +1119,11 @@ export async function getAudioFiles(_ctx: HttpContext): Promise<HandlerResult> {
 
     // Transform the data for the frontend
     const formattedSessions = sessions.map(session => {
+      const sessionMeta = readSessionConversationMetadata(session.id);
+      const uniqueCharacters = new Set(session.dialogues.map((dialogue) => dialogue.character));
+      const fallbackCharacterSet: CharacterSetId = uniqueCharacters.size <= 1 ? 'single' : 'duo';
+      const inferredPrimaryCharacter = uniqueCharacters.size === 1 ? [...uniqueCharacters][0] : null;
+
       // Use stored total duration if available, otherwise calculate it
       let totalDurationSeconds = 0;
       
@@ -980,6 +1179,9 @@ export async function getAudioFiles(_ctx: HttpContext): Promise<HandlerResult> {
         sessionId: session.id,
         name: session.name,
         createdAt: session.createdAt,
+        videoStyle: sessionMeta.videoStyle || (fallbackCharacterSet === 'single' ? 'single_voice' : 'standard'),
+        characterSet: sessionMeta.characterSet || fallbackCharacterSet,
+        selectedCharacter: sessionMeta.selectedCharacter || inferredPrimaryCharacter,
         parameters: {
           exaggeration: session.exaggeration,
           temperature: session.temperature,

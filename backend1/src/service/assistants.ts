@@ -18,6 +18,20 @@ const conversationperterstewieschema = z.object({
   topic: z.string()
 });
 
+const singleCharacterLineSchema = z.object({
+  text: z.string().max(280),
+});
+
+const singleCharacterConversationSchema = z.array(singleCharacterLineSchema)
+  .min(8)
+  .max(20);
+
+const singleCharacterScriptSchema = z.object({
+  conversation: singleCharacterConversationSchema,
+  topic: z.string(),
+  character: z.string(),
+});
+
 // GEMINI API KEY FALLBACK
 const PRIMARY_GEMINI_KEY = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
 const SECONDARY_GEMINI_KEY = process.env.GOOGLE_GENERATIVE_AI_API_KEY_SECONDARY;
@@ -139,6 +153,58 @@ Example format:
     return result.object;
   } catch (error) {
     throw new Error(`Error generating conversation: ${error}`);
+  }
+}
+
+export const generateSingleCharacterScript = async (topic: string, characterId: string) => {
+  try {
+    const researchInfo = await researchontopicwithlinks(topic);
+
+    const prompt = `You are writing an educational Instagram Reel script for ONE speaker.
+
+Topic: "${topic}"
+Speaker name: "${characterId}"
+
+Use this research context:
+${researchInfo}
+
+Rules:
+- Return strict JSON only.
+- Script must contain 10-15 lines.
+- Each line must be <= 280 characters.
+- Keep language concise, social-friendly, and educational.
+- One key insight per line.
+- Do not include stage directions, emojis, markdown, or quotes around whole lines.
+- The speaker must stay the same for every line.
+
+Return this exact shape:
+{
+  "conversation": [
+    { "text": "..." }
+  ],
+  "topic": "${topic}",
+  "character": "${characterId}"
+}`;
+
+    const result = await withGeminiFallback('gemini-3-flash-preview', (model) =>
+      generateObject({
+        model,
+        schema: singleCharacterScriptSchema as any,
+        prompt,
+      })
+    );
+
+    const lines = ((result.object.conversation || []) as Array<{ text?: string }>)
+      .map((line: { text?: string }) => ({ text: String(line.text || '').trim() }))
+      .filter((line: { text: string }) => line.text.length > 0);
+
+    return {
+      topic,
+      character: characterId,
+      conversation: lines,
+    };
+  } catch (error) {
+    throw new Error(`Error generating single-character conversation: ${error}`);
   }
 }
 

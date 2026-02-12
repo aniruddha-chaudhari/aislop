@@ -6,7 +6,10 @@ import { generateAnimationPlanWithResearch, parseOpenCodeJSON } from '../agents/
 
 const REMOTION_ROOT_DIR = path.join(process.cwd(), 'storage', 'remotion-animation');
 const RENDERED_ANIMATIONS_ROOT_DIR = path.join(process.cwd(), 'storage', 'rendered-animations');
-const PROMPT_PATH = path.join(REMOTION_ROOT_DIR, 'ANIMATION_OVERLAY_PROMPT.md');
+const PROMPT_PATHS = [
+  path.join(REMOTION_ROOT_DIR, 'ANIMATION_OVERLAY_PROMPT.md'),
+  path.join(process.cwd(), 'backend1', 'storage', 'remotion-animation', 'ANIMATION_OVERLAY_PROMPT.md'),
+];
 const REMOTION_COMPOSITION_ID = 'StewiePeterOverlay';
 const REMOTION_FPS = 30;
 const PLAN_FILENAME = 'animation-plan.json';
@@ -215,11 +218,13 @@ function normalizePlan(raw: unknown, subtitleClips: SubtitleClip[], videoDuratio
 }
 
 function readPromptTemplate(): string {
-  if (fs.existsSync(PROMPT_PATH)) {
-    return fs.readFileSync(PROMPT_PATH, 'utf8');
+  for (const promptPath of PROMPT_PATHS) {
+    if (fs.existsSync(promptPath)) {
+      return fs.readFileSync(promptPath, 'utf8');
+    }
   }
-  return `You are planning short animation overlay moments for a vertical educational video.
-Use the Remotion skill/tools while planning so the output is practical for Remotion rendering.
+  return `You are planning B-roll animation moments for a VERTICAL 9:16 educational short.
+These moments will REPLACE the background temporarily, so content must be designed for full-screen mobile view.
 
 TOPIC: {{TOPIC}}
 VIDEO_DURATION_SECONDS: {{VIDEO_DURATION_SECONDS}}
@@ -239,7 +244,10 @@ Return JSON only:
 Rules:
 - Moments must stay within video duration.
 - Keep each moment 1.0 to 6.0 seconds.
-- Choose concise content suitable for overlay animation.
+- Design each moment for vertical 9:16 readability.
+- content must be static text (all-at-once), one core idea only, short and punchy.
+- Avoid long sentences, dense jargon, tables, and tiny-text concepts.
+- Spread moments across the video; avoid heavy clustering.
 - Use at most MAX_MOMENTS moments.
 - Output JSON only.`;
 }
@@ -477,6 +485,7 @@ export async function generateAnimationPlanAndRender(params: {
     x: DEFAULT_OVERLAY_X,
     y: DEFAULT_OVERLAY_Y,
     scale: DEFAULT_OVERLAY_SCALE,
+    displayMode: 'replace',
     path: outputPath,
   }));
   const overlayTracks = assignMomentsToOverlayTracks(overlayClips);

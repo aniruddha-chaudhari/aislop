@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Music, FolderOpen, Folder, CheckCircle, AlertTriangle, Square, Play, Trash2, Download, RefreshCw, Baby, User } from 'lucide-react';
+import { Music, FolderOpen, Folder, CheckCircle, AlertTriangle, Square, Play, Trash2, Download, RefreshCw, Baby, User, Mic2, Filter } from 'lucide-react';
 import { API_ENDPOINTS, API_BASE_URL } from '../../config/api';
 
 
@@ -44,6 +44,9 @@ interface AudioSession {
   name?: string;
   createdAt: string;
   updatedAt?: string;
+  videoStyle?: string;
+  characterSet?: 'single' | 'duo';
+  selectedCharacter?: string | null;
   parameters: SessionParameters;
   stats: SessionStats;
   dialogues: Dialogue[];
@@ -64,6 +67,19 @@ function formatDurationLabel(totalSeconds: number): string {
   const mm = hours > 0 ? String(minutes).padStart(2, '0') : String(minutes);
   const ss = String(secs).padStart(2, '0');
   return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+function formatStyleLabel(styleId?: string): string {
+  if (styleId === 'single_voice') return 'Single Voice';
+  if (styleId === 'reel_dynamic') return 'Reel Dynamic';
+  if (styleId === 'standard') return 'Standard';
+  return styleId || 'Unknown';
+}
+
+function getCharacterIcon(character: string) {
+  if (character === 'Stewie') return Baby;
+  if (character === 'Narrator') return Mic2;
+  return User;
 }
 
 export default function AudioBrowser() {
@@ -87,6 +103,7 @@ export default function AudioBrowser() {
   const [sessionOffsets, setSessionOffsets] = useState<Record<string, Record<string, number>>>({});
   const [playingSession, setPlayingSession] = useState<string | null>(null);
   const [currentAudioElement, setCurrentAudioElement] = useState<HTMLAudioElement | null>(null);
+  const [styleFilter, setStyleFilter] = useState<string>('all');
 
   useEffect(() => {
     fetchAudioFiles();
@@ -198,17 +215,21 @@ export default function AudioBrowser() {
   }, [sessions]);
 
   // Normalize different backend shapes
-  const normalizeSessions = (rawData: any): AudioSession[] => {
-    if (rawData && typeof rawData === 'object' && 'success' in rawData) {
-      const typed = rawData as AudioResponse;
-      if (!typed.success) {
-        throw new Error('Server returned success=false');
-      }
-      return typed.sessions || [];
+  const normalizeSessions = (rawData: unknown): AudioSession[] => {
+    if (!rawData || typeof rawData !== 'object') {
+      throw new Error('Unexpected response format from /api/audio/files');
     }
 
-    if (rawData && typeof rawData === 'object' && 'sessions' in rawData) {
-      return Array.isArray((rawData as any).sessions) ? (rawData as any).sessions : [];
+    const candidate = rawData as { success?: unknown; sessions?: unknown };
+    if ('success' in candidate) {
+      if (candidate.success !== true) {
+        throw new Error('Server returned success=false');
+      }
+      return Array.isArray(candidate.sessions) ? (candidate.sessions as AudioSession[]) : [];
+    }
+
+    if ('sessions' in candidate) {
+      return Array.isArray(candidate.sessions) ? (candidate.sessions as AudioSession[]) : [];
     }
 
     throw new Error('Unexpected response format from /api/audio/files');
@@ -414,21 +435,45 @@ export default function AudioBrowser() {
     );
   }
 
+  const styleFilterOptions = ['all', ...Array.from(new Set(sessions.map((session) => session.videoStyle || 'standard')))];
+  const filteredSessions = sessions.filter((session) =>
+    styleFilter === 'all' ? true : (session.videoStyle || 'standard') === styleFilter
+  );
+
   return (
     <div>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between mb-6">
         <div>
           <div className="text-sm font-semibold">Audio Library</div>
           <div className="mt-1 text-xs text-[var(--editor-muted)]">
-            {sessions.length > 0 ? `${sessions.length} session${sessions.length !== 1 ? 's' : ''}` : 'No sessions yet'}
+            {filteredSessions.length > 0 ? `${filteredSessions.length} session${filteredSessions.length !== 1 ? 's' : ''}` : 'No sessions yet'}
           </div>
         </div>
-        <button
-          onClick={fetchAudioFiles}
-          className="studio-button-secondary rounded-xl px-3 py-2 text-xs font-semibold shadow-[0_14px_32px_var(--shadow)] transition"
-        >
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 rounded-xl border border-[var(--border)] px-3 py-2 text-xs">
+            <Filter className="h-3.5 w-3.5 text-[var(--editor-muted)]" />
+            <select
+              value={styleFilter}
+              onChange={(event) => setStyleFilter(event.target.value)}
+              className="bg-transparent text-xs text-[var(--foreground)] outline-none"
+            >
+              <option value="all">All styles</option>
+              {styleFilterOptions
+                .filter((option) => option !== 'all')
+                .map((styleId) => (
+                  <option key={styleId} value={styleId}>
+                    {formatStyleLabel(styleId)}
+                  </option>
+                ))}
+            </select>
+          </div>
+          <button
+            onClick={fetchAudioFiles}
+            className="studio-button-secondary rounded-xl px-3 py-2 text-xs font-semibold shadow-[0_14px_32px_var(--shadow)] transition"
+          >
+            Refresh
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -437,7 +482,7 @@ export default function AudioBrowser() {
         </div>
       )}
 
-      {sessions.length === 0 ? (
+      {filteredSessions.length === 0 ? (
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--card)] px-6 py-12 text-center">
           <Music className="w-16 h-16 mx-auto mb-4 text-[var(--editor-muted)]" />
           <h3 className="text-lg font-semibold mb-2">No audio files found</h3>
@@ -447,7 +492,7 @@ export default function AudioBrowser() {
         </div>
       ) : (
         <div className="space-y-3">
-          {sessions.map((session) => (
+          {filteredSessions.map((session) => (
             <div
               key={session.sessionId}
               className="rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-[0_18px_40px_var(--shadow)] overflow-hidden transition hover:border-[color-mix(in_srgb,var(--accent)_45%,var(--border))] hover:bg-[color-mix(in_srgb,var(--card)_85%,black)]"
@@ -467,6 +512,10 @@ export default function AudioBrowser() {
                       {session.name || `Session ${session.sessionId}`}
                     </h3>
                     <div className="flex items-center gap-1.5 text-xs text-[var(--editor-muted)] mt-1">
+                      <span className="rounded-full border border-[var(--border)] px-2 py-0.5 text-[10px]">
+                        {formatStyleLabel(session.videoStyle || 'standard')}
+                      </span>
+                      <span>•</span>
                       <span>{session.stats.audioFilesGenerated}/{session.stats.totalDialogues} files</span>
                       <span>•</span>
                       <span>Total: {formatDurationLabel(sessionDurations[session.sessionId] ?? 0)}</span>
@@ -522,11 +571,10 @@ export default function AudioBrowser() {
                       className="rounded-xl border border-[var(--border)] bg-[var(--muted)]/20 p-4 transition hover:bg-[var(--muted)]/30"
                     >
                       <div className="flex items-start gap-3 mb-3">
-                        {dialogue.character === 'Stewie' ? (
-                          <Baby className="w-6 h-6 flex-shrink-0 mt-0.5 text-[var(--editor-muted)]" />
-                        ) : (
-                          <User className="w-6 h-6 flex-shrink-0 mt-0.5 text-[var(--editor-muted)]" />
-                        )}
+                        {(() => {
+                          const CharacterIcon = getCharacterIcon(dialogue.character);
+                          return <CharacterIcon className="w-6 h-6 flex-shrink-0 mt-0.5 text-[var(--editor-muted)]" />;
+                        })()}
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2 mb-2">
                             <p className="text-sm font-semibold">

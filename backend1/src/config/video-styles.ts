@@ -1,10 +1,14 @@
 // Video style presets configuration
-export type VideoStyleId = 'standard' | 'reel_dynamic';
+export type CharacterSetId = 'duo' | 'single';
+export type VideoStyleId = 'standard' | 'reel_dynamic' | 'single_voice';
 
 export interface VideoStylePreset {
   id: VideoStyleId;
   name: string;
   description: string;
+  characterSet: CharacterSetId;
+  defaultCharacter?: string;
+  supportedCharacters?: string[];
   aspectRatio: {
     width: number;
     height: number;
@@ -42,6 +46,8 @@ export const VIDEO_STYLE_PRESETS: Record<VideoStyleId, VideoStylePreset> = {
     id: 'standard',
     name: 'Standard Video',
     description: 'Traditional 9:16 vertical video with subtitles and character overlays',
+    characterSet: 'duo',
+    supportedCharacters: ['Stewie', 'Peter'],
     aspectRatio: {
       width: 1080,
       height: 1920,
@@ -73,6 +79,8 @@ export const VIDEO_STYLE_PRESETS: Record<VideoStyleId, VideoStylePreset> = {
     id: 'reel_dynamic',
     name: 'Reel (Dynamic)',
     description: 'Vertical reel-style video with dynamic transitions, background music, and SFX (90-150s target)',
+    characterSet: 'duo',
+    supportedCharacters: ['Stewie', 'Peter'],
     aspectRatio: {
       width: 1080,
       height: 1920,
@@ -102,6 +110,40 @@ export const VIDEO_STYLE_PRESETS: Record<VideoStyleId, VideoStylePreset> = {
       bitrate: '2500k',
       codec: 'h264',
       preset: 'fast'
+    }
+  },
+  single_voice: {
+    id: 'single_voice',
+    name: 'Single Voice Character',
+    description: 'One speaker style for educational reels with a single character image overlay',
+    characterSet: 'single',
+    defaultCharacter: 'Narrator',
+    supportedCharacters: ['Narrator', 'Stewie', 'Peter'],
+    aspectRatio: {
+      width: 1080,
+      height: 1920,
+      ratio: '9:16'
+    },
+    fps: 30,
+    transitions: {
+      enabled: false,
+      types: ['crossfade'],
+      default: 'crossfade'
+    },
+    audio: {
+      backgroundMusic: false,
+      sfx: false,
+      duckMusic: false
+    },
+    textOverlays: {
+      enabled: true,
+      position: 'bottom',
+      style: 'outlined'
+    },
+    videoSettings: {
+      bitrate: '2200k',
+      codec: 'h264',
+      preset: 'medium'
     }
   }
 };

@@ -34,6 +34,7 @@ register([
 
   // Audio
   { method: 'GET', pattern: '/api/audio/test-connection', handler: audio.testTTSConnection },
+  { method: 'GET', pattern: '/api/audio/config', handler: audio.getAudioGenerationConfig },
   { method: 'POST', pattern: '/api/audio/generate-script', handler: audio.generateConversationWithAudio },
   { method: 'POST', pattern: '/api/audio/generate-audio', handler: audio.generateAudioFromScript },
   { method: 'POST', pattern: '/api/audio/regenerate/:sessionId/:filename', handler: audio.regenerateAudioFile },

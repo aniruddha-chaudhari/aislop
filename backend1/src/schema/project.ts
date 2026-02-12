@@ -55,6 +55,8 @@ export const OverlayClipSchema = z.object({
   x: z.number(),
   y: z.number(),
   scale: z.number(),
+  // overlay = regular positioned overlay, replace = full-frame B-roll replacement
+  displayMode: z.enum(['overlay', 'replace']).optional(),
   path: z.string().optional(),
 });
 

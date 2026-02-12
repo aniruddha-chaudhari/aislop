@@ -2,9 +2,11 @@ import type { HttpContext } from '../utils/http';
 import { jsonResponse } from '../utils/http';
 import type { HandlerResult } from '../utils/http';
 import { ttsService } from '../service/tts';
-import type { CharacterName } from '../config/tts-config';
+import { TTS_CONFIG, type CharacterName } from '../config/tts-config';
 import fs from 'fs';
 import path from 'path';
+
+const SUPPORTED_CHARACTERS = Object.keys(TTS_CONFIG.characters);
 
 export async function generateScript(ctx: HttpContext): Promise<HandlerResult> {
   try {
@@ -36,8 +38,8 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
 
     for (const item of conversation) {
       const it = item as Record<string, unknown>;
-      if (!it.character || !it.dialogue || !['Stewie', 'Peter'].includes(String(it.character))) {
-        return jsonResponse(400, { error: 'Each conversation item must have a valid character (Stewie or Peter) and dialogue' });
+      if (!it.character || !it.dialogue || !SUPPORTED_CHARACTERS.includes(String(it.character))) {
+        return jsonResponse(400, { error: `Each conversation item must have a valid character (${SUPPORTED_CHARACTERS.join(', ')}) and dialogue` });
       }
     }
 
@@ -187,8 +189,8 @@ export async function testTTS(ctx: HttpContext): Promise<HandlerResult> {
     const character = body?.character;
     const text = body?.text;
 
-    if (!character || !['Stewie', 'Peter'].includes(String(character))) {
-      return jsonResponse(400, { error: 'Character must be either "Stewie" or "Peter"' });
+    if (!character || !SUPPORTED_CHARACTERS.includes(String(character))) {
+      return jsonResponse(400, { error: `Character must be one of: ${SUPPORTED_CHARACTERS.join(', ')}` });
     }
     if (!text || typeof text !== 'string' || text.trim() === '') {
       return jsonResponse(400, { error: 'Text is required and must be a non-empty string' });
