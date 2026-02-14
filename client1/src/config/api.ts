@@ -87,6 +87,7 @@ export const API_ENDPOINTS = {
   generateAiDraft: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/ai-draft`,
   generateImagePlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/image-plan`,
   generateAnimationPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/animation-plan`,
+  deleteAnimationPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/animation-plan`,
   generateSfxPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/sfx-plan`,
   saveTimeline: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/timeline`,
   exportProject: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/export`,

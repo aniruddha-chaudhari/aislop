@@ -10,7 +10,13 @@ import { ProjectSchema, TimelineSchema } from '../schema/project';
 import fs from 'fs';
 import path from 'path';
 import { generateSfxTrack } from '../service/sfxService';
-import { generateAnimationPlanAndRender, isAnimationOverlayTrack } from '../service/animationPlanService';
+import {
+  cleanupAnimationCacheForProject,
+  generateAnimationPlanAndRender,
+  isAnimationOverlayTrack,
+} from '../service/animationPlanService';
+
+const ANIMATION_DEBUG_ENABLED = process.env.ANIMATION_DEBUG === '1';
 
 /**
  * Create a new project
@@ -446,6 +452,16 @@ export async function generateAnimationPlanForProject(ctx: HttpContext): Promise
         : (await getSessionDuration(project.audioSessionId)) || 60;
 
     const topic = body.topic || project.name || 'Educational short video';
+    if (ANIMATION_DEBUG_ENABLED) {
+      console.info('[Animation Plan] request received', {
+        projectId,
+        topic,
+        subtitleClipCount: subtitleClips.length,
+        duration,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     const result = await generateAnimationPlanAndRender({
       projectId,
       topic,
@@ -483,6 +499,16 @@ export async function generateAnimationPlanForProject(ctx: HttpContext): Promise
     const timeline = { duration, tracks };
     const updatedProject = await projectService.updateTimeline(projectId, timeline);
 
+    if (ANIMATION_DEBUG_ENABLED) {
+      console.info('[Animation Plan] request completed', {
+        projectId,
+        generatedMoments: result.animationPlan.moments.length,
+        overlayTrackCount: result.overlayTracks.length,
+        remotionProjectDir: result.remotionProjectDir,
+        renderedProjectDir: result.renderedProjectDir,
+      });
+    }
+
     return jsonResponse(200, {
       success: true,
       animationPlan: result.animationPlan,
@@ -491,9 +517,57 @@ export async function generateAnimationPlanForProject(ctx: HttpContext): Promise
       message: 'Animation plan generated successfully',
     });
   } catch (error) {
+    console.error('[Animation Plan] request failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to generate animation plan',
+    });
+  }
+}
+
+export async function deleteAnimationPlanForProject(ctx: HttpContext): Promise<HandlerResult> {
+  try {
+    const projectId = ctx.params?.id;
+    if (!projectId) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Project ID is required',
+      });
+    }
+
+    const project = await projectService.getProject(projectId);
+    if (!project) {
+      return jsonResponse(404, {
+        success: false,
+        error: 'Project not found',
+      });
+    }
+
+    const existing = project.timeline;
+    const existingTracks = (existing?.tracks ?? []) as Track[];
+    const tracks = existingTracks.filter((t) => !isAnimationOverlayTrack(t));
+    const duration =
+      typeof existing?.duration === 'number' && existing.duration > 0
+        ? existing.duration
+        : (await getSessionDuration(project.audioSessionId)) || 60;
+
+    const timeline = { duration, tracks };
+    const updatedProject = await projectService.updateTimeline(projectId, timeline);
+    const cleanup = cleanupAnimationCacheForProject(projectId);
+
+    return jsonResponse(200, {
+      success: true,
+      project: updatedProject,
+      timeline,
+      cacheCleared: cleanup,
+      message: 'Animation plan deleted successfully',
+    });
+  } catch (error) {
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to delete animation plan',
     });
   }
 }
@@ -532,7 +606,7 @@ export async function generateSfxPlanForProject(ctx: HttpContext): Promise<Handl
       duration: timeline.duration ?? 0,
     });
 
-    console.log('[SFX Plan] generating fresh', {
+    console.info('[SFX Plan] generating fresh', {
       projectId,
       timestamp: new Date().toISOString(),
       overlayClips: overlayClips.length,
@@ -599,7 +673,7 @@ export async function saveTimeline(ctx: HttpContext): Promise<HandlerResult> {
     const trackTypes = (timeline.tracks ?? []).map((t: any) => t.type);
     const musicTracks = (timeline.tracks ?? []).filter((t: any) => t.type === 'music');
     const sfxTracks = (timeline.tracks ?? []).filter((t: any) => t.type === 'sfx');
-    console.log('[Timeline Save] Tracks', {
+    console.info('[Timeline Save] Tracks', {
       projectId,
       trackTypes,
       musicTracks: musicTracks.length,
@@ -664,7 +738,7 @@ export async function startExport(ctx: HttpContext): Promise<HandlerResult> {
     const body = (ctx.body as { step?: number }) ?? {};
     const exportStep = Math.min(4, Math.max(1, Number(body.step ?? ctx.query?.step ?? 4))) as 1 | 2 | 3 | 4;
 
-    console.log('[EXPORT] Start requested', { projectId, exportStep });
+    console.info('[EXPORT] Start requested', { projectId, exportStep });
 
     // Update status to exporting
     await projectService.updateStatus(projectId, 'exporting');
@@ -675,7 +749,7 @@ export async function startExport(ctx: HttpContext): Promise<HandlerResult> {
         const success = result && typeof result === 'object' && result.success;
         if (success) {
           await projectService.updateStatus(projectId, 'exported');
-          console.log('[EXPORT] Completed successfully', { projectId, videoPath: result.outputPath });
+          console.info('[EXPORT] Completed successfully', { projectId, videoPath: result.outputPath });
         } else {
           await projectService.updateStatus(projectId, 'ready');
           console.error('[EXPORT] Export failed', { projectId, error: result?.error });
@@ -1112,7 +1186,7 @@ export async function generateProjectPreviewHls(ctx: HttpContext): Promise<Handl
     const rawVersion = project.updatedAt || new Date().toISOString();
     const safeVersion = rawVersion.replace(/[^a-zA-Z0-9_-]/g, '_');
 
-    console.log('[HLS Preview] requested (no cache)', { projectId, version: safeVersion });
+    console.info('[HLS Preview] requested (no cache)', { projectId, version: safeVersion });
 
     // Disable HLS preview cache by deleting any existing playlist/segments
     // for this version before regenerating.

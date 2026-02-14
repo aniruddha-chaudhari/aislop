@@ -19,18 +19,82 @@ const DEFAULT_OVERLAY_X = 0.5;
 const DEFAULT_OVERLAY_Y = 0.65;
 const DEFAULT_OVERLAY_SCALE = 0.5;
 const MAX_MOMENTS = 8;
+const ANIMATION_DEBUG_ENABLED = process.env.ANIMATION_DEBUG === '1';
+const PROMPT_SNAPSHOT_FILENAME = 'animation-prompt.sent.txt';
+const OPENCODE_OUTPUT_FILENAME = 'animation-opencode.raw.txt';
+const DEBUG_TRACE_FILENAME = 'animation-debug-trace.json';
+const GENERIC_CONTENT_PATTERNS = [
+  /^introduction$/i,
+  /^intro$/i,
+  /^overview$/i,
+  /^summary$/i,
+  /^conclusion$/i,
+  /^key points?$/i,
+  /^main idea$/i,
+  /^important concept$/i,
+  /^let's begin$/i,
+  /^what is .*$/i,
+];
 
 export type AnimationMoment = {
   start: number;
   duration: number;
   type: string;
   content: string;
+  visualStyle?: string;
+  motion?: string;
+  layout?: string;
+  emphasis?: string;
 };
 
 export type AnimationPlan = {
   moments: AnimationMoment[];
   videoDurationSeconds?: number;
 };
+
+function summarizeForLog(text: string, max = 220): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (compact.length <= max) return compact;
+  return `${compact.slice(0, max)}...`;
+}
+
+function animationInfo(message: string, data?: Record<string, unknown>): void {
+  if (!ANIMATION_DEBUG_ENABLED) return;
+  if (data && Object.keys(data).length > 0) {
+    console.info(`[Animation Plan] ${message}`, data);
+    return;
+  }
+  console.info(`[Animation Plan] ${message}`);
+}
+
+function animationWarn(message: string, data?: Record<string, unknown>): void {
+  if (data && Object.keys(data).length > 0) {
+    console.warn(`[Animation Plan] ${message}`, data);
+    return;
+  }
+  console.warn(`[Animation Plan] ${message}`);
+}
+
+function countRawMoments(raw: unknown): number {
+  if (Array.isArray(raw)) return raw.length;
+  if (!raw || typeof raw !== 'object') return 0;
+
+  const asObj = raw as Record<string, unknown>;
+  if (Array.isArray(asObj.moments)) return asObj.moments.length;
+  if (Array.isArray(asObj.animations)) return asObj.animations.length;
+  if (Array.isArray(asObj.plan)) return asObj.plan.length;
+  if (asObj.plan && typeof asObj.plan === 'object' && Array.isArray((asObj.plan as any).moments)) {
+    return (asObj.plan as any).moments.length;
+  }
+  return 0;
+}
+
+function isGenericMomentContent(content: string): boolean {
+  const normalized = cleanText(content).toLowerCase();
+  if (!normalized) return true;
+  if (normalized.length < 4) return true;
+  return GENERIC_CONTENT_PATTERNS.some((pattern) => pattern.test(normalized));
+}
 
 export function isAnimationOverlayTrack(track: Pick<Track, 'type' | 'id'>): boolean {
   return track.type === 'overlay' && (track.id === 't_anim' || /^t_anim_\d+$/.test(track.id));
@@ -40,6 +104,24 @@ export function getAnimationProjectFolderName(projectId: string): string {
   const safe = (projectId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
   if (!safe) return 'proj_unknown';
   return safe.startsWith('proj_') ? safe : `proj_${safe}`;
+}
+
+export function cleanupAnimationCacheForProject(projectId: string): {
+  remotionProjectDir: string;
+  renderedProjectDir: string;
+} {
+  const projectFolder = getAnimationProjectFolderName(projectId);
+  const remotionProjectDir = path.join(REMOTION_ROOT_DIR, projectFolder);
+  const renderedProjectDir = path.join(RENDERED_ANIMATIONS_ROOT_DIR, projectFolder);
+
+  if (fs.existsSync(remotionProjectDir)) {
+    fs.rmSync(remotionProjectDir, { recursive: true, force: true });
+  }
+  if (fs.existsSync(renderedProjectDir)) {
+    fs.rmSync(renderedProjectDir, { recursive: true, force: true });
+  }
+
+  return { remotionProjectDir, renderedProjectDir };
 }
 
 function toNumber(value: unknown): number | null {
@@ -122,6 +204,9 @@ function fallbackMomentsFromSubtitles(subtitleClips: SubtitleClip[], videoDurati
   const desired = clamp(Math.ceil(videoDurationSeconds / 12), 1, MAX_MOMENTS);
   const stride = Math.max(1, Math.floor(sorted.length / desired));
   const moments: AnimationMoment[] = [];
+  const fallbackStyles = ['spotlight', 'split-comparison', 'flow-diagram', 'orbit-stat', 'timeline-lane'];
+  const fallbackMotion = ['snap', 'glide', 'sweep', 'orbit', 'parallax'];
+  const fallbackLayout = ['center', 'split', 'timeline', 'radial', 'left-focus'];
 
   for (let i = 0; i < sorted.length && moments.length < MAX_MOMENTS; i += stride) {
     const clip = sorted[i];
@@ -133,6 +218,10 @@ function fallbackMomentsFromSubtitles(subtitleClips: SubtitleClip[], videoDurati
       duration,
       type: 'callout',
       content: cleanText(clip.text).slice(0, 120) || `Animation moment ${moments.length + 1}`,
+      visualStyle: fallbackStyles[moments.length % fallbackStyles.length],
+      motion: fallbackMotion[moments.length % fallbackMotion.length],
+      layout: fallbackLayout[moments.length % fallbackLayout.length],
+      emphasis: cleanText(clip.text).split(' ').slice(0, 2).join(' '),
     });
   }
 
@@ -190,16 +279,40 @@ function normalizePlan(raw: unknown, subtitleClips: SubtitleClip[], videoDuratio
       'callout';
     const content =
       (typeof moment.content === 'string' && moment.content) ||
+      (typeof moment.headline === 'string' && moment.headline) ||
       (typeof moment.text === 'string' && moment.text) ||
       (typeof moment.description === 'string' && moment.description) ||
       (typeof moment.title === 'string' && moment.title) ||
+      '';
+    const normalizedContent = cleanText(content).slice(0, 180);
+    if (isGenericMomentContent(normalizedContent)) continue;
+    const visualStyle =
+      (typeof moment.visualStyle === 'string' && moment.visualStyle) ||
+      (typeof moment.style === 'string' && moment.style) ||
+      (typeof moment.scene === 'string' && moment.scene) ||
+      '';
+    const motion =
+      (typeof moment.motion === 'string' && moment.motion) ||
+      (typeof moment.motionStyle === 'string' && moment.motionStyle) ||
+      '';
+    const layout =
+      (typeof moment.layout === 'string' && moment.layout) ||
+      (typeof moment.composition === 'string' && moment.composition) ||
+      '';
+    const emphasis =
+      (typeof moment.emphasis === 'string' && moment.emphasis) ||
+      (typeof moment.keyword === 'string' && moment.keyword) ||
       '';
 
     normalized.push({
       start,
       duration,
       type: cleanText(type).slice(0, 40) || 'callout',
-      content: cleanText(content).slice(0, 180) || 'Animation moment',
+      content: normalizedContent || 'Animation moment',
+      visualStyle: cleanText(visualStyle).slice(0, 40) || undefined,
+      motion: cleanText(motion).slice(0, 30) || undefined,
+      layout: cleanText(layout).slice(0, 24) || undefined,
+      emphasis: cleanText(emphasis).slice(0, 60) || undefined,
     });
   }
 
@@ -217,14 +330,18 @@ function normalizePlan(raw: unknown, subtitleClips: SubtitleClip[], videoDuratio
   return { videoDurationSeconds: safeDuration, moments };
 }
 
-function readPromptTemplate(): string {
+function readPromptTemplate(): { template: string; sourcePath: string | null } {
   for (const promptPath of PROMPT_PATHS) {
     if (fs.existsSync(promptPath)) {
-      return fs.readFileSync(promptPath, 'utf8');
+      return {
+        template: fs.readFileSync(promptPath, 'utf8'),
+        sourcePath: promptPath,
+      };
     }
   }
-  return `You are planning B-roll animation moments for a VERTICAL 9:16 educational short.
-These moments will REPLACE the background temporarily, so content must be designed for full-screen mobile view.
+  return {
+    template: `You are a short-form Remotion animation planner for VERTICAL 9:16 educational videos.
+Plan visually distinct motion scenes, not repetitive text cards.
 
 TOPIC: {{TOPIC}}
 VIDEO_DURATION_SECONDS: {{VIDEO_DURATION_SECONDS}}
@@ -237,19 +354,31 @@ Return JSON only:
 {
   "videoDurationSeconds": number,
   "moments": [
-    { "start": number, "duration": number, "type": string, "content": string }
+    {
+      "start": number,
+      "duration": number,
+      "type": string,
+      "content": string,
+      "visualStyle": string,
+      "motion": string,
+      "layout": string,
+      "emphasis": string
+    }
   ]
 }
 
 Rules:
-- Moments must stay within video duration.
-- Keep each moment 1.0 to 6.0 seconds.
-- Design each moment for vertical 9:16 readability.
-- content must be static text (all-at-once), one core idea only, short and punchy.
-- Avoid long sentences, dense jargon, tables, and tiny-text concepts.
-- Spread moments across the video; avoid heavy clustering.
+- Output JSON only (no markdown/prose).
 - Use at most MAX_MOMENTS moments.
-- Output JSON only.`;
+- Every moment must stay inside the video duration.
+- Duration per moment: 1.0 to 6.0 seconds.
+- Prefer non-overlapping moments and natural spacing across the timeline.
+- One core idea per moment; avoid repeated generic title cards.
+- Design for fast mobile readability (short, scannable text).
+- Prefer varied moment types and varied visualStyle/layout values across the plan.
+- Avoid long sentences, dense jargon, code snippets, and tiny-text concepts.`,
+    sourcePath: null,
+  };
 }
 
 function applyPromptTemplate(template: string, values: Record<string, string>): string {
@@ -272,10 +401,26 @@ function resetDir(dirPath: string): void {
   fs.mkdirSync(dirPath, { recursive: true });
 }
 
-function runCommand(bin: string, args: string[], cwd: string): Promise<void> {
+function runCommand(bin: string, args: string[], cwd: string, label: string): Promise<void> {
   return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    animationInfo('Running command', {
+      label,
+      bin,
+      cwd,
+      argsPreview: summarizeForLog(args.join(' '), 220),
+    });
+
     const proc = spawn(bin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    let stdout = '';
     let stderr = '';
+
+    proc.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+      if (stdout.length > 6000) {
+        stdout = stdout.slice(-6000);
+      }
+    });
 
     proc.stderr.on('data', (chunk) => {
       stderr += chunk.toString();
@@ -286,8 +431,17 @@ function runCommand(bin: string, args: string[], cwd: string): Promise<void> {
 
     proc.on('error', (error) => reject(error));
     proc.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`${bin} exited with code ${code}. ${stderr.slice(-1200)}`));
+      const elapsedMs = Date.now() - startedAt;
+      if (code === 0) {
+        animationInfo('Command completed', { label, bin, elapsedMs });
+        resolve();
+      } else {
+        reject(
+          new Error(
+            `${bin} exited with code ${code}. stderr=${stderr.slice(-1200)} stdout=${stdout.slice(-600)}`
+          )
+        );
+      }
     });
   });
 }
@@ -305,7 +459,10 @@ async function ensureRemotionDependenciesInstalled(): Promise<void> {
   const remotionBin = getLocalRemotionBinaryPath();
   if (fs.existsSync(remotionBin)) return;
 
-  console.log('[Animation Plan] Installing remotion-animation dependencies...');
+  animationInfo('Installing remotion-animation dependencies', {
+    remotionRootDir: REMOTION_ROOT_DIR,
+    remotionBin,
+  });
   const installBins = process.platform === 'win32'
     ? ['npm.cmd', 'npm']
     : ['npm'];
@@ -315,7 +472,7 @@ async function ensureRemotionDependenciesInstalled(): Promise<void> {
 
   for (const bin of installBins) {
     try {
-      await runCommand(bin, installArgs, REMOTION_ROOT_DIR);
+      await runCommand(bin, installArgs, REMOTION_ROOT_DIR, 'install-remotion-dependencies');
       break;
     } catch (error) {
       failures.push(error instanceof Error ? error.message : String(error));
@@ -344,6 +501,10 @@ async function renderMomentWithRemotion(
   const props = {
     type: moment.type,
     content: moment.content,
+    visualStyle: moment.visualStyle,
+    motion: moment.motion,
+    layout: moment.layout,
+    emphasis: moment.emphasis,
     topic,
     seed: index + 1,
     durationSeconds: moment.duration,
@@ -364,7 +525,7 @@ async function renderMomentWithRemotion(
   try {
     const localBin = getLocalRemotionBinaryPath();
     if (fs.existsSync(localBin)) {
-      await runCommand(localBin, renderArgs, REMOTION_ROOT_DIR);
+      await runCommand(localBin, renderArgs, REMOTION_ROOT_DIR, `render-moment-${index}`);
       return;
     }
 
@@ -379,7 +540,7 @@ async function renderMomentWithRemotion(
           bin.startsWith('npm')
             ? ['exec', '--yes', '--package', `remotion@${REMOTION_VERSION}`, '--', 'remotion', ...renderArgs]
             : ['--yes', '--package', `remotion@${REMOTION_VERSION}`, 'remotion', ...renderArgs];
-        await runCommand(bin, args, REMOTION_ROOT_DIR);
+        await runCommand(bin, args, REMOTION_ROOT_DIR, `render-moment-${index}-fallback`);
         return;
       } catch (error) {
         failures.push(error instanceof Error ? error.message : String(error));
@@ -410,6 +571,14 @@ export async function generateAnimationPlanAndRender(params: {
   renderedProjectDir: string;
 }> {
   const { projectId, topic, subtitleClips, videoDurationSeconds } = params;
+  const startedAt = Date.now();
+
+  animationInfo('Generation started', {
+    projectId,
+    topic: summarizeForLog(topic, 120),
+    subtitleClipCount: subtitleClips.length,
+    videoDurationSeconds,
+  });
 
   if (!fs.existsSync(REMOTION_ROOT_DIR)) {
     throw new Error(`Remotion project not found at ${REMOTION_ROOT_DIR}`);
@@ -424,49 +593,141 @@ export async function generateAnimationPlanAndRender(params: {
   resetDir(renderedProjectDir);
 
   const dialogueContext = buildDialogueContext(subtitleClips);
-  const promptTemplate = readPromptTemplate();
+  const { template: promptTemplate, sourcePath: promptSourcePath } = readPromptTemplate();
   const finalPrompt = applyPromptTemplate(promptTemplate, {
     TOPIC: topic,
     VIDEO_DURATION_SECONDS: String(videoDurationSeconds),
     MAX_MOMENTS: String(MAX_MOMENTS),
     DIALOGUE_CONTEXT: dialogueContext,
   });
+  const promptMentionsSkill = /\bskills?\b/i.test(finalPrompt);
+  const promptSnapshotPath = path.join(remotionProjectDir, PROMPT_SNAPSHOT_FILENAME);
+  fs.writeFileSync(promptSnapshotPath, finalPrompt, 'utf8');
+  animationInfo('Prompt prepared', {
+    projectId,
+    source: promptSourcePath || 'inline-default',
+    promptChars: finalPrompt.length,
+    dialogueChars: dialogueContext.length,
+    promptMentionsSkill,
+    promptSnapshotPath,
+  });
 
   let parsedPlan: unknown = null;
+  let aiOutput = '';
+  let aiUsedAgent: string | null = null;
+  let aiFallbackWithoutAgent = false;
+  let aiPromptMentionsSkill = promptMentionsSkill;
+  let aiDiagnostics: unknown = null;
+  let aiUsedExaResearch = false;
+  let aiUsedRemotionSkill = false;
+  let aiResearchSummary: string | null = null;
+  let aiResearchDiagnostics: unknown = null;
   try {
-    const aiOutput = await generateAnimationPlanWithResearch(topic, dialogueContext, {
+    const aiResult = await generateAnimationPlanWithResearch(topic, dialogueContext, {
       videoDurationSeconds,
       maxMoments: MAX_MOMENTS,
       promptTemplate: finalPrompt,
+      debugOutputDir: remotionProjectDir,
     });
+    aiOutput = aiResult.output;
+    aiUsedAgent = aiResult.usedAgent;
+    aiFallbackWithoutAgent = aiResult.fallbackWithoutAgent;
+    aiPromptMentionsSkill = aiResult.promptMentionsSkill;
+    aiDiagnostics = aiResult.diagnostics;
+    aiUsedExaResearch = aiResult.usedExaResearch;
+    aiUsedRemotionSkill = aiResult.usedRemotionSkill;
+    aiResearchSummary = aiResult.researchSummary;
+    aiResearchDiagnostics = aiResult.researchDiagnostics;
+
+    const aiOutputPath = path.join(remotionProjectDir, OPENCODE_OUTPUT_FILENAME);
+    fs.writeFileSync(aiOutputPath, aiOutput, 'utf8');
     parsedPlan = parseOpenCodeJSON(aiOutput);
-  } catch (error) {
-    console.warn('[Animation Plan] AI plan generation failed, falling back', {
+
+    animationInfo('AI plan response captured', {
       projectId,
-      message: error instanceof Error ? error.message : String(error),
+      usedAgent: aiUsedAgent,
+      fallbackWithoutAgent: aiFallbackWithoutAgent,
+      promptMentionsSkill: aiPromptMentionsSkill,
+      usedExaResearch: aiUsedExaResearch,
+      usedRemotionSkill: aiUsedRemotionSkill,
+      outputChars: aiOutput.length,
+      outputSnapshotPath: aiOutputPath,
+      researchSummaryPreview: summarizeForLog(aiResearchSummary || '', 260),
+      researchDiagnostics: aiResearchDiagnostics,
+      diagnostics: aiDiagnostics,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const hardFailure =
+      /OpenCode CLI is unavailable/i.test(message) ||
+      /OpenCode MCP server "exa" is not connected/i.test(message) ||
+      /did not use Exa MCP/i.test(message) ||
+      /did not use the remotion-best-practices skill/i.test(message);
+    if (hardFailure) {
+      throw new Error(message);
+    }
+    animationWarn('AI plan generation failed, falling back to subtitle-derived moments', {
+      projectId,
+      message,
     });
   }
 
+  const parsedMomentCount = countRawMoments(parsedPlan);
   const normalizedPlan = normalizePlan(parsedPlan, subtitleClips, videoDurationSeconds);
+  const usedFallbackMoments = parsedMomentCount === 0;
+  animationInfo('Plan normalized', {
+    projectId,
+    parsedMomentCount,
+    normalizedMomentCount: normalizedPlan.moments.length,
+    usedFallbackMoments,
+    firstMoments: normalizedPlan.moments.slice(0, 3).map((moment, index) => ({
+      index,
+      start: moment.start,
+      duration: moment.duration,
+      type: moment.type,
+      content: summarizeForLog(moment.content, 100),
+      visualStyle: moment.visualStyle,
+      motion: moment.motion,
+      layout: moment.layout,
+    })),
+  });
+
   if (normalizedPlan.moments.length === 0) {
     throw new Error('Animation plan has no usable moments');
   }
 
   const renderedMoments: Array<{ moment: AnimationMoment; outputPath: string }> = [];
+  const renderFailures: Array<{ index: number; message: string }> = [];
   for (let i = 0; i < normalizedPlan.moments.length; i++) {
     const moment = normalizedPlan.moments[i];
     const outputPath = path.join(renderedProjectDir, `moment_${i}.mp4`);
     try {
+      animationInfo('Rendering moment', {
+        projectId,
+        index: i,
+        outputPath,
+        start: moment.start,
+        duration: moment.duration,
+        type: moment.type,
+        content: summarizeForLog(moment.content, 120),
+      });
       await renderMomentWithRemotion(outputPath, moment, i, topic, remotionProjectDir);
       if (!fs.existsSync(outputPath)) {
         throw new Error(`Rendered file not found: ${outputPath}`);
       }
       renderedMoments.push({ moment, outputPath });
-    } catch (error) {
-      console.warn('[Animation Plan] Failed rendering moment', {
+      animationInfo('Rendered moment successfully', {
         projectId,
         index: i,
-        message: error instanceof Error ? error.message : String(error),
+        outputPath,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      renderFailures.push({ index: i, message });
+      animationWarn('Failed rendering moment', {
+        projectId,
+        index: i,
+        message,
       });
     }
   }
@@ -502,7 +763,71 @@ export async function generateAnimationPlanAndRender(params: {
     animationPlan: finalPlan,
     renderedFiles: renderedMoments.map((m) => m.outputPath),
   };
-  fs.writeFileSync(path.join(remotionProjectDir, PLAN_FILENAME), JSON.stringify(planPayload, null, 2), 'utf8');
+  const planPath = path.join(remotionProjectDir, PLAN_FILENAME);
+  fs.writeFileSync(planPath, JSON.stringify(planPayload, null, 2), 'utf8');
+
+  const tracePayload = {
+    projectId,
+    topic,
+    generatedAt: new Date().toISOString(),
+    elapsedMs: Date.now() - startedAt,
+    input: {
+      subtitleClipCount: subtitleClips.length,
+      videoDurationSeconds,
+    },
+    prompt: {
+      sourcePath: promptSourcePath,
+      promptSnapshotPath,
+      promptChars: finalPrompt.length,
+      promptMentionsSkill,
+      preview: summarizeForLog(finalPrompt, 400),
+    },
+    ai: {
+      usedAgent: aiUsedAgent,
+      fallbackWithoutAgent: aiFallbackWithoutAgent,
+      promptMentionsSkill: aiPromptMentionsSkill,
+      usedExaResearch: aiUsedExaResearch,
+      usedRemotionSkill: aiUsedRemotionSkill,
+      researchSummaryPreview: summarizeForLog(aiResearchSummary || '', 320),
+      researchDiagnostics: aiResearchDiagnostics,
+      outputChars: aiOutput.length,
+      diagnostics: aiDiagnostics,
+      parsedMomentCount,
+      usedFallbackMoments,
+    },
+    render: {
+      attempted: normalizedPlan.moments.length,
+      succeeded: renderedMoments.length,
+      failed: renderFailures.length,
+      failures: renderFailures,
+    },
+    outputs: {
+      remotionProjectDir,
+      renderedProjectDir,
+      planPath,
+      renderedFiles: renderedMoments.map((m) => m.outputPath),
+    },
+  };
+
+  const tracePath = path.join(remotionProjectDir, DEBUG_TRACE_FILENAME);
+  try {
+    fs.writeFileSync(tracePath, JSON.stringify(tracePayload, null, 2), 'utf8');
+  } catch (error) {
+    animationWarn('Failed writing debug trace file', {
+      projectId,
+      tracePath,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  animationInfo('Generation finished', {
+    projectId,
+    elapsedMs: Date.now() - startedAt,
+    renderedMoments: renderedMoments.length,
+    overlayTrackCount: overlayTracks.length,
+    planPath,
+    tracePath,
+  });
 
   return {
     animationPlan: finalPlan,

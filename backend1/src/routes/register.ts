@@ -93,6 +93,7 @@ register([
   { method: 'POST', pattern: '/api/project/:id/ai-draft', handler: project.generateAiDraftForProject },
   { method: 'POST', pattern: '/api/project/:id/image-plan', handler: project.generateImagePlanForProject },
   { method: 'POST', pattern: '/api/project/:id/animation-plan', handler: project.generateAnimationPlanForProject },
+  { method: 'DELETE', pattern: '/api/project/:id/animation-plan', handler: project.deleteAnimationPlanForProject },
   { method: 'POST', pattern: '/api/project/:id/sfx-plan', handler: project.generateSfxPlanForProject },
   { method: 'POST', pattern: '/api/project/:id/preview', handler: project.generateProjectPreview },
   { method: 'GET', pattern: '/api/project/:id/preview', handler: project.serveProjectPreview },

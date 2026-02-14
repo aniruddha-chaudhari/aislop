@@ -1,497 +1,672 @@
-/**
- * Gemini 3 Agent - OpenCode Runner Mode
- * 
- * Currently using OpenCode for agentic tasks with:
- * - Internet access via Exa MCP
- * - Access to smarter models (Gemini 3 Pro)
- * - Image/SFX plan generation with web research
- * 
- * AI SDK approach is commented out for now - can be re-enabled later.
- */
+import fs from 'fs';
+import path from 'path';
+import { spawn } from 'child_process';
 
-// ═══════════════════════════════════════════════════════════════════════════
-// AI SDK IMPORTS (DISABLED - uncomment to re-enable)
-// ═══════════════════════════════════════════════════════════════════════════
-// import { generateObject, generateText } from "ai";
-// import { google, createGoogleGenerativeAI } from "@ai-sdk/google";
-// import { z, type ZodSchema } from "zod";
+const OPENCODE_BIN_ENV = process.env.OPENCODE_BIN?.trim() || '';
+const OPENCODE_DEFAULT_BIN = 'opencode';
+const OPENCODE_DEBUG_ENABLED = process.env.OPENCODE_DEBUG !== '0';
+const OPENCODE_LOG_EVERY_WORD = process.env.OPENCODE_LOG_EVERY_WORD !== '0';
+let CACHED_OPENCODE_COMMAND: string | null = null;
 
-import { spawn } from "child_process";
-import path from "path";
-
-// ═══════════════════════════════════════════════════════════════════════════
-// CONFIGURATION
-// ═══════════════════════════════════════════════════════════════════════════
-
-const OPENCODE_BIN = "opencode";
-
-// Default models for OpenCode
 export const OPENCODE_MODELS = {
-    flash: "google/antigravity-gemini-3-flash",
-    pro: "google/antigravity-gemini-3-pro",
+  flash: 'google/antigravity-gemini-3-flash',
+  pro: 'google/antigravity-gemini-3-pro',
 } as const;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// AI SDK CONFIG (DISABLED - uncomment to re-enable)
-// ═══════════════════════════════════════════════════════════════════════════
-// const PRIMARY_GEMINI_KEY = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-// const SECONDARY_GEMINI_KEY = process.env.GOOGLE_GENERATIVE_AI_API_KEY_SECONDARY;
-// 
-// const googlePrimary = createGoogleGenerativeAI({
-//     apiKey: PRIMARY_GEMINI_KEY,
-// });
-// 
-// const googleSecondary = SECONDARY_GEMINI_KEY
-//     ? createGoogleGenerativeAI({ apiKey: SECONDARY_GEMINI_KEY })
-//     : null;
-
-// ═══════════════════════════════════════════════════════════════════════════
-// TYPES
-// ═══════════════════════════════════════════════════════════════════════════
-
 export interface OpenCodeRunOptions {
-    prompt: string;
-    model?: keyof typeof OPENCODE_MODELS | string;
-    format?: "default" | "json";
-    quiet?: boolean;
-    agent?: string;
-    cwd?: string;
+  prompt: string;
+  model?: keyof typeof OPENCODE_MODELS | string;
+  format?: 'default' | 'json';
+  quiet?: boolean;
+  agent?: string;
+  cwd?: string;
 }
 
 export interface OpenCodeResult {
-    output: string;
-    elapsedMs: number;
+  output: string;
+  elapsedMs: number;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// AI SDK UTILITY FUNCTIONS (DISABLED - uncomment to re-enable)
-// ═══════════════════════════════════════════════════════════════════════════
+export interface OpenCodeOutputDiagnostics {
+  isEventStream: boolean;
+  totalLines: number;
+  parsedEvents: number;
+  eventTypeCounts: Record<string, number>;
+  toolUseNames: string[];
+  mentionsSkill: boolean;
+  mentionsRemotion: boolean;
+  mentionsAgent: boolean;
+}
 
-// export interface DirectSDKOptions<T extends ZodSchema> {
-//     prompt: string;
-//     schema?: T;
-//     model?: string;
-//     systemPrompt?: string;
-// }
+export interface AnimationPlanGenerationResult {
+  output: string;
+  diagnostics: OpenCodeOutputDiagnostics;
+  usedAgent: string | null;
+  fallbackWithoutAgent: boolean;
+  promptMentionsSkill: boolean;
+  usedExaResearch: boolean;
+  usedRemotionSkill: boolean;
+  researchSummary: string | null;
+  researchDiagnostics: OpenCodeOutputDiagnostics | null;
+}
 
-// function isGeminiQuotaError(error: unknown): boolean {
-//     const err = error as any;
-//     const msg: string | undefined = err?.message;
-//     const statusCode: number | undefined = err?.statusCode ?? err?.status;
-//     const body: string | undefined = err?.responseBody ?? err?.body;
-//     const quotaRegex = /quota|RESOURCE_EXHAUSTED/i;
-//     return (
-//         statusCode === 429 ||
-//         (typeof msg === "string" && quotaRegex.test(msg)) ||
-//         (typeof body === "string" && quotaRegex.test(body))
-//     );
-// }
+type OpenCodeEnvironmentCheck = {
+  opencodeCommand: string;
+  opencodeAvailable: boolean;
+  exaConnected: boolean;
+  remotionSkillInstalled: boolean;
+  mcpListRaw: string;
+  skillsRaw: string;
+};
 
-// export async function withGeminiFallback<T>(
-//     modelName: string,
-//     runWithModel: (model: any) => Promise<T>
-// ): Promise<T> {
-//     const primaryModel = googlePrimary(modelName);
-//     try {
-//         return await runWithModel(primaryModel);
-//     } catch (error) {
-//         if (!googleSecondary || !isGeminiQuotaError(error)) {
-//             throw error;
-//         }
-//         console.log("🔄 Primary Gemini API quota exceeded, falling back to secondary key...");
-//         const secondaryModel = googleSecondary(modelName);
-//         return await runWithModel(secondaryModel);
-//     }
-// }
+function summarizeForLog(text: string, max = 240): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (compact.length <= max) return compact;
+  return `${compact.slice(0, max)}...`;
+}
 
-// ═══════════════════════════════════════════════════════════════════════════
-// AI SDK DIRECT FUNCTIONS (DISABLED - uncomment to re-enable)
-// ═══════════════════════════════════════════════════════════════════════════
+function opencodeInfo(message: string, data?: Record<string, unknown>): void {
+  if (!OPENCODE_DEBUG_ENABLED) return;
+  if (data && Object.keys(data).length > 0) {
+    console.info(`[OpenCode] ${message}`, data);
+    return;
+  }
+  console.info(`[OpenCode] ${message}`);
+}
 
-// export async function directGenerateObject<T extends ZodSchema>(
-//     options: DirectSDKOptions<T>
-// ): Promise<z.infer<T>> {
-//     const { prompt, schema, model = "gemini-3-flash-preview", systemPrompt } = options;
-//     if (!schema) {
-//         throw new Error("Schema is required for directGenerateObject");
-//     }
-//     const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
-//     const result = await withGeminiFallback(model, (geminiModel) =>
-//         generateObject({
-//             model: geminiModel,
-//             schema: schema as any,
-//             prompt: fullPrompt,
-//         })
-//     );
-//     return result.object;
-// }
+function opencodeWarn(message: string, data?: Record<string, unknown>): void {
+  if (data && Object.keys(data).length > 0) {
+    console.warn(`[OpenCode] ${message}`, data);
+    return;
+  }
+  console.warn(`[OpenCode] ${message}`);
+}
 
-// export async function directGenerateText(
-//     options: Omit<DirectSDKOptions<any>, "schema">
-// ): Promise<string> {
-//     const { prompt, model = "gemini-3-flash-preview", systemPrompt } = options;
-//     const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
-//     const result = await withGeminiFallback(model, (geminiModel) =>
-//         generateText({
-//             model: geminiModel,
-//             prompt: fullPrompt,
-//         })
-//     );
-//     return result.text;
-// }
+function opencodeError(message: string, data?: Record<string, unknown>): void {
+  if (data && Object.keys(data).length > 0) {
+    console.error(`[OpenCode] ${message}`, data);
+    return;
+  }
+  console.error(`[OpenCode] ${message}`);
+}
 
+function extractToolName(event: Record<string, unknown>): string | null {
+  const e = event as Record<string, any>;
+  const candidates = [
+    e.toolName,
+    e.name,
+    e.tool,
+    e.tool?.name,
+    e.tool_use?.name,
+    e.part?.tool,
+    e.part?.toolName,
+    e.part?.name,
+  ];
+  for (const item of candidates) {
+    if (typeof item === 'string' && item.trim()) return item.trim();
+  }
+  return null;
+}
 
-// ═══════════════════════════════════════════════════════════════════════════
-// APPROACH 2: OPENCODE RUNNER (Agentic, Web Access)
-// ═══════════════════════════════════════════════════════════════════════════
+function collectEventText(event: Record<string, unknown>): string {
+  const e = event as Record<string, any>;
+  const chunks: string[] = [];
+  const direct = [e.text, e.message, e.content];
+  for (const value of direct) {
+    if (typeof value === 'string' && value.trim()) chunks.push(value);
+  }
+  if (typeof e.part?.text === 'string' && e.part.text.trim()) {
+    chunks.push(e.part.text);
+  }
+  return chunks.join('\n');
+}
 
-/**
- * Run OpenCode CLI and return stdout as string.
- * In non-interactive mode OpenCode auto-approves permissions so it won't hang.
- * 
- * Best for:
- * - Research tasks requiring web access (Exa MCP)
- * - Complex agentic workflows
- * - Tasks benefiting from smarter models
- * 
- * @example
- * ```ts
- * const result = await opencodeRun({
- *   prompt: "Research the latest trends in TypeScript and suggest visual diagrams",
- *   model: "pro", // Uses Gemini 3 Pro
- *   format: "json"
- * });
- * ```
- */
-export async function opencodeRun(options: OpenCodeRunOptions): Promise<string> {
-    const fs = await import('fs');
-    const os = await import('os');
-    const pathModule = await import('path');
+function stripAnsi(text: string): string {
+  return text.replace(/\u001b\[[0-9;]*m/g, '');
+}
 
-    // Resolve model shorthand to full model ID
-    const resolvedModel =
-        options.model && OPENCODE_MODELS[options.model as keyof typeof OPENCODE_MODELS]
-            ? OPENCODE_MODELS[options.model as keyof typeof OPENCODE_MODELS]
-            : options.model;
+function isPathLikeCommand(command: string): boolean {
+  return /[\\/]/.test(command) || /^[a-zA-Z]:/.test(command) || command.endsWith('.cmd') || command.endsWith('.exe');
+}
 
-    // Write prompt to a temp file to handle long prompts
-    let promptFile: string | null = null;
-    if (options.prompt) {
-        const tempDir = os.tmpdir();
-        promptFile = pathModule.join(tempDir, `opencode_prompt_${Date.now()}.txt`);
-        fs.writeFileSync(promptFile, options.prompt, 'utf8');
-        console.log(`📄 [OpenCode] Wrote prompt to temp file: ${promptFile}`);
-        console.log(`📄 [OpenCode] Prompt length: ${options.prompt.length} chars`);
+function resolveOpenCodeCommand(): string {
+  if (CACHED_OPENCODE_COMMAND) return CACHED_OPENCODE_COMMAND;
+
+  const candidates: string[] = [];
+  if (OPENCODE_BIN_ENV) candidates.push(OPENCODE_BIN_ENV);
+
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA;
+    const userProfile = process.env.USERPROFILE;
+    if (appData) candidates.push(path.join(appData, 'npm', 'opencode.cmd'));
+    if (userProfile) candidates.push(path.join(userProfile, 'AppData', 'Roaming', 'npm', 'opencode.cmd'));
+  }
+
+  candidates.push(OPENCODE_DEFAULT_BIN);
+  const uniqueCandidates = [...new Set(candidates.filter(Boolean))];
+
+  const existingPathCandidate = uniqueCandidates.find((candidate) => {
+    if (!isPathLikeCommand(candidate)) return false;
+    return fs.existsSync(candidate);
+  });
+
+  CACHED_OPENCODE_COMMAND =
+    existingPathCandidate || uniqueCandidates.find((candidate) => !isPathLikeCommand(candidate)) || OPENCODE_DEFAULT_BIN;
+  return CACHED_OPENCODE_COMMAND;
+}
+
+function withPathPrepended(dirPath: string): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  if (!dirPath) return env;
+  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path') || 'PATH';
+  const current = env[pathKey] || '';
+  const parts = current
+    .split(path.delimiter)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => part.toLowerCase());
+  if (!parts.includes(dirPath.toLowerCase())) {
+    env[pathKey] = current ? `${dirPath}${path.delimiter}${current}` : dirPath;
+  }
+  return env;
+}
+
+function resolveOpenCodeSpawnTarget(opencodeCommand: string): {
+  command: string;
+  env: NodeJS.ProcessEnv;
+  commandLabel: string;
+  prefixArgs: string[];
+} {
+  if (process.platform !== 'win32') {
+    return { command: opencodeCommand, env: { ...process.env }, commandLabel: opencodeCommand, prefixArgs: [] };
+  }
+
+  if (opencodeCommand.toLowerCase().endsWith('.cmd') && isPathLikeCommand(opencodeCommand)) {
+    const dirPath = path.dirname(opencodeCommand);
+    const env = withPathPrepended(dirPath);
+    const scriptPath = path.join(dirPath, 'node_modules', 'opencode-ai', 'bin', 'opencode');
+    const localNodeExe = path.join(dirPath, 'node.exe');
+    const nodeCommand = fs.existsSync(localNodeExe) ? localNodeExe : 'node';
+    if (fs.existsSync(scriptPath)) {
+      return {
+        command: nodeCommand,
+        env,
+        commandLabel: `${nodeCommand} ${scriptPath} (via ${opencodeCommand})`,
+        prefixArgs: [scriptPath],
+      };
     }
-
-    const cwd = options.cwd || process.cwd();
-
-    // Build a PowerShell command that reads the file and passes it to opencode
-    // According to docs: opencode run [message..] - message is POSITIONAL, not a flag
-    // For 'opencode run': --format json gives streaming JSON events (we parse these)
-    // For 'opencode -p': --output-format json gives single response (different command)
-    // --model: Model to use
-    const formatArg = options.format && options.format !== "default" ? `--format ${options.format}` : "";
-    const modelArg = resolvedModel ? `--model ${resolvedModel}` : "";
-    const agentArg = options.agent ? `--agent ${options.agent}` : "";
-
-    // Use PowerShell to read file, escape quotes, and pass as single positional argument
-    // The message must be quoted as a single string
-    const psCommand = promptFile
-        ? `$p = Get-Content -Raw '${promptFile}'; $p = $p -replace '"', '\\"'; opencode run "$p" ${formatArg} ${modelArg} ${agentArg}`.trim()
-        : `opencode run ${formatArg} ${modelArg} ${agentArg}`.trim();
-
-    console.log(`🚀 [OpenCode] Running with model: ${resolvedModel || "default"}`);
-    console.log(`📂 [OpenCode] CWD: ${cwd}`);
-    console.log(`📝 [OpenCode] PowerShell command length: ${psCommand.length} chars`);
-
-    // Cleanup function for temp file
-    const cleanup = () => {
-        if (promptFile) {
-            try {
-                fs.unlinkSync(promptFile);
-                console.log(`🧹 [OpenCode] Cleaned up temp file: ${promptFile}`);
-            } catch (e) {
-                // Ignore cleanup errors
-            }
-        }
-    };
-
-    return new Promise((resolve, reject) => {
-        // Use PowerShell on Windows to handle long prompts via file reading
-        const isWindows = process.platform === 'win32';
-
-        let command: string;
-        let args: string[];
-
-        if (isWindows) {
-            // Use PowerShell to read prompt from file and pass to opencode
-            command = 'powershell.exe';
-            args = ['-NoProfile', '-Command', psCommand];
-            console.log(`📝 [OpenCode] Using PowerShell with command: ${psCommand.substring(0, 100)}...`);
-        } else {
-            // On Unix, we can use bash with cat - opencode run expects message as positional arg
-            command = 'bash';
-            const bashCommand = promptFile
-                ? `opencode run "$(cat '${promptFile}')" ${formatArg} ${modelArg} ${agentArg}`
-                : `opencode run ${formatArg} ${modelArg} ${agentArg}`;
-            args = ['-c', bashCommand];
-            console.log(`📝 [OpenCode] Using bash with command: ${bashCommand.substring(0, 100)}...`);
-        }
-
-        const proc = spawn(command, args, {
-            cwd,
-            stdio: ['inherit', 'pipe', 'pipe'],
-        });
-
-        let stdout = '';
-        let stderr = '';
-
-        proc.stdout?.on('data', (data) => {
-            const chunk = data.toString();
-            stdout += chunk;
-            // Log output as it comes in for debugging
-            console.log(`[OpenCode stdout]: ${chunk.substring(0, 200)}${chunk.length > 200 ? '...' : ''}`);
-        });
-
-        proc.stderr?.on('data', (data) => {
-            const chunk = data.toString();
-            stderr += chunk;
-
-            // Filter out progress indicators (not real errors)
-            const isProgress = chunk.includes('> build') ||
-                chunk.includes('> run') ||
-                chunk.includes('·') ||
-                chunk.trim() === '';
-
-            if (!isProgress) {
-                console.error(`[OpenCode stderr]: ${chunk}`);
-            } else {
-                console.log(`[OpenCode progress]: ${chunk.trim()}`);
-            }
-        });
-
-        proc.on('close', (exitCode) => {
-            console.log(`🏁 [OpenCode] Exited with code: ${exitCode}`);
-            console.log(`📊 [OpenCode] Stdout length: ${stdout.length} chars`);
-            console.log(`📊 [OpenCode] Stderr length: ${stderr.length} chars`);
-
-            cleanup();  // Clean up temp file
-
-            if (exitCode !== 0) {
-                const errorMsg = stderr || stdout || "Unknown error";
-                console.error("❌ [OpenCode] Process Failed!");
-                console.error("❌ [OpenCode] Stderr:", stderr);
-                console.error("❌ [OpenCode] Stdout (last 500 chars):", stdout.slice(-500));
-
-                reject(new Error(`opencode run exited with ${exitCode}: ${errorMsg}`));
-                return;
-            }
-
-            if (!stdout && stderr) {
-                console.warn("⚠️ [OpenCode] Warning: No stdout but stderr exists:", stderr);
-            }
-
-            if (stdout) {
-                console.log(`✅ [OpenCode] Got response, first 300 chars: ${stdout.substring(0, 300)}...`);
-            }
-
-            resolve(stdout);
-        });
-
-        proc.on('error', (err) => {
-            console.error("❌ [OpenCode] Spawn error:", err);
-            cleanup();  // Clean up temp file
-            reject(err);
-        });
-    });
-}
-
-/**
- * Run OpenCode and return output with elapsed time in milliseconds
- */
-export async function opencodeRunWithTiming(
-    options: OpenCodeRunOptions
-): Promise<OpenCodeResult> {
-    const start = performance.now();
-    const output = await opencodeRun(options);
-    const elapsedMs = Math.round(performance.now() - start);
-    return { output, elapsedMs };
-}
-
-/**
- * Run OpenCode with multiple models and return results for each.
- * Useful for comparing outputs from different models.
- */
-export async function opencodeRunMultiModel(
-    options: Omit<OpenCodeRunOptions, "model"> & { models: string[] }
-): Promise<Record<string, string>> {
-    const results: Record<string, string> = {};
-
-    for (const model of options.models) {
-        console.log(`🔄 [OpenCode] Running with model: ${model}`);
-        const output = await opencodeRun({ ...options, model });
-        results[model] = output;
+    const basename = path.basename(opencodeCommand);
+    if (/\s/.test(opencodeCommand)) {
+      return {
+        command: basename,
+        env,
+        commandLabel: `${basename} (resolved from ${opencodeCommand})`,
+        prefixArgs: [],
+      };
     }
+    return { command: opencodeCommand, env, commandLabel: opencodeCommand, prefixArgs: [] };
+  }
 
-    return results;
+  return { command: opencodeCommand, env: { ...process.env }, commandLabel: opencodeCommand, prefixArgs: [] };
 }
 
-/**
- * Parse JSON from OpenCode output
- * Handles both direct JSON and event stream format from 'opencode run --format json'
- * The event stream contains multiple JSON objects, one per line, with types like:
- * - step_start, step_finish
- * - tool_use
- * - text (contains the actual AI response)
- */
-export function parseOpenCodeJSON<T = any>(output: string): T | null {
+function detectExaUsage(diagnostics: OpenCodeOutputDiagnostics, output: string): boolean {
+  const toolUsedExa = diagnostics.toolUseNames.some((name) => {
+    const normalized = name.toLowerCase();
+    return (
+      normalized === 'exa' ||
+      normalized.startsWith('exa_') ||
+      normalized.startsWith('exa-') ||
+      normalized.includes('.exa')
+    );
+  });
+  if (toolUsedExa) return true;
+
+  if (diagnostics.eventTypeCounts.tool_use && diagnostics.eventTypeCounts.tool_use > 0) {
+    const normalizedOutput = output.toLowerCase();
+    if (
+      normalizedOutput.includes('"tool":"exa') ||
+      normalizedOutput.includes("'tool':'exa") ||
+      /\bexa\b/i.test(normalizedOutput)
+    ) {
+      return true;
+    }
+  }
+
+  if (output.toLowerCase().includes('exa_web_search_exa')) {
+    return true;
+  }
+
+  if (diagnostics.toolUseNames.length > 0 && diagnostics.toolUseNames.some((name) => name.toLowerCase().includes('exa'))) {
+    return true;
+  }
+
+  return false;
+}
+
+function detectRemotionSkillUsage(diagnostics: OpenCodeOutputDiagnostics, output: string): boolean {
+  if (diagnostics.toolUseNames.some((name) => /\bskill\b/i.test(name))) {
+    return true;
+  }
+
+  const normalized = output.toLowerCase();
+  if (/\bremotion-best-practices\b/.test(normalized)) return true;
+  if (diagnostics.mentionsSkill && diagnostics.mentionsRemotion) return true;
+  return false;
+}
+
+function extractEventStreamText(output: string): string {
+  const trimmed = output.trim();
+  if (!trimmed) return '';
+
+  const lines = trimmed.split('\n').filter(Boolean);
+  if (lines.length <= 1) return trimmed;
+
+  const chunks: string[] = [];
+  for (const line of lines) {
     try {
-        // First, check if this is an event stream (multiple JSON lines)
-        const lines = output.trim().split('\n');
-        const isEventStream = lines.length > 1 &&
-            lines.some(line => {
-                try {
-                    const obj = JSON.parse(line);
-                    return obj.type === 'text' || obj.type === 'step_start';
-                } catch {
-                    return false;
-                }
-            });
-
-        if (isEventStream) {
-            console.log(`📊 [OpenCode] Detected event stream format with ${lines.length} events`);
-
-            // Extract text content from "type":"text" events
-            let textContent = '';
-            for (const line of lines) {
-                try {
-                    const event = JSON.parse(line);
-                    if (event.type === 'text' && event.part?.text) {
-                        textContent += event.part.text;
-                    }
-                } catch {
-                    // Skip non-JSON lines
-                }
-            }
-
-            if (textContent) {
-                console.log(`📝 [OpenCode] Extracted ${textContent.length} chars of text content`);
-                console.log(`📝 [OpenCode] Text preview: ${textContent.substring(0, 300)}...`);
-
-                // Now try to parse the text content as JSON
-                try {
-                    return JSON.parse(textContent.trim());
-                } catch {
-                    // Try to find JSON in markdown code blocks
-                    const jsonMatch = textContent.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-                    if (jsonMatch?.[1]) {
-                        try {
-                            return JSON.parse(jsonMatch[1].trim());
-                        } catch {
-                            // Continue
-                        }
-                    }
-
-                    // Try to find raw JSON object or array
-                    const objectMatch = textContent.match(/\{[\s\S]*\}/);
-                    const arrayMatch = textContent.match(/\[[\s\S]*\]/);
-                    const match = objectMatch || arrayMatch;
-
-                    if (match) {
-                        try {
-                            return JSON.parse(match[0]);
-                        } catch {
-                            // Continue
-                        }
-                    }
-                }
-            }
-
-            console.warn("⚠️ [OpenCode] Event stream contained no parseable text content");
-            return null;
-        }
-
-        // Not an event stream, try direct parse
-        return JSON.parse(output.trim());
+      const event = JSON.parse(line) as Record<string, unknown>;
+      const text = collectEventText(event);
+      if (text) chunks.push(text);
     } catch {
-        // Try to find JSON in the output (might be wrapped in markdown or text)
-        const jsonMatch = output.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-        if (jsonMatch?.[1]) {
-            try {
-                return JSON.parse(jsonMatch[1].trim());
-            } catch {
-                // Continue to next attempt
-            }
-        }
-
-        // Try to find raw JSON object or array
-        const objectMatch = output.match(/\{[\s\S]*\}/);
-        const arrayMatch = output.match(/\[[\s\S]*\]/);
-        const match = objectMatch || arrayMatch;
-
-        if (match) {
-            try {
-                return JSON.parse(match[0]);
-            } catch {
-                // Continue
-            }
-        }
-
-        console.warn("⚠️ [OpenCode] Could not parse JSON from output");
-        return null;
+      // ignore non-JSON lines in output
     }
+  }
+
+  const combined = chunks.join('\n').trim();
+  return combined || trimmed;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// SPECIALIZED AGENTIC FUNCTIONS
-// ═══════════════════════════════════════════════════════════════════════════
+function extractSessionIdFromOutput(output: string): string | null {
+  const lines = output.trim().split('\n').filter(Boolean);
+  for (const line of lines) {
+    try {
+      const event = JSON.parse(line) as Record<string, any>;
+      const sessionID = typeof event.sessionID === 'string' ? event.sessionID : null;
+      if (sessionID) return sessionID;
+      const nested = typeof event.part?.sessionID === 'string' ? event.part.sessionID : null;
+      if (nested) return nested;
+    } catch {
+      // ignore non-JSON lines
+    }
+  }
+  return null;
+}
 
-/**
- * Research a topic using OpenCode with Exa MCP for web access
- * Returns research findings as structured text
- */
-export async function researchWithOpenCode(
-    topic: string,
-    options?: { model?: string; detailed?: boolean }
-): Promise<string> {
-    const model = options?.model || "pro";
-    const detailed = options?.detailed ?? true;
+function extractModelFromSessionExport(raw: string): { providerID: string; modelID: string } | null {
+  try {
+    const parsed = JSON.parse(raw) as { messages?: Array<{ info?: any }> };
+    const assistant = parsed.messages?.find((message) => message?.info?.role === 'assistant');
+    const providerID = assistant?.info?.providerID;
+    const modelID = assistant?.info?.modelID;
+    if (typeof providerID === 'string' && typeof modelID === 'string') {
+      return { providerID, modelID };
+    }
+  } catch {
+    // ignore parse issues
+  }
+  return null;
+}
 
-    const prompt = detailed
-        ? `Research the topic "${topic}" thoroughly using web search. 
-       
-       Provide:
-       1. Key concepts and definitions
-       2. Latest developments and trends (2024-2025)
-       3. Best practices and recommendations
-       4. Technical details relevant for educational content
-       5. Visual diagram suggestions (what diagrams would help explain this)
-       
-       Focus on accurate, up-to-date information.`
-        : `Quickly research "${topic}" and provide a concise summary with key points.`;
+async function runLocalCommandCapture(
+  command: string,
+  args: string[],
+  cwd: string
+): Promise<{ stdout: string; stderr: string; code: number | null }> {
+  return new Promise((resolve) => {
+    const target = resolveOpenCodeSpawnTarget(command);
+    const proc = spawn(target.command, [...target.prefixArgs, ...args], {
+      cwd,
+      env: target.env,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout?.on('data', (chunk) => (stdout += chunk.toString()));
+    proc.stderr?.on('data', (chunk) => (stderr += chunk.toString()));
+    proc.on('close', (code) => resolve({ stdout, stderr, code }));
+    proc.on('error', (error) =>
+      resolve({
+        stdout,
+        stderr: `${stderr}\n${error instanceof Error ? error.message : String(error)}`,
+        code: -1,
+      })
+    );
+  });
+}
 
-    const result = await opencodeRun({
-        prompt,
-        model,
-        quiet: true,
+async function inspectOpenCodeEnvironment(cwd: string): Promise<OpenCodeEnvironmentCheck> {
+  const opencodeCommand = resolveOpenCodeCommand();
+  const mcp = await runLocalCommandCapture(opencodeCommand, ['mcp', 'list'], cwd);
+  const skills = await runLocalCommandCapture(opencodeCommand, ['debug', 'skill'], cwd);
+
+  const mcpRaw = stripAnsi(`${mcp.stdout}\n${mcp.stderr}`.trim());
+  const skillsRaw = stripAnsi(`${skills.stdout}\n${skills.stderr}`.trim());
+  const combinedRaw = `${mcpRaw}\n${skillsRaw}`;
+  const opencodeAvailable =
+    (mcp.code === 0 || skills.code === 0) && !/\bENOENT\b/i.test(combinedRaw) && !/\buv_spawn\b/i.test(combinedRaw);
+
+  const exaConnected = /\bexa\b[\s\S]*\bconnected\b/i.test(mcpRaw);
+
+  let remotionSkillInstalled = false;
+  try {
+    const parsed = JSON.parse(skills.stdout) as Array<{ name?: string; location?: string }>;
+    remotionSkillInstalled = parsed.some((skill) => {
+      const name = (skill.name || '').toLowerCase();
+      const location = (skill.location || '').toLowerCase();
+      return name.includes('remotion') || location.includes('remotion-best-practices');
+    });
+  } catch {
+    remotionSkillInstalled = /\bremotion-best-practices\b/i.test(skillsRaw);
+  }
+
+  return {
+    opencodeCommand,
+    opencodeAvailable,
+    exaConnected,
+    remotionSkillInstalled,
+    mcpListRaw: summarizeForLog(mcpRaw, 1000),
+    skillsRaw: summarizeForLog(skillsRaw, 1000),
+  };
+}
+
+export function summarizeOpenCodeOutput(output: string): OpenCodeOutputDiagnostics {
+  const trimmed = output.trim();
+  const lines = trimmed ? trimmed.split('\n') : [];
+  const eventTypeCounts: Record<string, number> = {};
+  const toolNames = new Set<string>();
+  const textSnippets: string[] = [];
+  let parsedEvents = 0;
+  let eventStreamSignals = 0;
+
+  for (const line of lines) {
+    try {
+      const event = JSON.parse(line) as Record<string, unknown>;
+      parsedEvents += 1;
+
+      const eventType = typeof (event as any).type === 'string' ? (event as any).type : null;
+      if (eventType) {
+        eventTypeCounts[eventType] = (eventTypeCounts[eventType] || 0) + 1;
+        if (eventType === 'text' || eventType === 'step_start' || eventType === 'tool_use') {
+          eventStreamSignals += 1;
+        }
+      }
+
+      if (eventType === 'tool_use') {
+        const toolName = extractToolName(event);
+        if (toolName) toolNames.add(toolName);
+      }
+
+      const text = collectEventText(event);
+      if (text) textSnippets.push(summarizeForLog(text, 400));
+    } catch {
+      // Ignore non-JSON lines in output.
+    }
+  }
+
+  const signalText = `${textSnippets.join('\n')}\n${trimmed.slice(0, 2600)}`.toLowerCase();
+  return {
+    isEventStream: parsedEvents > 0 && eventStreamSignals > 0,
+    totalLines: lines.length,
+    parsedEvents,
+    eventTypeCounts,
+    toolUseNames: [...toolNames],
+    mentionsSkill: /\bskills?\b/.test(signalText),
+    mentionsRemotion: /\bremotion\b/.test(signalText),
+    mentionsAgent: /\bagent\b/.test(signalText),
+  };
+}
+
+export async function opencodeRun(options: OpenCodeRunOptions): Promise<string> {
+  const resolvedModel =
+    options.model && OPENCODE_MODELS[options.model as keyof typeof OPENCODE_MODELS]
+      ? OPENCODE_MODELS[options.model as keyof typeof OPENCODE_MODELS]
+      : options.model;
+  const opencodeCommand = resolveOpenCodeCommand();
+
+  const cwd = options.cwd || process.cwd();
+  opencodeInfo('Run starting', {
+    model: resolvedModel || 'default',
+    format: options.format || 'default',
+    agent: options.agent || null,
+    opencodeCommand,
+    cwd,
+    promptChars: options.prompt.length,
+  });
+
+  return new Promise((resolve, reject) => {
+    const target = resolveOpenCodeSpawnTarget(opencodeCommand);
+    const command = target.command;
+    const args: string[] = ['run'];
+    if (options.prompt) {
+      args.push(options.prompt);
+    }
+    if (options.format && options.format !== 'default') {
+      args.push('--format', options.format);
+    }
+    if (resolvedModel) {
+      args.push('--model', resolvedModel);
+    }
+    if (options.agent) {
+      args.push('--agent', options.agent);
+    }
+    opencodeInfo('Using direct runner', {
+      command: target.commandLabel,
+      argsPreview: summarizeForLog(args.join(' '), 220),
     });
 
-    return result;
+    const proc = spawn(command, [...target.prefixArgs, ...args], {
+      cwd,
+      env: target.env,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout?.on('data', (data) => {
+      const chunk = data.toString();
+      stdout += chunk;
+      if (OPENCODE_LOG_EVERY_WORD) {
+        console.info(`[OpenCode][stdout] ${chunk}`);
+      }
+    });
+
+    proc.stderr?.on('data', (data) => {
+      const chunk = data.toString();
+      stderr += chunk;
+      if (OPENCODE_LOG_EVERY_WORD) {
+        console.info(`[OpenCode][stderr] ${chunk}`);
+      }
+      const isProgress =
+        chunk.includes('> build') || chunk.includes('> run') || chunk.includes('·') || chunk.trim() === '';
+
+      if (isProgress) {
+        opencodeInfo('Progress', { chunk: summarizeForLog(chunk, 180) });
+      } else {
+        opencodeWarn('Stderr chunk', { chunk: summarizeForLog(chunk, 320) });
+      }
+    });
+
+    proc.on('close', (exitCode) => {
+      const diagnostics = summarizeOpenCodeOutput(stdout);
+      opencodeInfo('Run finished', {
+        exitCode,
+        stdoutChars: stdout.length,
+        stderrChars: stderr.length,
+        diagnostics,
+      });
+      if (OPENCODE_LOG_EVERY_WORD && stdout) {
+        console.info('[OpenCode][stdout-full-start]');
+        console.info(stdout);
+        console.info('[OpenCode][stdout-full-end]');
+      }
+      if (OPENCODE_LOG_EVERY_WORD && stderr) {
+        console.info('[OpenCode][stderr-full-start]');
+        console.info(stderr);
+        console.info('[OpenCode][stderr-full-end]');
+      }
+
+      if (exitCode !== 0) {
+        const errorMsg = stderr || stdout || 'Unknown error';
+        opencodeError('Process failed', {
+          exitCode,
+          stderr: summarizeForLog(stderr, 700),
+          stdoutTail: summarizeForLog(stdout.slice(-700), 700),
+        });
+        reject(new Error(`opencode run exited with ${exitCode}: ${errorMsg}`));
+        return;
+      }
+
+      if (!stdout && stderr) {
+        opencodeWarn('No stdout with non-empty stderr', {
+          stderr: summarizeForLog(stderr, 320),
+        });
+      }
+
+      resolve(stdout);
+    });
+
+    proc.on('error', (error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      const notFoundHint =
+        /\bENOENT\b/i.test(message) || /\bnot found\b/i.test(message)
+          ? ' OpenCode CLI was not found. Set OPENCODE_BIN to your absolute opencode path (for example C:\\Users\\<you>\\AppData\\Roaming\\npm\\opencode.cmd).'
+          : '';
+      opencodeError('Spawn error', {
+        opencodeCommand,
+        message: `${message}${notFoundHint}`,
+      });
+      reject(new Error(`${message}${notFoundHint}`));
+    });
+  });
 }
 
-/**
- * Generate image plan suggestions using OpenCode with web research
- * Uses Exa MCP for real-time research on the topic
- */
-export async function generateImagePlanWithResearch(
-    topic: string,
-    dialogueContext: string,
-    options?: { model?: string }
-): Promise<string> {
-    const model = options?.model || "pro";
+export async function opencodeRunWithTiming(options: OpenCodeRunOptions): Promise<OpenCodeResult> {
+  const start = performance.now();
+  const output = await opencodeRun(options);
+  const elapsedMs = Math.round(performance.now() - start);
+  return { output, elapsedMs };
+}
 
-    const prompt = `You are an expert visual content strategist for educational Instagram Reels.
+export async function opencodeRunMultiModel(
+  options: Omit<OpenCodeRunOptions, 'model'> & { models: string[] }
+): Promise<Record<string, string>> {
+  const results: Record<string, string> = {};
+  for (const model of options.models) {
+    opencodeInfo('Running model variant', { model });
+    results[model] = await opencodeRun({ ...options, model });
+  }
+  return results;
+}
+
+function parseJsonFromText<T = any>(text: string): T | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    // Continue to permissive parsing
+  }
+
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (fenced?.[1]) {
+    try {
+      return JSON.parse(fenced[1].trim());
+    } catch {
+      // Continue
+    }
+  }
+
+  const objectMatch = trimmed.match(/\{[\s\S]*\}/);
+  const arrayMatch = trimmed.match(/\[[\s\S]*\]/);
+  const raw = objectMatch?.[0] || arrayMatch?.[0];
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+export function parseOpenCodeJSON<T = any>(output: string): T | null {
+  const direct = parseJsonFromText<T>(output);
+  if (direct) return direct;
+
+  const lines = output.trim().split('\n').filter(Boolean);
+  if (lines.length <= 1) {
+    opencodeWarn('Could not parse JSON from output');
+    return null;
+  }
+
+  let textContent = '';
+  let hasEventStreamHints = false;
+  for (const line of lines) {
+    try {
+      const event = JSON.parse(line) as Record<string, any>;
+      if (event.type === 'text' || event.type === 'step_start' || event.type === 'tool_use') {
+        hasEventStreamHints = true;
+      }
+      if (event.type === 'text' && typeof event.part?.text === 'string') {
+        textContent += event.part.text;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (!hasEventStreamHints) {
+    opencodeWarn('Could not parse JSON from output');
+    return null;
+  }
+
+  opencodeInfo('Detected event stream output', { events: lines.length, extractedChars: textContent.length });
+  const parsed = parseJsonFromText<T>(textContent);
+  if (!parsed) {
+    opencodeWarn('Event stream had no parseable JSON text');
+  }
+  return parsed;
+}
+
+export async function researchWithOpenCode(
+  topic: string,
+  options?: { model?: string; detailed?: boolean }
+): Promise<string> {
+  const model = options?.model || 'pro';
+  const detailed = options?.detailed ?? true;
+
+  const prompt = detailed
+    ? `Research the topic "${topic}" thoroughly using web search.
+
+Provide:
+1. Key concepts and definitions
+2. Latest developments and trends (2024-2025)
+3. Best practices and recommendations
+4. Technical details relevant for educational content
+5. Visual diagram suggestions (what diagrams would help explain this)
+
+Focus on accurate, up-to-date information.`
+    : `Quickly research "${topic}" and provide a concise summary with key points.`;
+
+  return await opencodeRun({
+    prompt,
+    model,
+    quiet: true,
+  });
+}
+
+export async function generateImagePlanWithResearch(
+  topic: string,
+  dialogueContext: string,
+  options?: { model?: string }
+): Promise<string> {
+  const model = options?.model || 'pro';
+
+  const prompt = `You are an expert visual content strategist for educational Instagram Reels.
 
 TOPIC: "${topic}"
 
@@ -517,54 +692,55 @@ Focus on visuals that:
 
 Return your suggestions in a structured format.`;
 
-    const result = await opencodeRun({
-        prompt,
-        model,
-        quiet: true,
-    });
-
-    return result;
+  return await opencodeRun({
+    prompt,
+    model,
+    quiet: true,
+  });
 }
 
-/**
- * Generate animation overlay moments using OpenCode.
- * Returns JSON describing time ranges and content for animation clips.
- */
 export async function generateAnimationPlanWithResearch(
-    topic: string,
-    dialogueContext: string,
-    options?: {
-        model?: string;
-        videoDurationSeconds?: number;
-        maxMoments?: number;
-        promptTemplate?: string;
-    }
-): Promise<string> {
-    const model = options?.model || "pro";
-    const videoDurationSeconds = options?.videoDurationSeconds ?? 60;
-    const maxMoments = options?.maxMoments ?? 8;
+  topic: string,
+  dialogueContext: string,
+  options?: {
+    model?: string;
+    videoDurationSeconds?: number;
+    maxMoments?: number;
+    promptTemplate?: string;
+    cwd?: string;
+    debugOutputDir?: string;
+  }
+): Promise<AnimationPlanGenerationResult> {
+  const model = options?.model || 'pro';
+  const cwd = options?.cwd || process.cwd();
+  const debugOutputDir = options?.debugOutputDir;
+  const videoDurationSeconds = options?.videoDurationSeconds ?? 60;
+  const maxMoments = options?.maxMoments ?? 8;
+  const requireExaForAnimation = process.env.OPENCODE_REQUIRE_EXA_FOR_ANIMATION !== '0';
+  const requireRemotionSkillForAnimation = process.env.OPENCODE_REQUIRE_REMOTION_SKILL_FOR_ANIMATION !== '0';
 
-    const fallbackPrompt = `You are an expert short-form video animation planner.
-Plan B-roll moments for a VERTICAL 9:16 educational video where animations replace the background.
+  const fallbackPrompt = `You are a senior short-form motion designer planning Remotion moments for a VERTICAL 9:16 educational video.
+Design visually distinct scenes, not repetitive text cards.
 
 TOPIC: "${topic}"
 VIDEO_DURATION_SECONDS: ${videoDurationSeconds}
 MAX_MOMENTS: ${maxMoments}
 
 DIALOGUE CONTEXT:
-${dialogueContext || "No subtitle context provided"}
+${dialogueContext || 'No subtitle context provided'}
 
 TASK:
-Plan concise full-screen moments that improve comprehension and retention.
+Create varied, high-clarity moments (not repeated title cards) that improve understanding and retention.
 
 Rules:
-- Output only JSON.
-- Keep moments within the video duration.
-- Moment duration should be 1 to 6 seconds.
+- Output JSON only.
 - Use at most MAX_MOMENTS moments.
-- Content must be static text suitable for full-screen 9:16 (all text visible at once).
-- One key idea per moment, short and punchy.
-- Avoid dense jargon and tiny-text concepts.
+- Keep each moment inside the total video duration.
+- Duration per moment: 1.0 to 6.0 seconds.
+- Prefer non-overlapping moments with natural spacing.
+- One key idea per moment, concise and mobile-friendly.
+- Prefer varied moment types plus varied visual styles, motion styles, and layouts.
+- Avoid dense jargon, long sentences, tiny text, and generic repeated phrases.
 
 Return exactly this JSON shape:
 {
@@ -573,55 +749,281 @@ Return exactly this JSON shape:
     {
       "start": 0.0,
       "duration": 2.5,
-      "type": "callout",
-      "content": "Short overlay text"
+      "type": "definition",
+      "content": "Pod: Smallest deployable unit",
+      "visualStyle": "spotlight",
+      "motion": "snap",
+      "layout": "center",
+      "emphasis": "Pod"
     }
   ]
-}
-`;
+}`;
 
-    const prompt = options?.promptTemplate || fallbackPrompt;
+  const basePrompt = options?.promptTemplate || fallbackPrompt;
+  const preferredAgent = process.env.OPENCODE_ANIMATION_AGENT?.trim() || 'remotion';
+  let promptMentionsSkill = /\bskills?\b/i.test(basePrompt);
 
-    const result = await opencodeRun({
-        prompt,
+  const environment = await inspectOpenCodeEnvironment(cwd);
+  opencodeInfo('Animation environment check', {
+    opencodeCommand: environment.opencodeCommand,
+    opencodeAvailable: environment.opencodeAvailable,
+    exaConnected: environment.exaConnected,
+    remotionSkillInstalled: environment.remotionSkillInstalled,
+    mcpListRaw: environment.mcpListRaw,
+    skillsRaw: environment.skillsRaw,
+  });
+  if (!environment.opencodeAvailable) {
+    throw new Error(
+      `OpenCode CLI is unavailable for this backend process. Command=${environment.opencodeCommand}. Set OPENCODE_BIN to the absolute CLI path.`
+    );
+  }
+  if (requireExaForAnimation && !environment.exaConnected) {
+    throw new Error('OpenCode MCP server "exa" is not connected.');
+  }
+  if (requireRemotionSkillForAnimation && !environment.remotionSkillInstalled) {
+    throw new Error('OpenCode skill "remotion-best-practices" is not installed.');
+  }
+
+  const runWithPreferredAgent = async (
+    promptText: string,
+    label: string
+  ): Promise<{ output: string; usedAgent: string | null; fallbackWithoutAgent: boolean }> => {
+    let output = '';
+    let usedAgent: string | null = null;
+    let fallbackWithoutAgent = false;
+
+    if (preferredAgent) {
+      usedAgent = preferredAgent;
+      try {
+        output = await opencodeRun({
+          prompt: promptText,
+          model,
+          format: 'json',
+          quiet: true,
+          agent: preferredAgent,
+          cwd,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        opencodeWarn(`${label} run with explicit agent failed; retrying without agent`, {
+          preferredAgent,
+          error: summarizeForLog(message, 260),
+        });
+        output = await opencodeRun({
+          prompt: promptText,
+          model,
+          format: 'json',
+          quiet: true,
+          cwd,
+        });
+        usedAgent = null;
+        fallbackWithoutAgent = true;
+      }
+    } else {
+      output = await opencodeRun({
+        prompt: promptText,
         model,
         format: 'json',
         quiet: true,
-    });
+        cwd,
+      });
+    }
 
-    return result;
+    return { output, usedAgent, fallbackWithoutAgent };
+  };
+
+  opencodeInfo('Animation plan request', {
+    topic: summarizeForLog(topic, 100),
+    model,
+    preferredAgent,
+    promptChars: basePrompt.length,
+    dialogueChars: dialogueContext.length,
+    videoDurationSeconds,
+    maxMoments,
+    promptMentionsSkill,
+    requireExaForAnimation,
+    requireRemotionSkillForAnimation,
+  });
+
+  const researchPromptBase = `You are preparing research notes for a Remotion animation planner.
+TOPIC: "${topic}"
+VIDEO_DURATION_SECONDS: ${videoDurationSeconds}
+DIALOGUE_CONTEXT:
+${dialogueContext || 'No subtitle context provided'}
+
+MANDATORY:
+- Use Exa MCP tools to gather up-to-date factual references for this topic.
+- Collect at least 3 concise facts and 2 distinct visual angles.
+- Keep output concise and practical for scene planning.
+
+Return plain text with sections:
+Facts:
+- ...
+Visual angles:
+- ...
+Source hints:
+- ...`;
+  if (debugOutputDir) {
+    try {
+      fs.writeFileSync(path.join(debugOutputDir, 'animation-research-prompt.sent.txt'), researchPromptBase, 'utf8');
+    } catch (error) {
+      opencodeWarn('Failed to write research prompt snapshot', {
+        debugOutputDir,
+        error: summarizeForLog(error instanceof Error ? error.message : String(error), 180),
+      });
+    }
+  }
+
+  let researchOutput = '';
+  let researchDiagnostics: OpenCodeOutputDiagnostics | null = null;
+  let researchSummary: string | null = null;
+  let usedExaResearch = false;
+  let researchRun = await runWithPreferredAgent(researchPromptBase, 'Animation research');
+  researchOutput = researchRun.output;
+  researchDiagnostics = summarizeOpenCodeOutput(researchOutput);
+  usedExaResearch = detectExaUsage(researchDiagnostics, researchOutput);
+  researchSummary = summarizeForLog(extractEventStreamText(researchOutput), 4000);
+
+  if (requireExaForAnimation && !usedExaResearch) {
+    const forcedResearchPrompt = `${researchPromptBase}
+
+HARD REQUIREMENT:
+You must call Exa MCP tools before answering. If you did not call Exa MCP tools yet, call them now and then answer.`;
+    if (debugOutputDir) {
+      try {
+        fs.writeFileSync(
+          path.join(debugOutputDir, 'animation-research-prompt.retry.sent.txt'),
+          forcedResearchPrompt,
+          'utf8'
+        );
+      } catch (error) {
+        opencodeWarn('Failed to write retry research prompt snapshot', {
+          debugOutputDir,
+          error: summarizeForLog(error instanceof Error ? error.message : String(error), 180),
+        });
+      }
+    }
+    const retriedResearchRun = await runWithPreferredAgent(
+      forcedResearchPrompt,
+      'Animation research retry with forced Exa'
+    );
+    researchRun = retriedResearchRun;
+    researchOutput = researchRun.output;
+    researchDiagnostics = summarizeOpenCodeOutput(researchOutput);
+    usedExaResearch = detectExaUsage(researchDiagnostics, researchOutput);
+    researchSummary = summarizeForLog(extractEventStreamText(researchOutput), 4000);
+  }
+
+  opencodeInfo('Animation research diagnostics', {
+    usedExaResearch,
+    diagnostics: researchDiagnostics,
+    summaryPreview: summarizeForLog(researchSummary || '', 360),
+  });
+
+  if (requireExaForAnimation && !usedExaResearch) {
+    throw new Error('OpenCode did not use Exa MCP during animation research after retry.');
+  }
+
+  const planningPrompt = `${basePrompt}
+
+MANDATORY TOOLING REQUIREMENTS:
+- Use the "skill" tool to load and follow "remotion-best-practices".
+- Use the Exa-backed research context below; avoid generic wobble-card patterns.
+- Produce varied scenes with distinct visualStyle and layout values.
+
+RESEARCH_CONTEXT:
+${researchSummary || 'No research summary available.'}
+`;
+  if (debugOutputDir) {
+    try {
+      fs.writeFileSync(path.join(debugOutputDir, 'animation-planning-prompt.sent.txt'), planningPrompt, 'utf8');
+    } catch (error) {
+      opencodeWarn('Failed to write planning prompt snapshot', {
+        debugOutputDir,
+        error: summarizeForLog(error instanceof Error ? error.message : String(error), 180),
+      });
+    }
+  }
+  promptMentionsSkill = /\bskills?\b|\bremotion-best-practices\b/i.test(planningPrompt);
+
+  let run = await runWithPreferredAgent(planningPrompt, 'Animation plan');
+  let output = run.output;
+  let usedAgent: string | null = run.usedAgent;
+  let fallbackWithoutAgent = run.fallbackWithoutAgent;
+  let diagnostics = summarizeOpenCodeOutput(output);
+  let usedRemotionSkill = detectRemotionSkillUsage(diagnostics, output);
+
+  if (requireRemotionSkillForAnimation && !usedRemotionSkill) {
+    const forcedSkillPrompt = `${planningPrompt}
+
+HARD REQUIREMENT:
+You must call the "skill" tool and load "remotion-best-practices" before finalizing the JSON output.`;
+    if (debugOutputDir) {
+      try {
+        fs.writeFileSync(path.join(debugOutputDir, 'animation-planning-prompt.retry.sent.txt'), forcedSkillPrompt, 'utf8');
+      } catch (error) {
+        opencodeWarn('Failed to write retry planning prompt snapshot', {
+          debugOutputDir,
+          error: summarizeForLog(error instanceof Error ? error.message : String(error), 180),
+        });
+      }
+    }
+    run = await runWithPreferredAgent(forcedSkillPrompt, 'Animation plan retry with forced skill');
+    output = run.output;
+    usedAgent = run.usedAgent;
+    fallbackWithoutAgent = run.fallbackWithoutAgent;
+    diagnostics = summarizeOpenCodeOutput(output);
+    usedRemotionSkill = detectRemotionSkillUsage(diagnostics, output);
+  }
+
+  if (requireRemotionSkillForAnimation && !usedRemotionSkill) {
+    throw new Error('OpenCode did not use the remotion-best-practices skill after retry.');
+  }
+
+  opencodeInfo('Animation plan response diagnostics', {
+    usedAgent,
+    fallbackWithoutAgent,
+    usedExaResearch,
+    usedRemotionSkill,
+    researchDiagnostics,
+    diagnostics,
+  });
+
+  return {
+    output,
+    diagnostics,
+    usedAgent,
+    fallbackWithoutAgent,
+    promptMentionsSkill,
+    usedExaResearch,
+    usedRemotionSkill,
+    researchSummary,
+    researchDiagnostics,
+  };
 }
 
-/**
- * Generate SFX suggestions using OpenCode with web research
- * Can research trending sounds and best practices
- */
 export async function generateSFXPlanWithResearch(
-    topic: string,
-    overlayTimings: Array<{ start: number; description: string }>,
-    options?: { model?: string; videoDuration?: number }
+  topic: string,
+  overlayTimings: Array<{ start: number; description: string }>,
+  options?: { model?: string; videoDuration?: number }
 ): Promise<string> {
-    const model = options?.model || "pro";
+  const model = options?.model || 'pro';
+  const maxTimestamp = overlayTimings.length > 0 ? Math.max(...overlayTimings.map((t) => t.start)) : 15;
+  const videoDuration = options?.videoDuration || maxTimestamp + 5;
 
-    // Calculate video duration from overlay timings
-    const maxTimestamp = overlayTimings.length > 0
-        ? Math.max(...overlayTimings.map(t => t.start))
-        : 15;
-    const videoDuration = options?.videoDuration || maxTimestamp + 5;
+  opencodeInfo('SFX plan generation started', {
+    overlayEvents: overlayTimings.length,
+    videoDuration: Number(videoDuration.toFixed(0)),
+  });
 
-    const timingsStr = overlayTimings
-        .map((t) => `[${t.start.toFixed(1)}s] ${t.description}`)
-        .join("\n");
-
-    console.log(`🔊 [SFX] Generating for ${overlayTimings.length} overlay events, ~${videoDuration.toFixed(0)}s video`);
-
-    const prompt = `Audio designer for short-form educational video.
+  const timingsStr = overlayTimings.map((t) => `[${t.start.toFixed(1)}s] ${t.description}`).join('\n');
+  const prompt = `Audio designer for short-form educational video.
 
 TOPIC: "${topic}"
 DURATION: ${videoDuration.toFixed(0)}s
 
 VISUAL EVENTS (overlay transitions):
-${timingsStr || "No overlays provided"}
+${timingsStr || 'No overlays provided'}
 
 TASK: Suggest sound effects ONLY for the visual events listed above. Each overlay transition may need a subtle sound effect.
 
@@ -643,51 +1045,11 @@ Return ONLY valid JSON:
 
 No markdown.`;
 
-    console.log('🔊 [SFX] Using OpenCode for SFX plan...');
-
-    const result = await opencodeRun({
-        prompt,
-        model,
-        format: 'json',
-        quiet: true,
-    });
-
-    return result;
+  opencodeInfo('SFX plan using OpenCode');
+  return await opencodeRun({
+    prompt,
+    model,
+    format: 'json',
+    quiet: true,
+  });
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// HYBRID APPROACH (DISABLED - requires AI SDK)
-// ═══════════════════════════════════════════════════════════════════════════
-
-// /**
-//  * Research with OpenCode, then structure with Direct SDK
-//  * Combines web research capabilities with type-safe output
-//  */
-// export async function researchAndStructure<T extends ZodSchema>(
-//     topic: string,
-//     schema: T,
-//     structurePrompt: string,
-//     options?: { researchModel?: string; structureModel?: string }
-// ): Promise<z.infer<T>> {
-//     // Step 1: Research with OpenCode (has web access)
-//     console.log("🔍 [Hybrid] Step 1: Researching with OpenCode...");
-//     const research = await researchWithOpenCode(topic, {
-//         model: options?.researchModel || "pro",
-//         detailed: true,
-//     });
-//
-//     // Step 2: Structure with Direct SDK (type-safe output)
-//     console.log("📊 [Hybrid] Step 2: Structuring with Direct SDK...");
-//     const structuredResult = await directGenerateObject({
-//         prompt: `${structurePrompt}
-//
-// RESEARCH DATA:
-// ${research}
-//
-// Now structure this information according to the required format.`,
-//         schema,
-//         model: options?.structureModel || "gemini-3-flash-preview",
-//     });
-//
-//     return structuredResult;
-// }

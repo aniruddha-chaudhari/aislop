@@ -56,6 +56,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const [isGeneratingDraft, setIsGeneratingDraft] = useState(false);
   const [isGeneratingImagePlan, setIsGeneratingImagePlan] = useState(false);
   const [isGeneratingAnimationPlan, setIsGeneratingAnimationPlan] = useState(false);
+  const [isDeletingAnimationPlan, setIsDeletingAnimationPlan] = useState(false);
   const [isGeneratingSfxPlan, setIsGeneratingSfxPlan] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
@@ -1020,6 +1021,42 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     }
   };
 
+  const handleDeleteAnimationPlan = async () => {
+    setIsDeletingAnimationPlan(true);
+    setMessage({ type: 'info', text: 'Deleting animation plan...' });
+
+    try {
+      const response = await fetch(API_ENDPOINTS.deleteAnimationPlan(project.id), {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data.success) {
+        setMessage({ type: 'success', text: 'Animation plan deleted' });
+        setPreviewVideoSrc(null);
+        setIsPlaying(false);
+        const updated = await onProjectUpdate?.();
+        if (updated) setDraftProject(updated);
+        setTimeout(() => setMessage(null), 3000);
+      } else {
+        throw new Error(data.error || 'Failed to delete animation plan');
+      }
+    } catch (error) {
+      setMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : 'Failed to delete animation plan',
+      });
+    } finally {
+      setIsDeletingAnimationPlan(false);
+    }
+  };
+
   const handleGenerateSfxPlan = async () => {
     setIsGeneratingSfxPlan(true);
     setMessage({ type: 'info', text: 'Generating SFX plan...' });
@@ -1193,6 +1230,9 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             }}
             onAddBackgroundMusic={addBackgroundMusic}
             onAddSfx={addSfxToTimeline}
+            onDeleteAnimationPlan={handleDeleteAnimationPlan}
+            hasAnimationPlan={hasAnimationPlan}
+            deletingAnimationPlan={isDeletingAnimationPlan}
             onChangeAudioSession={async (sessionId) => {
               const session = audioSessions.find(s => s.sessionId === sessionId);
               await handleChangeAudioSession(sessionId, session?.name || sessionId);

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { FolderOpen, Music, ImageIcon, Users, ChevronRight, Upload, Mic, Film, Volume2 } from 'lucide-react';
+import { FolderOpen, Music, ImageIcon, Users, ChevronRight, Upload, Mic, Film, Volume2, Trash2 } from 'lucide-react';
 import type { EditorProject } from '../../../features/editor/types';
 import { API_ENDPOINTS } from '../../../config/api';
 
@@ -48,6 +48,12 @@ type Props = {
   onAddBackgroundMusic?: (asset: AudioAsset) => void;
   /** Add selected SFX to timeline */
   onAddSfx?: (asset: AudioAsset) => void;
+  /** Delete generated animation plan + cache */
+  onDeleteAnimationPlan?: () => void;
+  /** True when project currently has generated animation clips */
+  hasAnimationPlan?: boolean;
+  /** Disable delete action while request is in progress */
+  deletingAnimationPlan?: boolean;
 };
 
 /** Audio Session + Template buttons (in tab bar); Assets kept separate below. */
@@ -77,6 +83,9 @@ export default function EditorSidebar({
   onTabFocus,
   onAddBackgroundMusic,
   onAddSfx,
+  onDeleteAnimationPlan,
+  hasAnimationPlan,
+  deletingAnimationPlan,
 }: Props) {
   const [activeTab, setActiveTab] = useState<SidebarTab>('audioSession');
   const [isOpen, setIsOpen] = useState(true);
@@ -228,6 +237,25 @@ export default function EditorSidebar({
           ))}
         </div>
         <div className="border-t border-border pt-2 mt-auto">
+          <button
+            type="button"
+            onClick={() => onDeleteAnimationPlan?.()}
+            disabled={!hasAnimationPlan || deletingAnimationPlan}
+            className={`mb-2 w-full flex justify-center p-2 rounded transition ${
+              !hasAnimationPlan || deletingAnimationPlan
+                ? 'text-muted-foreground/50 cursor-not-allowed'
+                : 'text-red-500 hover:bg-red-500/10'
+            }`}
+            title={
+              deletingAnimationPlan
+                ? 'Deleting animation plan...'
+                : hasAnimationPlan
+                  ? 'Delete Animation Plan'
+                  : 'No Animation Plan To Delete'
+            }
+          >
+            <Trash2 size={16} />
+          </button>
           <button
             onClick={() => setIsOpen(!isOpen)}
             className="w-full flex justify-center p-2 rounded hover:bg-muted transition text-muted-foreground"
