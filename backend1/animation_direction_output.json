@@ -1,0 +1,89 @@
+{
+  "videoDurationSeconds": 11.64,
+  "moments": [
+    {
+      "start": 0,
+      "duration": 2,
+      "type": "definition",
+      "subtitle": "What Kubernetes is",
+      "content": "Kubernetes definition intro",
+      "colorPalette": {
+        "bg": "#0c0a05",
+        "primary": "#d4820a",
+        "accent": "#f5c842",
+        "text": "#fefaf0"
+      },
+      "composition": {
+        "layout": "center-radial-gravity",
+        "aestheticSystem": "neo-brutalist",
+        "motionCharacter": "punchy",
+        "aestheticNotes": "Neo-brutalist card with hard-offset shadow lands center-frame, oversized display text in amber primary. Stark asymmetric composition with thick accent border creates bold first impression.",
+        "colorNotes": "bg:#0c0a05 fills entire frame. primary:#d4820a on hard-offset card background. accent:#f5c842 on word 'Kubernetes' highlight sweep and card shadow. text:#fefaf0 on all typography.",
+        "elements": [
+          "display-headline:KUBERNETES",
+          "sub-headline:What It Is",
+          "hard-offset-card:primary-fill-accent-border-7px-shadow",
+          "highlight-sweep:accent-underline-on-Kubernetes"
+        ],
+        "beat1": {
+          "description": "Card slams in from below with spring-snappy easing, hard shadow appears on landing. Display text word-by-word slams cascade in stagger.",
+          "techniques": ["T1 WORD-BY-WORD SLAM CASCADE", "G3 HARD-OFFSET CARD"],
+          "entryEasing": "spring-snappy",
+          "timingHint": "Frames 0-15: card enters, shadow visible. Frames 10-20: text cascade completes."
+        },
+        "holdWindow": {
+          "description": "Card breathes with subtle scale pulse, highlight sweep completes beneath Kubernetes word.",
+          "holdEasing": "breathe",
+          "durationHint": "Frames 20-50: card holds center, breathe scale 1.0→1.012→1.0"
+        },
+        "beat2OrNull": null,
+        "exitEasing": "snap-cut"
+      },
+      "emphasis": "The word KUBERNETES lands with visual authority, establishing this as a technical deep-dive.",
+      "animationPrompt": "Frames 0-12: hard-offset card translates from +40px below to center, boxShadow '7px 7px 0 #f5c842' visible as it settles, opacity 0→1 via spring-snappy. Frames 8-20: display text 'KUBERNETES' enters word-by-word via T1 slam cascade, each word scale 0→1.18→1.0. Frames 20-50: card breathes scale 1.0→1.012→1.0, accent underline sweeps beneath 'KUBERNETES' via T3 highlight sweep width 0→100%. Frames 50: snap-cut exit. Colors: bg #0c0a05, card primary #d4820a, accent #f5c842 on shadow and underline, text #fefaf0."
+    },
+    {
+      "start": 6.4,
+      "duration": 3.7,
+      "type": "definition",
+      "subtitle": "What Kubernetes automates",
+      "content": "Kubernetes automation definition",
+      "colorPalette": {
+        "bg": "#1c120d",
+        "primary": "#8b5e3c",
+        "accent": "#e8c9a0",
+        "text": "#f5ede0"
+      },
+      "composition": {
+        "layout": "stacked-reveal-column",
+        "aestheticSystem": "warm-minimal",
+        "motionCharacter": "floaty",
+        "aestheticNotes": "Clean stacked reveal of three automation pillars (deployment, scaling, management) with soft radial bloom behind each. Generous negative space, calm cinematic hold.",
+        "colorNotes": "bg:#1c120d fills full frame. primary:#8b5e3c on pillar labels. accent:#e8c9a0 on keyword highlights and radial bloom centers. text:#f5ede0 on body text at 85% opacity.",
+        "elements": [
+          "display-headline:Automates",
+          "pillar-row:Deployment",
+          "pillar-row:Scaling",
+          "pillar-row:Management",
+          "warm-radial-bloom:accent-behind-each-pillar",
+          "pill-badge:containers"
+        ],
+        "beat1": {
+          "description": "Display text 'AUTOMATES' wipes in from left via masked text reveal. Three pillar rows cascade in with 120ms stagger, each slide-in from left.",
+          "techniques": ["T5 MASKED TEXT WIPE", "L5 STACKED REVEAL COLUMN"],
+          "entryEasing": "spring-floaty",
+          "timingHint": "Frames 0-22: display wipe reveals. Frames 15-45: pillars cascade in stagger."
+        },
+        "holdWindow": {
+          "description": "Each pillar breathes independently, warm radial bloom pulses gently behind each. Pill badges enter after pillars settle.",
+          "holdEasing": "breathe",
+          "durationHint": "Frames 45-111: pillars breathe scale 1.0→1.015→1.0, bloom opacity oscillates 0.38→0.2→0.38"
+        },
+        "beat2OrNull": null,
+        "exitEasing": "shrink-fade"
+      },
+      "emphasis": "The three pillars (deployment, scaling, management) visualize what Kubernetes automates, with warm bloom creating approachable tech feel.",
+      "animationPrompt": "Frames 0-22: display 'AUTOMATES' reveals via masked text wipe, mask width 100%→0 ease-out-expo. Frames 15-45: three pillar rows 'Deployment', 'Scaling', 'Management' enter via L5 stacked reveal, translateX -30→0 spring-snappy, opacity 0→1, stagger 120ms per row. Frames 45-111: all pillars breathe scale 1.0→1.015→1.0 in unison, G1 warm radial bloom pulses behind each (accent #e8c9a0, opacity 0.38→0.2→0.38). Pill badge 'containers' bounces in at frame 60 via G8 notification badge. Frames 111: shrink-fade exit. Colors: bg #1c120d, primary #8b5e3c on pillars, accent #e8c9a0 on bloom, text #f5ede0."
+    }
+  ]
+}

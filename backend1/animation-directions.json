@@ -1,0 +1,100 @@
+{
+  "videoDurationSeconds": 11.64,
+  "moments": [
+    {
+      "start": 0,
+      "duration": 3.5,
+      "type": "introduction",
+      "subtitle": "In this lesson, we'll explore what Kubernetes is and why it's used.",
+      "content": "Intro to Kubernetes topic",
+      "colorPalette": {
+        "bg": "#0c0a05",
+        "primary": "#d4820a",
+        "accent": "#f5c842",
+        "text": "#fefaf0"
+      },
+      "composition": {
+        "layout": "L4",
+        "aestheticSystem": "deep-glow",
+        "motionCharacter": "punchy",
+        "aestheticNotes": "Dark obsidian bg with intense amber radial bloom behind hero text. Warm golden bloom creates neon-sign feel. Text sits sharp on top with high contrast.",
+        "colorNotes": "bg:#0c0a05 fills full frame. primary:#d4820a on 'KUBERNETES' display text. accent:#f5c842 on warm radial bloom (G1) and underline highlight sweep (T3). text:#fefaf0 on supporting body text.",
+        "elements": [
+          "display-headline:KUBERNETES",
+          "body-text:In this lesson, we'll explore what it is",
+          "warm-bloom:accent-color-radius-120px",
+          "noise-overlay:opacity-0.15"
+        ],
+        "beat1": {
+          "description": "Display text enters with word-by-word slam cascade. Each word scales 0→1.18→1.0 via spring. G1 warm radial bloom fires simultaneously behind text.",
+          "techniques": ["T1", "T10", "G1"],
+          "entryEasing": "spring-snappy",
+          "timingHint": "Frames 0-12: words slam in sequentially (80ms stagger). Bloom opacity 0→0.6 over frames 0-15."
+        },
+        "holdWindow": {
+          "description": "Text breathes (scale 1.0→1.012→1.0). Bloom pulses with subtle opacity oscillation via Math.sin.",
+          "holdEasing": "breathe",
+          "durationHint": "Frames 12-90: main hold period. Bloom oscillates 0.38→0.2→0.38 via Math.sin(frame/45)."
+        },
+        "beat2OrNull": {
+          "description": "Highlight sweep (T3) fires on 'KUBERNETES' — accent underline animates width 0→100% of word width.",
+          "techniques": ["T3"],
+          "patternInterrupt": null,
+          "timingHint": "Frame 25: underline sweep begins, completes by frame 36."
+        },
+        "exitEasing": "snap-cut"
+      },
+      "emphasis": "The word KUBERNETES slams in dramatically with warm amber glow, establishing topic authority.",
+      "animationPrompt": "Frames 0-12: 'KUBERNETES' enters word-by-word via T1 slam cascade, each word spring({stiffness:300,damping:20}) from scale 0→1.0. Frames 0-15: G1 warm radial bloom (amber #f5c842) fades opacity 0→0.6, scale 0.2→1.0, filter blur(55px). Frames 12-90: display text breathes scale 1.0→1.012→1.0 via Easing.inOut(sine), bloom oscillates 0.38→0.2→0.38 via Math.sin(frame/45). Frame 36: underline highlight sweep completes (T3). Frames 90-105: snap-cut exit opacity 1→0."
+    },
+    {
+      "start": 4.5,
+      "duration": 3.5,
+      "type": "definition",
+      "subtitle": "Kubernetes is a system for automating deployment, scaling, and management of containerized applications.",
+      "content": "Kubernetes as container orchestration system",
+      "colorPalette": {
+        "bg": "#0f1f14",
+        "primary": "#2d6a4f",
+        "accent": "#e9a824",
+        "text": "#e8f5e9"
+      },
+      "composition": {
+        "layout": "L3",
+        "aestheticSystem": "warm-minimal",
+        "motionCharacter": "floaty",
+        "aestheticNotes": "Forest green bg creates depth. Centered hero element with soft radial gradient. Clean typography with generous negative space. Calm but purposeful motion.",
+        "colorNotes": "bg:#0f1f14 fills full frame. primary:#2d6a4f on central container icon. accent:#e9a824 on key term 'containerized' highlight. text:#e8f5e9 on definition text.",
+        "elements": [
+          "display-headline:ORCHESTRATION",
+          "body-text:Kubernetes automates deployment, scaling, and management of containerized applications",
+          "pill-badge:deployment",
+          "pill-badge:scaling",
+          "pill-badge:management",
+          "container-icon:abstract-boxes",
+          "warm-bloom:accent-color-radius-80px"
+        ],
+        "beat1": {
+          "description": "Hero word 'ORCHESTRATION' wipes in via masked reveal (T5). Supporting pill badges cascade in sequentially (G4) after hero lands.",
+          "techniques": ["T5", "G4"],
+          "entryEasing": "spring-floaty",
+          "timingHint": "Frames 0-20: masked text reveal (ease-out-expo). Frames 20-35: pill badges stagger in 110ms apart."
+        },
+        "holdWindow": {
+          "description": "All elements drift gently via slow sine wave. Text scale breathes minimally.",
+          "holdEasing": "drift",
+          "durationHint": "Frames 35-90: translateY Math.sin(frame/90)*3 continuous sine drift. Scale 1.0→1.018→1.0 breathe."
+        },
+        "beat2OrNull": {
+          "description": "Key term 'containerized' gets color shift (T11) — text color interpolates to accent with subtle radial glow behind word.",
+          "techniques": ["T11"],
+          "patternInterrupt": null,
+          "timingHint": "Frame 50: color shift begins, completes by frame 68."
+        },
+        "exitEasing": "shrink-fade"
+      },
+      "emphasis": "The core definition lands gracefully with floating pill badges representing deployment, scaling, and management — the three pillars of Kubernetes.",
+      "animationPrompt": "Frames 0-20: 'ORCHESTRATION' masked reveal via parent overflow hidden, mask width 100%→0 ease-out-expo. Frames 20-35: three pill badges (deployment, scaling, management) cascade via G4, translateY +30→0 spring({stiffness:280,damping:20}), 110ms stagger. Frames 35-90: all elements drift translateY Math.sin(frame/90)*3, breathe scale 1.0→1.018→1.0 Easing.inOut(sine). Frame 50-68: key term 'containerized' shifts text:#e8f5e9→accent:#e9a824 via T11 color interpolation, radial glow animates radius 0→45px. Frames 90-105: shrink-fade exit scale 1.0→0.8, opacity 1→0 ease-in."
+    }
+  ]
+}

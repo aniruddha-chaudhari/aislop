@@ -1,16 +1,25 @@
 import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
+import { buildAnimationDirectionPrompt } from '../prompts/animationDirectionPrompt';
 
 const OPENCODE_BIN_ENV = process.env.OPENCODE_BIN?.trim() || '';
 const OPENCODE_DEFAULT_BIN = 'opencode';
 const OPENCODE_DEBUG_ENABLED = process.env.OPENCODE_DEBUG !== '0';
-const OPENCODE_LOG_EVERY_WORD = process.env.OPENCODE_LOG_EVERY_WORD !== '0';
+/** Log every stdout/stderr chunk — very verbose. Default OFF. Set OPENCODE_LOG_EVERY_WORD=1 to enable. */
+const OPENCODE_LOG_EVERY_WORD = process.env.OPENCODE_LOG_EVERY_WORD === '1';
+const parsePositiveMs = (value: string | undefined, fallback: number): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+};
+const OPENCODE_RUN_TIMEOUT_MS = parsePositiveMs(process.env.OPENCODE_RUN_TIMEOUT_MS, 300000);
+const OPENCODE_HEARTBEAT_INTERVAL_MS = parsePositiveMs(process.env.OPENCODE_HEARTBEAT_INTERVAL_MS, 15000);
 let CACHED_OPENCODE_COMMAND: string | null = null;
 
 export const OPENCODE_MODELS = {
   flash: 'google/antigravity-gemini-3-flash',
-  pro: 'google/antigravity-gemini-3-pro',
+  pro: 'google/antigravity-gemini-3.1-pro',
+  minimax: 'opencode/minimax-m2.5-free',
 } as const;
 
 export interface OpenCodeRunOptions {
@@ -20,6 +29,8 @@ export interface OpenCodeRunOptions {
   quiet?: boolean;
   agent?: string;
   cwd?: string;
+  /** When true, resolve early once the stream contains valid GeneratedClip component code — avoids hanging after output is ready. */
+  earlyCompleteForClipCode?: boolean;
 }
 
 export interface OpenCodeResult {
@@ -45,9 +56,20 @@ export interface AnimationPlanGenerationResult {
   fallbackWithoutAgent: boolean;
   promptMentionsSkill: boolean;
   usedExaResearch: boolean;
+  usedExaDirection: boolean;
   usedRemotionSkill: boolean;
   researchSummary: string | null;
   researchDiagnostics: OpenCodeOutputDiagnostics | null;
+}
+
+export interface AnimationClipCodeGenerationResult {
+  output: string;
+  code: string | null;
+  diagnostics: OpenCodeOutputDiagnostics;
+  usedAgent: string | null;
+  fallbackWithoutAgent: boolean;
+  usedExaClipCode: boolean;
+  usedRemotionSkill: boolean;
 }
 
 type OpenCodeEnvironmentCheck = {
@@ -88,6 +110,25 @@ function opencodeError(message: string, data?: Record<string, unknown>): void {
     return;
   }
   console.error(`[OpenCode] ${message}`);
+}
+
+function normalizePromptText(prompt: string): string {
+  return prompt.replace(/\r\n/g, '\n').trim();
+}
+
+function validatePromptForRun(label: string, prompt: string, requiredTokens: string[] = []): string {
+  const normalized = normalizePromptText(prompt);
+  if (!normalized) {
+    throw new Error(`${label} is empty.`);
+  }
+  if (/\{\{\s*[a-zA-Z0-9_]+\s*\}\}/.test(normalized)) {
+    throw new Error(`${label} has unresolved template placeholders.`);
+  }
+  const missing = requiredTokens.filter((token) => !normalized.includes(token));
+  if (missing.length > 0) {
+    throw new Error(`${label} is missing required sections: ${missing.join(', ')}`);
+  }
+  return normalized;
 }
 
 function extractToolName(event: Record<string, unknown>): string | null {
@@ -210,8 +251,25 @@ function resolveOpenCodeSpawnTarget(opencodeCommand: string): {
   return { command: opencodeCommand, env: { ...process.env }, commandLabel: opencodeCommand, prefixArgs: [] };
 }
 
+function extractToolUseEvents(output: string): Array<Record<string, any>> {
+  const lines = output.trim().split('\n').filter(Boolean);
+  const toolEvents: Array<Record<string, any>> = [];
+  for (const line of lines) {
+    try {
+      const event = JSON.parse(line) as Record<string, any>;
+      const eventType = typeof event.type === 'string' ? event.type : null;
+      if (eventType === 'tool_use') {
+        toolEvents.push(event);
+      }
+    } catch {
+      // ignore non-JSON lines
+    }
+  }
+  return toolEvents;
+}
+
 function detectExaUsage(diagnostics: OpenCodeOutputDiagnostics, output: string): boolean {
-  const toolUsedExa = diagnostics.toolUseNames.some((name) => {
+  const hasExaToolName = (name: string): boolean => {
     const normalized = name.toLowerCase();
     return (
       normalized === 'exa' ||
@@ -219,39 +277,49 @@ function detectExaUsage(diagnostics: OpenCodeOutputDiagnostics, output: string):
       normalized.startsWith('exa-') ||
       normalized.includes('.exa')
     );
-  });
-  if (toolUsedExa) return true;
+  };
 
-  if (diagnostics.eventTypeCounts.tool_use && diagnostics.eventTypeCounts.tool_use > 0) {
-    const normalizedOutput = output.toLowerCase();
-    if (
-      normalizedOutput.includes('"tool":"exa') ||
-      normalizedOutput.includes("'tool':'exa") ||
-      /\bexa\b/i.test(normalizedOutput)
-    ) {
-      return true;
-    }
-  }
-
-  if (output.toLowerCase().includes('exa_web_search_exa')) {
+  if (diagnostics.toolUseNames.some((name) => hasExaToolName(name))) {
     return true;
   }
 
-  if (diagnostics.toolUseNames.length > 0 && diagnostics.toolUseNames.some((name) => name.toLowerCase().includes('exa'))) {
-    return true;
+  const toolEvents = extractToolUseEvents(output);
+  for (const event of toolEvents) {
+    const toolName = extractToolName(event);
+    if (toolName && hasExaToolName(toolName)) return true;
   }
 
-  return false;
+  const normalizedOutput = output.toLowerCase();
+  return (
+    normalizedOutput.includes('"tool":"exa') ||
+    normalizedOutput.includes('"tool":"exa_web_search_exa"') ||
+    normalizedOutput.includes('"tool":"exa_get_code_context_exa"') ||
+    normalizedOutput.includes('"tool":"exa_company_research_exa"')
+  );
 }
 
 function detectRemotionSkillUsage(diagnostics: OpenCodeOutputDiagnostics, output: string): boolean {
-  if (diagnostics.toolUseNames.some((name) => /\bskill\b/i.test(name))) {
-    return true;
+  const toolEvents = extractToolUseEvents(output);
+  for (const event of toolEvents) {
+    const toolName = extractToolName(event)?.toLowerCase() || '';
+    if (toolName === 'skill' || toolName.endsWith('.skill') || toolName.includes('skill')) {
+      const requestedNameCandidates = [
+        event.part?.state?.input?.name,
+        event.part?.input?.name,
+        event.state?.input?.name,
+        event.input?.name,
+      ];
+      const requestedName = requestedNameCandidates.find((value) => typeof value === 'string') as string | undefined;
+      if (requestedName && requestedName.toLowerCase().includes('remotion-best-practices')) {
+        return true;
+      }
+    }
   }
 
   const normalized = output.toLowerCase();
-  if (/\bremotion-best-practices\b/.test(normalized)) return true;
-  if (diagnostics.mentionsSkill && diagnostics.mentionsRemotion) return true;
+  if (/\bloaded skill:\s*remotion-best-practices\b/.test(normalized)) return true;
+  if (/<skill_content\s+name=["']remotion-best-practices["']/.test(normalized)) return true;
+  if (/"name"\s*:\s*"remotion-best-practices"/.test(normalized) && diagnostics.toolUseNames.some((n) => /skill/i.test(n))) return true;
   return false;
 }
 
@@ -275,6 +343,43 @@ function extractEventStreamText(output: string): string {
 
   const combined = chunks.join('\n').trim();
   return combined || trimmed;
+}
+
+/**
+ * Returns true once the accumulated event-stream output already contains a complete,
+ * valid GeneratedClip TSX component. Used to resolve the opencodeRun promise early
+ * (before the OpenCode process exits) so we don't hang waiting for cleanup/extra output
+ * after the useful result has already arrived.
+ */
+function hasCompleteClipCodeInStream(output: string): boolean {
+  if (!output || output.length < 200) return false;
+  let textContent = '';
+  for (const line of output.split('\n')) {
+    try {
+      const event = JSON.parse(line) as Record<string, unknown> & { type?: string; part?: { text?: string } };
+      if (event.type === 'text' && typeof event.part?.text === 'string') {
+        textContent += event.part.text;
+      }
+    } catch {
+      // ignore non-JSON lines
+    }
+  }
+  if (!textContent.trim()) return false;
+  const parsed = parseJsonFromText<{ componentCode?: unknown; code?: unknown }>(textContent);
+  if (!parsed || typeof parsed !== 'object') return false;
+  const raw = parsed.componentCode ?? parsed.code;
+  if (typeof raw !== 'string' || !raw.trim()) return false;
+  const normalized = raw
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '\\')
+    .trim();
+  return (
+    /\bexport\s+const\s+GeneratedClip\b/.test(normalized) &&
+    /from\s+["']remotion["']/.test(normalized) &&
+    (/\buseCurrentFrame\b/.test(normalized) || /\buseVideoConfig\b/.test(normalized))
+  );
 }
 
 function extractSessionIdFromOutput(output: string): string | null {
@@ -419,6 +524,11 @@ export function summarizeOpenCodeOutput(output: string): OpenCodeOutputDiagnosti
 }
 
 export async function opencodeRun(options: OpenCodeRunOptions): Promise<string> {
+  const prompt = normalizePromptText(options.prompt || '');
+  if (!prompt) {
+    throw new Error('OpenCode prompt is empty.');
+  }
+
   const resolvedModel =
     options.model && OPENCODE_MODELS[options.model as keyof typeof OPENCODE_MODELS]
       ? OPENCODE_MODELS[options.model as keyof typeof OPENCODE_MODELS]
@@ -432,16 +542,15 @@ export async function opencodeRun(options: OpenCodeRunOptions): Promise<string> 
     agent: options.agent || null,
     opencodeCommand,
     cwd,
-    promptChars: options.prompt.length,
+    promptChars: prompt.length,
   });
 
   return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
     const target = resolveOpenCodeSpawnTarget(opencodeCommand);
     const command = target.command;
     const args: string[] = ['run'];
-    if (options.prompt) {
-      args.push(options.prompt);
-    }
+    const useStdinPrompt = true;
     if (options.format && options.format !== 'default') {
       args.push('--format', options.format);
     }
@@ -454,23 +563,75 @@ export async function opencodeRun(options: OpenCodeRunOptions): Promise<string> 
     opencodeInfo('Using direct runner', {
       command: target.commandLabel,
       argsPreview: summarizeForLog(args.join(' '), 220),
+      promptTransport: useStdinPrompt ? 'stdin' : 'argv',
     });
 
     const proc = spawn(command, [...target.prefixArgs, ...args], {
       cwd,
       env: target.env,
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [useStdinPrompt ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     });
 
     let stdout = '';
     let stderr = '';
+    let closed = false;
+    let timedOut = false;
+
+    const heartbeatTimer = setInterval(() => {
+      if (closed) return;
+      opencodeInfo('Run heartbeat', {
+        elapsedMs: Date.now() - startedAt,
+        promptChars: prompt.length,
+        stdoutChars: stdout.length,
+        stderrChars: stderr.length,
+      });
+    }, Math.max(5000, OPENCODE_HEARTBEAT_INTERVAL_MS));
+
+    const timeoutTimer = setTimeout(() => {
+      if (closed) return;
+      timedOut = true;
+      opencodeError('Run timed out', {
+        elapsedMs: Date.now() - startedAt,
+        timeoutMs: OPENCODE_RUN_TIMEOUT_MS,
+        promptChars: prompt.length,
+        stdoutChars: stdout.length,
+        stderrChars: stderr.length,
+      });
+      try {
+        proc.kill();
+      } catch {
+        // ignore kill failures
+      }
+    }, Math.max(30000, OPENCODE_RUN_TIMEOUT_MS));
 
     proc.stdout?.on('data', (data) => {
       const chunk = data.toString();
       stdout += chunk;
       if (OPENCODE_LOG_EVERY_WORD) {
         console.info(`[OpenCode][stdout] ${chunk}`);
+      }
+      // Early completion: once valid clip code JSON is in the stream we no longer need
+      // to wait for the OpenCode process to exit — resolve now and kill to free resources.
+      if (
+        !closed &&
+        options.earlyCompleteForClipCode &&
+        options.format === 'json' &&
+        hasCompleteClipCodeInStream(stdout)
+      ) {
+        closed = true;
+        clearInterval(heartbeatTimer);
+        clearTimeout(timeoutTimer);
+        opencodeInfo('Early completion: valid clip code detected in stream', {
+          stdoutChars: stdout.length,
+          elapsedMs: Date.now() - startedAt,
+        });
+        try {
+          proc.kill();
+        } catch {
+          // ignore kill failures
+        }
+        resolve(stdout);
       }
     });
 
@@ -481,7 +642,7 @@ export async function opencodeRun(options: OpenCodeRunOptions): Promise<string> 
         console.info(`[OpenCode][stderr] ${chunk}`);
       }
       const isProgress =
-        chunk.includes('> build') || chunk.includes('> run') || chunk.includes('·') || chunk.trim() === '';
+        chunk.includes('> build') || chunk.includes('> run') || chunk.includes('Ã‚Â·') || chunk.trim() === '';
 
       if (isProgress) {
         opencodeInfo('Progress', { chunk: summarizeForLog(chunk, 180) });
@@ -490,7 +651,20 @@ export async function opencodeRun(options: OpenCodeRunOptions): Promise<string> 
       }
     });
 
+    if (useStdinPrompt) {
+      try {
+        proc.stdin?.write(`${prompt}\n`);
+        proc.stdin?.end();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        opencodeError('Failed writing prompt to stdin', { message });
+      }
+    }
+
     proc.on('close', (exitCode) => {
+      closed = true;
+      clearInterval(heartbeatTimer);
+      clearTimeout(timeoutTimer);
       const diagnostics = summarizeOpenCodeOutput(stdout);
       opencodeInfo('Run finished', {
         exitCode,
@@ -510,6 +684,14 @@ export async function opencodeRun(options: OpenCodeRunOptions): Promise<string> 
       }
 
       if (exitCode !== 0) {
+        if (timedOut) {
+          reject(
+            new Error(
+              `opencode run timed out after ${OPENCODE_RUN_TIMEOUT_MS}ms. stdout=${stdout.length} chars stderr=${stderr.length} chars`
+            )
+          );
+          return;
+        }
         const errorMsg = stderr || stdout || 'Unknown error';
         opencodeError('Process failed', {
           exitCode,
@@ -530,6 +712,9 @@ export async function opencodeRun(options: OpenCodeRunOptions): Promise<string> 
     });
 
     proc.on('error', (error) => {
+      closed = true;
+      clearInterval(heartbeatTimer);
+      clearTimeout(timeoutTimer);
       const message = error instanceof Error ? error.message : String(error);
       const notFoundHint =
         /\bENOENT\b/i.test(message) || /\bnot found\b/i.test(message)
@@ -632,11 +817,606 @@ export function parseOpenCodeJSON<T = any>(output: string): T | null {
   return parsed;
 }
 
+type AnimationBudgetPlan = {
+  durationSeconds: number;
+  targetMomentCount: number;
+  hardMomentCap: number;
+  maxCoverageRatio: number;
+  maxAnimatedSeconds: number;
+  minAnimatedSeconds: number;
+  minGapSeconds: number;
+};
+
+type TimelineMoment = {
+  start: number;
+  duration: number;
+  type: string;
+  content: string;
+};
+
+type TimelinePlan = {
+  videoDurationSeconds: number;
+  moments: TimelineMoment[];
+};
+
+type DialogueLine = {
+  start: number;
+  end: number;
+  speaker: string;
+  text: string;
+};
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function toFiniteNumber(value: unknown, fallback: number): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+function cleanOneLineText(value: unknown, maxChars: number): string {
+  if (typeof value !== 'string') return '';
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  return normalized.length > maxChars ? normalized.slice(0, maxChars).trim() : normalized;
+}
+
+function formatSeconds(seconds: number): string {
+  return `${seconds.toFixed(2)}s`;
+}
+
+function buildAnimationBudgetPlan(videoDurationSeconds: number, maxMoments: number): AnimationBudgetPlan {
+  const durationSeconds = Math.max(1, toFiniteNumber(videoDurationSeconds, 60));
+  const maxAllowedMoments = Math.max(1, Math.min(8, Math.floor(toFiniteNumber(maxMoments, 8))));
+
+  if (durationSeconds <= 12) {
+    const hardMomentCap = Math.min(2, maxAllowedMoments);
+    const maxAnimatedSeconds = Math.min(7, Number((durationSeconds * 0.65).toFixed(2)));
+    const minAnimatedSeconds = Math.min(maxAnimatedSeconds, Math.max(3.5, Math.min(5, durationSeconds * 0.45)));
+    return {
+      durationSeconds,
+      targetMomentCount: hardMomentCap,
+      hardMomentCap,
+      maxCoverageRatio: Number((maxAnimatedSeconds / durationSeconds).toFixed(3)),
+      maxAnimatedSeconds,
+      minAnimatedSeconds: Number(minAnimatedSeconds.toFixed(2)),
+      minGapSeconds: 0.7,
+    };
+  }
+
+  if (durationSeconds <= 20) {
+    const hardMomentCap = Math.min(3, maxAllowedMoments);
+    return {
+      durationSeconds,
+      targetMomentCount: hardMomentCap,
+      hardMomentCap,
+      maxCoverageRatio: 0.56,
+      maxAnimatedSeconds: Number((durationSeconds * 0.56).toFixed(2)),
+      minAnimatedSeconds: Number((durationSeconds * 0.35).toFixed(2)),
+      minGapSeconds: 0.8,
+    };
+  }
+
+  if (durationSeconds <= 40) {
+    const hardMomentCap = Math.min(4, maxAllowedMoments);
+    return {
+      durationSeconds,
+      targetMomentCount: hardMomentCap,
+      hardMomentCap,
+      maxCoverageRatio: 0.5,
+      maxAnimatedSeconds: Number((durationSeconds * 0.5).toFixed(2)),
+      minAnimatedSeconds: Number((durationSeconds * 0.32).toFixed(2)),
+      minGapSeconds: 0.9,
+    };
+  }
+
+  const hardMomentCap = Math.min(8, maxAllowedMoments);
+  const targetMomentCount = Math.min(hardMomentCap, Math.max(4, Math.round(durationSeconds / 10)));
+  return {
+    durationSeconds,
+    targetMomentCount,
+    hardMomentCap,
+    maxCoverageRatio: 0.45,
+    maxAnimatedSeconds: Number((durationSeconds * 0.45).toFixed(2)),
+    minAnimatedSeconds: Number((durationSeconds * 0.28).toFixed(2)),
+    minGapSeconds: 0.9,
+  };
+}
+
+function buildAnimationBudgetBlock(budget: AnimationBudgetPlan): string {
+  const maxCoveragePercent = Math.round(budget.maxCoverageRatio * 100);
+  const lines = [
+    'ANIMATION_BUDGET:',
+    `- TARGET_MOMENTS: ${budget.targetMomentCount}`,
+    `- HARD_MOMENT_CAP: ${budget.hardMomentCap}`,
+    `- MAX_COVERAGE_RATIO: ${maxCoveragePercent}%`,
+    `- MAX_ANIMATED_SECONDS: ${budget.maxAnimatedSeconds.toFixed(2)}s`,
+    `- MIN_GAP_SECONDS: ${budget.minGapSeconds.toFixed(2)}s`,
+  ];
+  if (budget.durationSeconds <= 12) {
+    lines.push(`- TARGET_ANIMATED_SECONDS_RANGE: ${budget.minAnimatedSeconds.toFixed(2)}s to ${budget.maxAnimatedSeconds.toFixed(2)}s`);
+  }
+  lines.push('- DENSITY_POLICY: pulse-and-rest cadence; avoid constant animation.');
+  return lines.join('\n');
+}
+
+function buildFallbackTimelinePlan(topic: string, budget: AnimationBudgetPlan): TimelinePlan {
+  const count = Math.max(1, budget.targetMomentCount);
+  const durationSeconds = budget.durationSeconds;
+  const maxTotal = Math.min(budget.maxAnimatedSeconds, Math.max(1, durationSeconds - 0.8));
+  const baseDuration = clampNumber(maxTotal / count, durationSeconds <= 12 ? 2 : 1.8, 5.5);
+  const totalAnimated = baseDuration * count;
+  const gapPool = Math.max(0.3, durationSeconds - totalAnimated);
+  const gap = count > 1 ? Math.max(budget.minGapSeconds, gapPool / (count + 1)) : Math.max(0.3, gapPool / 2);
+  const moments: TimelineMoment[] = [];
+
+  let cursor = gap;
+  for (let i = 0; i < count; i++) {
+    const maxInside = Math.max(0.8, durationSeconds - cursor);
+    const duration = Math.min(baseDuration, maxInside);
+    if (duration < 0.8) break;
+    moments.push({
+      start: Number(cursor.toFixed(2)),
+      duration: Number(duration.toFixed(2)),
+      type: i === 0 ? 'hook' : i === count - 1 ? 'takeaway' : 'explain',
+      content: i === 0 ? `Core idea: ${topic}` : i === count - 1 ? 'Key takeaway' : `Supporting point ${i}`,
+    });
+    cursor += duration + gap;
+    if (cursor >= durationSeconds - 0.2) break;
+  }
+
+  return {
+    videoDurationSeconds: durationSeconds,
+    moments: moments.length > 0
+      ? moments
+      : [
+          {
+            start: 0,
+            duration: Number(Math.min(5.5, Math.max(2, durationSeconds * 0.45)).toFixed(2)),
+            type: 'hook',
+            content: `Core idea: ${topic}`,
+          },
+        ],
+  };
+}
+
+function normalizeTimelinePlanForBudget(rawPlan: unknown, topic: string, budget: AnimationBudgetPlan): TimelinePlan {
+  const rawMoments = Array.isArray((rawPlan as any)?.moments)
+    ? ((rawPlan as any).moments as unknown[])
+    : Array.isArray(rawPlan)
+      ? (rawPlan as unknown[])
+      : [];
+
+  const minDuration = budget.durationSeconds <= 12 ? 2 : 1.6;
+  const normalized: TimelineMoment[] = [];
+  const sorted = rawMoments
+    .filter((item) => item && typeof item === 'object')
+    .map((item) => item as Record<string, unknown>)
+    .sort((a, b) => toFiniteNumber(a.start, 0) - toFiniteNumber(b.start, 0));
+
+  let nextMinStart = 0;
+  for (const moment of sorted) {
+    if (normalized.length >= budget.hardMomentCap) break;
+    const content = cleanOneLineText(moment.content, 180) || cleanOneLineText(moment.title, 180);
+    if (!content) continue;
+
+    let start = clampNumber(toFiniteNumber(moment.start, 0), 0, Math.max(0, budget.durationSeconds - 0.2));
+    start = Math.max(start, nextMinStart);
+    const maxAllowedDuration = Math.min(7, Math.max(0, budget.durationSeconds - start));
+    if (maxAllowedDuration < 0.8) continue;
+    const duration = clampNumber(toFiniteNumber(moment.duration, minDuration), minDuration, maxAllowedDuration);
+
+    normalized.push({
+      start,
+      duration,
+      type: cleanOneLineText(moment.type, 40) || 'concept',
+      content,
+    });
+    nextMinStart = start + duration + budget.minGapSeconds;
+  }
+
+  if (normalized.length === 0) {
+    return buildFallbackTimelinePlan(topic, budget);
+  }
+
+  let reduced = normalized;
+  let totalAnimated = reduced.reduce((sum, moment) => sum + moment.duration, 0);
+  if (totalAnimated > budget.maxAnimatedSeconds && totalAnimated > 0) {
+    const scale = budget.maxAnimatedSeconds / totalAnimated;
+    reduced = reduced.map((moment) => ({
+      ...moment,
+      duration: Math.max(budget.durationSeconds <= 12 ? 1.8 : 1.4, moment.duration * scale),
+    }));
+  }
+
+  const resolved: TimelineMoment[] = [];
+  let cursor = 0;
+  for (let i = 0; i < reduced.length; i++) {
+    const moment = reduced[i];
+    const start = Math.max(moment.start, cursor);
+    const maxInside = Math.max(0, budget.durationSeconds - start);
+    if (maxInside < 0.8) continue;
+
+    const nextStart = i < reduced.length - 1 ? Math.max(reduced[i + 1].start, start) : budget.durationSeconds;
+    const maxBeforeNext = Math.max(0.8, nextStart - start - budget.minGapSeconds);
+    const duration = clampNumber(moment.duration, 0.8, Math.min(7, maxInside, maxBeforeNext));
+    resolved.push({
+      start: Number(start.toFixed(2)),
+      duration: Number(duration.toFixed(2)),
+      type: moment.type,
+      content: moment.content,
+    });
+    cursor = start + duration + budget.minGapSeconds;
+  }
+
+  if (resolved.length === 0) {
+    return buildFallbackTimelinePlan(topic, budget);
+  }
+
+  if (budget.durationSeconds <= 12) {
+    let total = resolved.reduce((sum, moment) => sum + moment.duration, 0);
+    if (total < budget.minAnimatedSeconds) {
+      let missing = budget.minAnimatedSeconds - total;
+      for (let i = 0; i < resolved.length && missing > 0; i++) {
+        const current = resolved[i];
+        const nextStart = i < resolved.length - 1 ? resolved[i + 1].start : budget.durationSeconds;
+        const maxAllowed = Math.min(5.5, nextStart - budget.minGapSeconds - current.start);
+        const room = Math.max(0, maxAllowed - current.duration);
+        if (room <= 0) continue;
+        const gain = Math.min(room, missing);
+        current.duration = Number((current.duration + gain).toFixed(2));
+        missing -= gain;
+      }
+      total = resolved.reduce((sum, moment) => sum + moment.duration, 0);
+      if (total > budget.maxAnimatedSeconds) {
+        const scale = budget.maxAnimatedSeconds / total;
+        for (const moment of resolved) {
+          moment.duration = Number((Math.max(1.8, moment.duration * scale)).toFixed(2));
+        }
+      }
+    }
+  }
+
+  return {
+    videoDurationSeconds: budget.durationSeconds,
+    moments: resolved.slice(0, budget.hardMomentCap),
+  };
+}
+
+function parseDialogueLines(dialogueContext: string): DialogueLine[] {
+  if (!dialogueContext.trim()) return [];
+  const lines: DialogueLine[] = [];
+  for (const row of dialogueContext.split('\n')) {
+    const line = row.trim();
+    if (!line) continue;
+    const match = line.match(/^\[(\d+(?:\.\d+)?)s-(\d+(?:\.\d+)?)s\]\s*([^:]+):\s*(.+)$/);
+    if (!match) continue;
+    const start = toFiniteNumber(match[1], 0);
+    const end = toFiniteNumber(match[2], start);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+    lines.push({
+      start,
+      end,
+      speaker: cleanOneLineText(match[3], 80) || 'Speaker',
+      text: cleanOneLineText(match[4], 220),
+    });
+  }
+  return lines.sort((a, b) => a.start - b.start);
+}
+
+function buildDialogueWindowsByMoment(dialogueContext: string, timelinePlan: TimelinePlan): string {
+  const lines = parseDialogueLines(dialogueContext);
+  if (lines.length === 0 || timelinePlan.moments.length === 0) {
+    return 'No timestamped subtitle lines available.';
+  }
+
+  const blocks: string[] = [];
+  for (let i = 0; i < timelinePlan.moments.length; i++) {
+    const moment = timelinePlan.moments[i];
+    const windowStart = Math.max(0, moment.start - 2);
+    const windowEnd = Math.min(timelinePlan.videoDurationSeconds, moment.start + moment.duration + 2);
+    const nearby = lines.filter((line) => line.end > windowStart && line.start < windowEnd).slice(0, 5);
+    const details =
+      nearby.length > 0
+        ? nearby
+            .map((line) => `- [${formatSeconds(line.start)}-${formatSeconds(line.end)}] ${line.speaker}: ${line.text}`)
+            .join('\n')
+        : '- (no nearby subtitle lines in this window)';
+    blocks.push(
+      `Moment ${i + 1} [${formatSeconds(moment.start)}-${formatSeconds(moment.start + moment.duration)}], local window [${formatSeconds(windowStart)}-${formatSeconds(windowEnd)}]:\n${details}`
+    );
+  }
+
+  return blocks.join('\n\n');
+}
+
+function alignDirectionOutputToTimeline(
+  output: string,
+  timelinePlan: TimelinePlan,
+  dialogueContext: string
+): { alignedOutput: string; usedFallback: boolean } {
+  const parsed = parseOpenCodeJSON<{ videoDurationSeconds?: unknown; moments?: unknown[] }>(output);
+  const dialogueLines = parseDialogueLines(dialogueContext);
+  const fallbackStyles = ['spotlight', 'split-comparison', 'flow-diagram', 'orbit-stat', 'timeline-lane', 'stack-cards'];
+  const fallbackMotion = ['snap', 'glide', 'pulse', 'orbit', 'sweep', 'parallax'];
+  const fallbackLayout = ['center', 'split', 'left-focus', 'right-focus', 'radial', 'timeline'];
+  const sourceMoments =
+    parsed && Array.isArray(parsed.moments)
+      ? (parsed.moments.filter((item) => item && typeof item === 'object') as Array<Record<string, unknown>>)
+      : [];
+
+  const alignedMoments = timelinePlan.moments.map((baseMoment, index) => {
+    const source = sourceMoments[index] || {};
+    const nearbyDialogue = dialogueLines.find(
+      (line) => line.end > baseMoment.start && line.start < baseMoment.start + baseMoment.duration
+    );
+    const subtitle = cleanOneLineText(source.subtitle, 220) || nearbyDialogue?.text || baseMoment.content;
+    const content = cleanOneLineText(source.content, 180) || baseMoment.content;
+    const emphasis = cleanOneLineText(source.emphasis, 60);
+    const animationPrompt =
+      cleanOneLineText(source.animationPrompt, 420) ||
+      `Scene focus: ${content}. Motion cadence: 1-2 active beats, then one hold beat for readability.`;
+
+    return {
+      start: Number(baseMoment.start.toFixed(2)),
+      duration: Number(baseMoment.duration.toFixed(2)),
+      type: cleanOneLineText(source.type, 40) || baseMoment.type,
+      subtitle,
+      content,
+      visualStyle: cleanOneLineText(source.visualStyle, 40) || fallbackStyles[index % fallbackStyles.length],
+      motion: cleanOneLineText(source.motion, 30) || fallbackMotion[index % fallbackMotion.length],
+      layout: cleanOneLineText(source.layout, 24) || fallbackLayout[index % fallbackLayout.length],
+      emphasis: emphasis || subtitle.split(' ').slice(0, 3).join(' '),
+      animationPrompt,
+    };
+  });
+
+  return {
+    alignedOutput: JSON.stringify(
+      {
+        videoDurationSeconds: timelinePlan.videoDurationSeconds,
+        moments: alignedMoments,
+      },
+      null,
+      2
+    ),
+    usedFallback: sourceMoments.length === 0,
+  };
+}
+
+function limitChars(value: string | null | undefined, maxChars: number): string {
+  const text = (value || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars).trim()} ...`;
+}
+
+function isNoOutputTimeoutError(message: string): boolean {
+  return /timed out after \d+ms/i.test(message);
+}
+
+function buildClipCodePrompt(
+  params: {
+    topic: string;
+    dialogueContext: string;
+    moment: {
+      index: number;
+      totalMoments?: number;
+      start: number;
+      duration: number;
+      type: string;
+      content: string;
+      subtitle?: string;
+      animationPrompt?: string;
+      emphasis?: string;
+      visualStyle?: string;
+      motion?: string;
+      layout?: string;
+    };
+    researchSummary?: string | null;
+    clipType?: string;
+  },
+  options: { requireExa: boolean; requireRemotionSkill: boolean; compact: boolean }
+): string {
+  const momentPosition = `${params.moment.index + 1}/${params.moment.totalMoments ?? '?'}`;
+  const momentJson = JSON.stringify(params.moment, null, 2);
+  const dialogueContext = options.compact
+    ? limitChars(params.dialogueContext || 'No dialogue context provided', 900)
+    : limitChars(params.dialogueContext || 'No dialogue context provided', 2200);
+  const researchContext = options.compact
+    ? limitChars(params.researchSummary || 'No research summary provided', 700)
+    : limitChars(params.researchSummary || 'No research summary provided', 1800);
+  const requiredTools = [
+    options.requireRemotionSkill ? '- Use the "skill" tool and load "remotion-best-practices" before final answer.' : '',
+    options.requireExa ? '- Use Exa MCP tools before final answer.' : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  return `You are a senior Remotion motion designer and TSX generator.
+
+TASK:
+Generate one production-ready Remotion clip component for a single timeline moment in a short educational 9:16 video.
+
+MANDATORY TOOLS:
+${requiredTools || '- Follow Remotion best practices for performance and readability.'}
+
+INPUTS:
+TOPIC: "${params.topic}"
+CLIP_TYPE: ${params.clipType || 'B-roll moment'}
+MOMENT_POSITION: ${momentPosition}
+MOMENT_JSON:
+${momentJson}
+DIALOGUE_CONTEXT:
+${dialogueContext || 'No dialogue context provided'}
+RESEARCH_CONTEXT:
+${researchContext || 'No research summary provided'}
+
+ENGINEERING RULES:
+- Return TSX code for exactly: export const GeneratedClip
+- Use only imports from "react" and "remotion".
+- Include: useCurrentFrame, useVideoConfig, interpolate, spring from remotion.
+- Keep code deterministic and render-safe (no timers, no async effects, no DOM measurements, no external fetches).
+- Motion cadence: 1-2 active beats + at least one calmer hold/readability window.
+- Mobile-first composition, high contrast, avoid tiny text.
+- Keep subtitle in lower safe area using props.subtitle.
+- Avoid generic full-screen text card. Use layered motion and visual metaphor tied to MOMENT_JSON.
+
+TYPE CONTRACT (must match exactly):
+\`\`\`ts
+export type GeneratedClipProps = {
+  subtitle?: string;
+  content: string;
+  topic?: string;
+  seed?: number;
+  durationSeconds?: number;
+  emphasis?: string;
+};
+\`\`\`
+
+OUTPUT JSON ONLY:
+{
+  "componentCode": "full TSX code string with export const GeneratedClip"
+}
+
+The code must compile as-is in a Remotion project.`;
+}
+
+function buildDeterministicFallbackClipCode(params: {
+  topic: string;
+  moment: {
+    content: string;
+    subtitle?: string;
+    emphasis?: string;
+  };
+}): string {
+  const topicLiteral = JSON.stringify(limitChars(params.topic, 80) || 'Topic');
+  const contentLiteral = JSON.stringify(limitChars(params.moment.content, 140) || 'Key concept');
+  const subtitleLiteral = JSON.stringify(
+    limitChars(params.moment.subtitle || params.moment.content || 'Key point', 140) || 'Key point'
+  );
+  const emphasisLiteral = JSON.stringify(limitChars(params.moment.emphasis || '', 60) || 'Focus');
+
+  return `import React from "react";
+import {AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig} from "remotion";
+
+export type GeneratedClipProps = {
+  subtitle?: string;
+  content: string;
+  topic?: string;
+  seed?: number;
+  durationSeconds?: number;
+  emphasis?: string;
+};
+
+const baseTopic = ${topicLiteral};
+const baseContent = ${contentLiteral};
+const baseSubtitle = ${subtitleLiteral};
+const baseEmphasis = ${emphasisLiteral};
+
+export const GeneratedClip: React.FC<GeneratedClipProps> = (props) => {
+  const frame = useCurrentFrame();
+  const {fps, width, height} = useVideoConfig();
+  const enter = spring({frame, fps, config: {damping: 16, stiffness: 120}});
+  const drift = Math.sin(frame / 18);
+  const pulse = interpolate(Math.sin(frame / 11), [-1, 1], [0.96, 1.04]);
+
+  const title = (props.content || baseContent).slice(0, 90);
+  const subtitle = (props.subtitle || baseSubtitle).slice(0, 120);
+  const topic = (props.topic || baseTopic).slice(0, 80);
+  const emphasis = (props.emphasis || baseEmphasis).slice(0, 40);
+
+  const orbScale = interpolate(enter, [0, 1], [0.7, 1]);
+  const cardY = interpolate(enter, [0, 1], [46, 0]);
+  const accentX = interpolate(frame % Math.max(45, Math.floor((props.durationSeconds || 3) * fps)), [0, Math.max(1, Math.floor((props.durationSeconds || 3) * fps))], [-120, width + 120]);
+
+  return (
+    <AbsoluteFill style={{backgroundColor: "#0A1022", overflow: "hidden", fontFamily: "Inter, system-ui, sans-serif"}}>
+      <AbsoluteFill
+        style={{
+          background:
+            "radial-gradient(circle at 20% 18%, rgba(61,175,255,0.35), transparent 38%), radial-gradient(circle at 82% 84%, rgba(255,154,77,0.25), transparent 34%)",
+        }}
+      />
+
+      <div
+        style={{
+          position: "absolute",
+          left: width * 0.12 + drift * 6,
+          top: height * 0.18,
+          width: 180 * orbScale * pulse,
+          height: 180 * orbScale * pulse,
+          borderRadius: 999,
+          background: "linear-gradient(135deg, #46C4FF, #7F7BFF)",
+          filter: "blur(1px)",
+          opacity: 0.9,
+        }}
+      />
+
+      <div
+        style={{
+          position: "absolute",
+          left: -120,
+          top: height * 0.42,
+          width: 240,
+          height: 4,
+          background: "linear-gradient(90deg, transparent, #FFB06A, transparent)",
+          transform: \`translateX(\${accentX}px)\`,
+          opacity: 0.7,
+        }}
+      />
+
+      <div
+        style={{
+          position: "absolute",
+          left: width * 0.1,
+          top: height * 0.28 + cardY,
+          width: width * 0.8,
+          borderRadius: 22,
+          padding: "26px 24px",
+          background: "rgba(6, 11, 28, 0.78)",
+          border: "1px solid rgba(125, 170, 255, 0.35)",
+          boxShadow: "0 14px 40px rgba(0, 0, 0, 0.35)",
+        }}
+      >
+        <div style={{fontSize: 16, letterSpacing: 1.1, color: "#9BC7FF", marginBottom: 12}}>{topic.toUpperCase()}</div>
+        <div style={{fontSize: 44, lineHeight: 1.08, fontWeight: 800, color: "#F7FBFF"}}>{title}</div>
+        <div style={{marginTop: 12, fontSize: 18, color: "#FFCE9F", fontWeight: 700}}>{emphasis}</div>
+      </div>
+
+      <div
+        style={{
+          position: "absolute",
+          left: width * 0.08,
+          right: width * 0.08,
+          bottom: height * 0.09,
+          padding: "12px 16px",
+          borderRadius: 14,
+          background: "rgba(0,0,0,0.52)",
+          color: "#FFFFFF",
+          fontSize: 28,
+          fontWeight: 650,
+          lineHeight: 1.2,
+          textAlign: "center",
+        }}
+      >
+        {subtitle}
+      </div>
+    </AbsoluteFill>
+  );
+};`;
+}
+
 export async function researchWithOpenCode(
   topic: string,
   options?: { model?: string; detailed?: boolean }
 ): Promise<string> {
-  const model = options?.model || 'pro';
+  const model = options?.model || 'minimax';
   const detailed = options?.detailed ?? true;
 
   const prompt = detailed
@@ -664,7 +1444,7 @@ export async function generateImagePlanWithResearch(
   dialogueContext: string,
   options?: { model?: string }
 ): Promise<string> {
-  const model = options?.model || 'pro';
+  const model = options?.model || 'minimax';
 
   const prompt = `You are an expert visual content strategist for educational Instagram Reels.
 
@@ -711,57 +1491,65 @@ export async function generateAnimationPlanWithResearch(
     debugOutputDir?: string;
   }
 ): Promise<AnimationPlanGenerationResult> {
-  const model = options?.model || 'pro';
+  const model = options?.model || 'minimax';
   const cwd = options?.cwd || process.cwd();
   const debugOutputDir = options?.debugOutputDir;
   const videoDurationSeconds = options?.videoDurationSeconds ?? 60;
   const maxMoments = options?.maxMoments ?? 8;
+  const animationBudget = buildAnimationBudgetPlan(videoDurationSeconds, maxMoments);
+  const animationBudgetBlock = buildAnimationBudgetBlock(animationBudget);
   const requireExaForAnimation = process.env.OPENCODE_REQUIRE_EXA_FOR_ANIMATION !== '0';
   const requireRemotionSkillForAnimation = process.env.OPENCODE_REQUIRE_REMOTION_SKILL_FOR_ANIMATION !== '0';
 
-  const fallbackPrompt = `You are a senior short-form motion designer planning Remotion moments for a VERTICAL 9:16 educational video.
-Design visually distinct scenes, not repetitive text cards.
+  const fallbackTimelinePrompt = `You are a senior short-form video TIMELINE planner.
+Create only a concise moment plan first. Do NOT design visual style in this stage.
 
 TOPIC: "${topic}"
-VIDEO_DURATION_SECONDS: ${videoDurationSeconds}
-MAX_MOMENTS: ${maxMoments}
+VIDEO_DURATION_SECONDS: ${animationBudget.durationSeconds}
+MAX_MOMENTS: ${animationBudget.targetMomentCount}
+HARD_MOMENT_CAP: ${animationBudget.hardMomentCap}
+
+${animationBudgetBlock}
 
 DIALOGUE CONTEXT:
 ${dialogueContext || 'No subtitle context provided'}
 
 TASK:
-Create varied, high-clarity moments (not repeated title cards) that improve understanding and retention.
+Plan semantic moments only (time + idea) that match the script.
 
 Rules:
 - Output JSON only.
-- Use at most MAX_MOMENTS moments.
-- Keep each moment inside the total video duration.
-- Duration per moment: 1.0 to 6.0 seconds.
+- Use at most TARGET_MOMENTS and never exceed HARD_MOMENT_CAP.
+- Keep each moment strictly inside VIDEO_DURATION_SECONDS.
+- Duration per moment: 2.0 to 7.0 seconds.
 - Prefer non-overlapping moments with natural spacing.
-- One key idea per moment, concise and mobile-friendly.
-- Prefer varied moment types plus varied visual styles, motion styles, and layouts.
-- Avoid dense jargon, long sentences, tiny text, and generic repeated phrases.
+- Enforce ANIMATION_BUDGET exactly for coverage and density.
+- Keep intentional non-animation gaps; avoid full-time motion.
+- For videos <= 12s, strongly use 2 moments with one clear rest gap.
+- One key idea per moment, concise and specific.
+- content is semantic clip intent only, not design instructions.
+- Avoid dense jargon, long sentences, and generic repeated phrases.
 
 Return exactly this JSON shape:
 {
-  "videoDurationSeconds": ${videoDurationSeconds},
+  "videoDurationSeconds": ${animationBudget.durationSeconds},
   "moments": [
     {
       "start": 0.0,
-      "duration": 2.5,
+      "duration": 4.0,
       "type": "definition",
-      "content": "Pod: Smallest deployable unit",
-      "visualStyle": "spotlight",
-      "motion": "snap",
-      "layout": "center",
-      "emphasis": "Pod"
+      "content": "What Kubernetes does in one line"
     }
   ]
 }`;
 
-  const basePrompt = options?.promptTemplate || fallbackPrompt;
-  const preferredAgent = process.env.OPENCODE_ANIMATION_AGENT?.trim() || 'remotion';
-  let promptMentionsSkill = /\bskills?\b/i.test(basePrompt);
+  const timelinePrompt = validatePromptForRun(
+    'Animation timeline prompt',
+    options?.promptTemplate || fallbackTimelinePrompt
+  );
+  const preferredAgentEnv = process.env.OPENCODE_ANIMATION_AGENT?.trim();
+  const preferredAgent = preferredAgentEnv ? preferredAgentEnv : null;
+  let promptMentionsSkill = /\bskills?\b/i.test(timelinePrompt);
 
   const environment = await inspectOpenCodeEnvironment(cwd);
   opencodeInfo('Animation environment check', {
@@ -783,6 +1571,22 @@ Return exactly this JSON shape:
   if (requireRemotionSkillForAnimation && !environment.remotionSkillInstalled) {
     throw new Error('OpenCode skill "remotion-best-practices" is not installed.');
   }
+
+  opencodeInfo('Animation timeline request', {
+    topic: summarizeForLog(topic, 100),
+    model,
+    preferredAgent,
+    promptChars: timelinePrompt.length,
+    dialogueChars: dialogueContext.length,
+    videoDurationSeconds: animationBudget.durationSeconds,
+    maxMoments,
+    targetMoments: animationBudget.targetMomentCount,
+    hardMomentCap: animationBudget.hardMomentCap,
+    maxCoverageRatio: animationBudget.maxCoverageRatio,
+    promptMentionsSkill,
+    requireExaForAnimation,
+    requireRemotionSkillForAnimation,
+  });
 
   const runWithPreferredAgent = async (
     promptText: string,
@@ -831,30 +1635,65 @@ Return exactly this JSON shape:
 
     return { output, usedAgent, fallbackWithoutAgent };
   };
+  if (debugOutputDir) {
+    try {
+      fs.writeFileSync(path.join(debugOutputDir, 'animation-timeline-prompt.sent.txt'), timelinePrompt, 'utf8');
+    } catch (error) {
+      opencodeWarn('Failed to write timeline prompt snapshot', {
+        debugOutputDir,
+        error: summarizeForLog(error instanceof Error ? error.message : String(error), 180),
+      });
+    }
+  }
 
-  opencodeInfo('Animation plan request', {
-    topic: summarizeForLog(topic, 100),
-    model,
-    preferredAgent,
-    promptChars: basePrompt.length,
-    dialogueChars: dialogueContext.length,
-    videoDurationSeconds,
-    maxMoments,
-    promptMentionsSkill,
-    requireExaForAnimation,
-    requireRemotionSkillForAnimation,
+  let timelineRun = await runWithPreferredAgent(timelinePrompt, 'Animation timeline plan');
+  let timelineOutput = timelineRun.output;
+  let usedAgent: string | null = timelineRun.usedAgent;
+  let fallbackWithoutAgent = timelineRun.fallbackWithoutAgent;
+  let timelineDiagnostics = summarizeOpenCodeOutput(timelineOutput);
+
+  const timelineParsed = parseOpenCodeJSON<{ videoDurationSeconds?: number; moments?: unknown[] }>(timelineOutput);
+  const timelinePlan = normalizeTimelinePlanForBudget(timelineParsed, topic, animationBudget);
+
+  const timelinePlanJson = JSON.stringify(timelinePlan, null, 2);
+  const dialogueWindowsByMoment = buildDialogueWindowsByMoment(dialogueContext, timelinePlan);
+  if (debugOutputDir) {
+    try {
+      fs.writeFileSync(path.join(debugOutputDir, 'animation-timeline-plan.json'), timelinePlanJson, 'utf8');
+    } catch (error) {
+      opencodeWarn('Failed to write timeline plan snapshot', {
+        debugOutputDir,
+        error: summarizeForLog(error instanceof Error ? error.message : String(error), 180),
+      });
+    }
+  }
+
+  opencodeInfo('Animation timeline diagnostics', {
+    usedAgent,
+    fallbackWithoutAgent,
+    diagnostics: timelineDiagnostics,
+    parsedMoments: Array.isArray(timelinePlan?.moments) ? timelinePlan.moments.length : 0,
   });
 
-  const researchPromptBase = `You are preparing research notes for a Remotion animation planner.
+  const researchPromptBase = validatePromptForRun(
+    'Animation research prompt',
+    `You are preparing research notes for a Remotion animation direction workflow.
 TOPIC: "${topic}"
-VIDEO_DURATION_SECONDS: ${videoDurationSeconds}
+VIDEO_DURATION_SECONDS: ${animationBudget.durationSeconds}
+${animationBudgetBlock}
 DIALOGUE_CONTEXT:
 ${dialogueContext || 'No subtitle context provided'}
+TIMELINE_PLAN:
+${timelinePlanJson}
+DIALOGUE_WINDOWS_BY_MOMENT:
+${dialogueWindowsByMoment}
 
 MANDATORY:
 - Use Exa MCP tools to gather up-to-date factual references for this topic.
-- Collect at least 3 concise facts and 2 distinct visual angles.
-- Keep output concise and practical for scene planning.
+- Collect at least 4 concise facts and 3 distinct visual metaphor angles.
+- Include concrete nouns/objects that can be animated (systems, ports, dashboards, nodes, pipes, charts, logos, icons).
+- Keep output concise and practical for scene direction.
+- Respect ANIMATION_BUDGET: provide ideas that preserve rest beats and avoid constant motion.
 
 Return plain text with sections:
 Facts:
@@ -862,7 +1701,9 @@ Facts:
 Visual angles:
 - ...
 Source hints:
-- ...`;
+- ...`,
+    ['TOPIC:', 'TIMELINE_PLAN:', 'ANIMATION_BUDGET:', 'MANDATORY:']
+  );
   if (debugOutputDir) {
     try {
       fs.writeFileSync(path.join(debugOutputDir, 'animation-research-prompt.sent.txt'), researchPromptBase, 'utf8');
@@ -924,67 +1765,180 @@ You must call Exa MCP tools before answering. If you did not call Exa MCP tools 
     throw new Error('OpenCode did not use Exa MCP during animation research after retry.');
   }
 
-  const planningPrompt = `${basePrompt}
+  const directionPrompt = validatePromptForRun(
+    'Animation direction prompt',
+    `You are the Stage-2 Remotion animation direction agent.
+Your job: transform the timeline plan into non-generic, visual-first clip directions.
+Do not produce simple b-roll text cards.
 
 MANDATORY TOOLING REQUIREMENTS:
 - Use the "skill" tool to load and follow "remotion-best-practices".
-- Use the Exa-backed research context below; avoid generic wobble-card patterns.
-- Produce varied scenes with distinct visualStyle and layout values.
+- Use research context below.
+- Generate clip directions that feel bespoke and cinematic for short-form educational video.
+
+INPUTS:
+TOPIC: "${topic}"
+VIDEO_DURATION_SECONDS: ${animationBudget.durationSeconds}
+${animationBudgetBlock}
+DIALOGUE_CONTEXT:
+${dialogueContext || 'No subtitle context provided'}
+TIMELINE_PLAN_JSON:
+${timelinePlanJson}
+DIALOGUE_WINDOWS_BY_MOMENT:
+${dialogueWindowsByMoment}
 
 RESEARCH_CONTEXT:
 ${researchSummary || 'No research summary available.'}
-`;
+
+OUTPUT JSON ONLY:
+{
+  "videoDurationSeconds": ${animationBudget.durationSeconds},
+  "moments": [
+    {
+      "start": number,
+      "duration": number,
+      "type": string,
+      "subtitle": string,
+      "content": string,
+      "visualStyle": "kinetic-typography" | "split-comparison" | "flow-diagram" | "orbit-stat" | "warning-signal" | "spotlight" | "timeline-lane" | "stack-cards",
+      "motion": "snap" | "glide" | "pulse" | "orbit" | "sweep" | "parallax",
+      "layout": "center" | "split" | "left-focus" | "right-focus" | "radial" | "timeline",
+      "emphasis": string,
+      "animationPrompt": string
+    }
+  ]
+}
+
+RULES:
+- Keep the exact number/order/start/duration from TIMELINE_PLAN_JSON.
+- Keep moments at or below HARD_MOMENT_CAP from ANIMATION_BUDGET.
+- subtitle: short script-aligned cue (what narrator is saying).
+- content: visual concept label for rendering (NOT subtitle text repetition).
+- animationPrompt: 2-4 lines with scene objects, camera/motion intent, transitions, depth, icon/logo ideas, and at least one hold/low-motion beat.
+- Avoid generic wobble cards and plain text-on-card scenes.
+- Do not keep every second highly animated. Use pulse-and-rest cadence to maintain engagement.
+- For each moment, include at most 2 active beats and 1 intentional hold/readability window.
+- For <= 12s videos, keep to the timeline's low clip count (typically 2).
+- Prefer visual metaphors, system diagrams, UI-like motion, icons, and symbolic objects.
+- If brand/logo/icon helps, mention practical sources (Lucide, shadcn/ui iconography, Simple Icons, custom SVG).
+- Keep mobile readability and fast comprehension.
+- Return JSON only.`,
+    ['MANDATORY TOOLING REQUIREMENTS:', 'TIMELINE_PLAN_JSON:', 'ANIMATION_BUDGET:', 'RESEARCH_CONTEXT:']
+  );
+  const validatedDirectionPrompt = validatePromptForRun(
+    'Animation direction prompt (2025 vertical)',
+    buildAnimationDirectionPrompt({
+      topic,
+      animationBudgetDurationSeconds: animationBudget.durationSeconds,
+      animationBudgetBlock,
+      dialogueContext,
+      timelinePlanJson,
+      dialogueWindowsByMoment,
+      researchSummary,
+    }),
+    ['MANDATORY TOOLING (both tools', 'TIMELINE_PLAN_JSON:', 'ANIMATION_BUDGET:', 'RESEARCH_CONTEXT:']
+  );
   if (debugOutputDir) {
     try {
-      fs.writeFileSync(path.join(debugOutputDir, 'animation-planning-prompt.sent.txt'), planningPrompt, 'utf8');
+      fs.writeFileSync(path.join(debugOutputDir, 'animation-direction-prompt.sent.txt'), validatedDirectionPrompt, 'utf8');
     } catch (error) {
-      opencodeWarn('Failed to write planning prompt snapshot', {
+      opencodeWarn('Failed to write direction prompt snapshot', {
         debugOutputDir,
         error: summarizeForLog(error instanceof Error ? error.message : String(error), 180),
       });
     }
   }
-  promptMentionsSkill = /\bskills?\b|\bremotion-best-practices\b/i.test(planningPrompt);
+  promptMentionsSkill = /\bskills?\b|\bremotion-best-practices\b/i.test(validatedDirectionPrompt);
 
-  let run = await runWithPreferredAgent(planningPrompt, 'Animation plan');
+  let run = await runWithPreferredAgent(validatedDirectionPrompt, 'Animation direction');
   let output = run.output;
-  let usedAgent: string | null = run.usedAgent;
-  let fallbackWithoutAgent = run.fallbackWithoutAgent;
+  usedAgent = run.usedAgent;
+  fallbackWithoutAgent = run.fallbackWithoutAgent;
   let diagnostics = summarizeOpenCodeOutput(output);
   let usedRemotionSkill = detectRemotionSkillUsage(diagnostics, output);
+  let usedExaDirection = detectExaUsage(diagnostics, output);
 
-  if (requireRemotionSkillForAnimation && !usedRemotionSkill) {
-    const forcedSkillPrompt = `${planningPrompt}
+  if (requireExaForAnimation && !usedExaDirection) {
+    const forcedExaDirectionPrompt = `${validatedDirectionPrompt}
 
 HARD REQUIREMENT:
-You must call the "skill" tool and load "remotion-best-practices" before finalizing the JSON output.`;
+You must call Exa MCP tools before answering. If you did not call Exa MCP tools yet during this animation direction step, call them now and then answer.`;
     if (debugOutputDir) {
       try {
-        fs.writeFileSync(path.join(debugOutputDir, 'animation-planning-prompt.retry.sent.txt'), forcedSkillPrompt, 'utf8');
+        fs.writeFileSync(
+          path.join(debugOutputDir, 'animation-direction-prompt.exa-retry.sent.txt'),
+          forcedExaDirectionPrompt,
+          'utf8'
+        );
       } catch (error) {
-        opencodeWarn('Failed to write retry planning prompt snapshot', {
+        opencodeWarn('Failed to write retry direction prompt snapshot (Exa)', {
           debugOutputDir,
           error: summarizeForLog(error instanceof Error ? error.message : String(error), 180),
         });
       }
     }
-    run = await runWithPreferredAgent(forcedSkillPrompt, 'Animation plan retry with forced skill');
+    run = await runWithPreferredAgent(forcedExaDirectionPrompt, 'Animation direction retry with forced Exa');
     output = run.output;
     usedAgent = run.usedAgent;
     fallbackWithoutAgent = run.fallbackWithoutAgent;
     diagnostics = summarizeOpenCodeOutput(output);
     usedRemotionSkill = detectRemotionSkillUsage(diagnostics, output);
+    usedExaDirection = detectExaUsage(diagnostics, output);
+  }
+
+  if (requireExaForAnimation && !usedExaDirection) {
+    throw new Error('OpenCode did not use Exa MCP during animation direction after retry.');
+  }
+
+  if (requireRemotionSkillForAnimation && !usedRemotionSkill) {
+    const forcedSkillPrompt = `${validatedDirectionPrompt}
+
+HARD REQUIREMENT:
+You must call the "skill" tool and load "remotion-best-practices" before finalizing the JSON output.`;
+    if (debugOutputDir) {
+      try {
+        fs.writeFileSync(path.join(debugOutputDir, 'animation-direction-prompt.retry.sent.txt'), forcedSkillPrompt, 'utf8');
+      } catch (error) {
+        opencodeWarn('Failed to write retry direction prompt snapshot', {
+          debugOutputDir,
+          error: summarizeForLog(error instanceof Error ? error.message : String(error), 180),
+        });
+      }
+    }
+    run = await runWithPreferredAgent(forcedSkillPrompt, 'Animation direction retry with forced skill');
+    output = run.output;
+    usedAgent = run.usedAgent;
+    fallbackWithoutAgent = run.fallbackWithoutAgent;
+    diagnostics = summarizeOpenCodeOutput(output);
+    usedRemotionSkill = detectRemotionSkillUsage(diagnostics, output);
+    usedExaDirection = detectExaUsage(diagnostics, output);
   }
 
   if (requireRemotionSkillForAnimation && !usedRemotionSkill) {
     throw new Error('OpenCode did not use the remotion-best-practices skill after retry.');
   }
 
+  const alignedDirection = alignDirectionOutputToTimeline(output, timelinePlan, dialogueContext);
+  output = alignedDirection.alignedOutput;
+  if (debugOutputDir) {
+    try {
+      fs.writeFileSync(path.join(debugOutputDir, 'animation-direction-output.aligned.json'), output, 'utf8');
+    } catch (error) {
+      opencodeWarn('Failed to write aligned direction output snapshot', {
+        debugOutputDir,
+        error: summarizeForLog(error instanceof Error ? error.message : String(error), 180),
+      });
+    }
+  }
+
   opencodeInfo('Animation plan response diagnostics', {
     usedAgent,
     fallbackWithoutAgent,
     usedExaResearch,
+    usedExaDirection,
     usedRemotionSkill,
+    directionAlignedToTimeline: true,
+    directionAlignmentUsedFallback: alignedDirection.usedFallback,
     researchDiagnostics,
     diagnostics,
   });
@@ -996,9 +1950,391 @@ You must call the "skill" tool and load "remotion-best-practices" before finaliz
     fallbackWithoutAgent,
     promptMentionsSkill,
     usedExaResearch,
+    usedExaDirection,
     usedRemotionSkill,
     researchSummary,
     researchDiagnostics,
+  };
+}
+
+function extractGeneratedClipCode(output: string): string | null {
+  const normalizeCodeCandidate = (value: string): string => {
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    if (trimmed.includes('\\n') && !trimmed.includes('\n')) {
+      return trimmed
+        .replace(/\\r\\n/g, '\n')
+        .replace(/\\n/g, '\n')
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, '\\')
+        .trim();
+    }
+    return trimmed;
+  };
+
+  const looksLikeGeneratedClipModule = (value: string): boolean => {
+    const candidate = normalizeCodeCandidate(value);
+    if (!candidate) return false;
+    return (
+      /\bexport\s+const\s+GeneratedClip\b/.test(candidate) &&
+      /from\s+["']remotion["']/.test(candidate) &&
+      (/\bReact\.FC\b/.test(candidate) || /\buseCurrentFrame\b/.test(candidate) || /\buseVideoConfig\b/.test(candidate))
+    );
+  };
+
+  const parsed = parseOpenCodeJSON<{ componentCode?: unknown; code?: unknown }>(output);
+  let fallbackParsedCandidate = '';
+  if (parsed && typeof parsed === 'object') {
+    const parsedCandidates = [parsed.componentCode, parsed.code]
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => normalizeCodeCandidate(item))
+      .filter(Boolean);
+    if (parsedCandidates.length > 0) {
+      fallbackParsedCandidate = parsedCandidates[0];
+      const validParsed = parsedCandidates.find((item) => looksLikeGeneratedClipModule(item));
+      if (validParsed) return validParsed;
+    }
+  }
+
+  const text = extractEventStreamText(output) || output;
+  const fencedBlocks = [...text.matchAll(/```(?:tsx|ts|jsx|js)?\s*([\s\S]*?)\s*```/gi)];
+  for (const block of fencedBlocks) {
+    const candidate = normalizeCodeCandidate(block?.[1] || '');
+    if (looksLikeGeneratedClipModule(candidate)) return candidate;
+  }
+
+  const textCandidate = normalizeCodeCandidate(text);
+  if (looksLikeGeneratedClipModule(textCandidate)) return textCandidate;
+
+  if (fallbackParsedCandidate) return fallbackParsedCandidate;
+  const firstFenced = fencedBlocks[0]?.[1];
+  if (typeof firstFenced === 'string' && firstFenced.trim()) return normalizeCodeCandidate(firstFenced);
+  return textCandidate || null;
+}
+
+export async function generateRemotionClipCodeWithSkill(
+  params: {
+    topic: string;
+    dialogueContext: string;
+    moment: {
+      index: number;
+      totalMoments?: number;
+      start: number;
+      duration: number;
+      type: string;
+      content: string;
+      subtitle?: string;
+      animationPrompt?: string;
+      emphasis?: string;
+      visualStyle?: string;
+      motion?: string;
+      layout?: string;
+    };
+    researchSummary?: string | null;
+    clipType?: string;
+  },
+  options?: {
+    model?: string;
+    cwd?: string;
+    debugOutputDir?: string;
+  }
+): Promise<AnimationClipCodeGenerationResult> {
+  const model = options?.model || 'minimax';
+  const cwd = options?.cwd || process.cwd();
+  const debugOutputDir = options?.debugOutputDir;
+  const requireExaForAnimation = process.env.OPENCODE_REQUIRE_EXA_FOR_ANIMATION !== '0';
+  const requireRemotionSkill = process.env.OPENCODE_REQUIRE_REMOTION_SKILL_FOR_ANIMATION !== '0';
+  const preferredAgentEnv = process.env.OPENCODE_ANIMATION_AGENT?.trim();
+  const preferredAgent = preferredAgentEnv ? preferredAgentEnv : null;
+
+  const environment = await inspectOpenCodeEnvironment(cwd);
+  if (!environment.opencodeAvailable) {
+    throw new Error(
+      `OpenCode CLI is unavailable for clip code generation. Command=${environment.opencodeCommand}.`
+    );
+  }
+  if (requireExaForAnimation && !environment.exaConnected) {
+    throw new Error('OpenCode MCP server "exa" is not connected.');
+  }
+  if (requireRemotionSkill && !environment.remotionSkillInstalled) {
+    throw new Error('OpenCode skill "remotion-best-practices" is not installed.');
+  }
+
+  const prompt = validatePromptForRun(
+    `Clip code prompt for moment ${params.moment.index}`,
+    buildClipCodePrompt(params, {
+      requireExa: requireExaForAnimation,
+      requireRemotionSkill,
+      compact: false,
+    }),
+    ['MOMENT_JSON:', 'OUTPUT JSON ONLY:']
+  );
+
+  const compactPrompt = validatePromptForRun(
+    `Compact clip code prompt for moment ${params.moment.index}`,
+    buildClipCodePrompt(params, {
+      requireExa: requireExaForAnimation,
+      requireRemotionSkill,
+      compact: true,
+    }),
+    ['MOMENT_JSON:', 'OUTPUT JSON ONLY:']
+  );
+  const ultraCompactPrompt = validatePromptForRun(
+    `Ultra compact clip code prompt for moment ${params.moment.index}`,
+    `Generate Remotion TSX for one clip.
+TOPIC: "${limitChars(params.topic, 80)}"
+MOMENT_JSON:
+${JSON.stringify(params.moment, null, 2)}
+RULES:
+- Return JSON only: {"componentCode":"..."}.
+- Code must export const GeneratedClip and GeneratedClipProps.
+- Use only react + remotion imports.
+- Frame-driven motion only. Keep subtitle in lower safe area.
+${requireRemotionSkill ? '- Load remotion-best-practices skill.' : ''}
+${requireExaForAnimation ? '- Call Exa MCP before final answer.' : ''}
+OUTPUT JSON ONLY.`,
+    ['MOMENT_JSON:', 'OUTPUT JSON ONLY.']
+  );
+  if (debugOutputDir) {
+    try {
+      fs.writeFileSync(path.join(debugOutputDir, `clip-code-prompt-${params.moment.index}.sent.txt`), prompt, 'utf8');
+      fs.writeFileSync(path.join(debugOutputDir, `clip-code-prompt-${params.moment.index}.compact.sent.txt`), compactPrompt, 'utf8');
+      fs.writeFileSync(
+        path.join(debugOutputDir, `clip-code-prompt-${params.moment.index}.ultra-compact.sent.txt`),
+        ultraCompactPrompt,
+        'utf8'
+      );
+    } catch (error) {
+      opencodeWarn('Failed to write clip code prompt snapshot', {
+        debugOutputDir,
+        index: params.moment.index,
+        error: summarizeForLog(error instanceof Error ? error.message : String(error), 160),
+      });
+    }
+  }
+
+  const runWithPreferredAgent = async (
+    promptText: string
+  ): Promise<{ output: string; usedAgent: string | null; fallbackWithoutAgent: boolean }> => {
+    if (preferredAgent) {
+      try {
+        const output = await opencodeRun({
+          prompt: promptText,
+          model,
+          format: 'json',
+          quiet: true,
+          agent: preferredAgent,
+          cwd,
+          earlyCompleteForClipCode: true,
+        });
+        return { output, usedAgent: preferredAgent, fallbackWithoutAgent: false };
+      } catch (error) {
+        opencodeWarn('Clip code run with explicit agent failed; retrying without agent', {
+          preferredAgent,
+          index: params.moment.index,
+          error: summarizeForLog(error instanceof Error ? error.message : String(error), 240),
+        });
+      }
+    }
+
+    const output = await opencodeRun({
+      prompt: promptText,
+      model,
+      format: 'json',
+      quiet: true,
+      cwd,
+      earlyCompleteForClipCode: true,
+    });
+    return { output, usedAgent: null, fallbackWithoutAgent: Boolean(preferredAgent) };
+  };
+
+  let activePrompt = prompt;
+  let usedCompactPrompt = false;
+  let usedUltraCompactPrompt = false;
+  let degradedMode = false;
+
+  const safeRunPrompt = async (
+    promptText: string,
+    label: string
+  ): Promise<{ output: string; usedAgent: string | null; fallbackWithoutAgent: boolean } | null> => {
+    try {
+      return await runWithPreferredAgent(promptText);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!isNoOutputTimeoutError(message)) throw error;
+      degradedMode = true;
+      opencodeWarn('Clip code run timed out with no output', {
+        index: params.moment.index,
+        label,
+        promptChars: promptText.length,
+        message: summarizeForLog(message, 220),
+      });
+      return null;
+    }
+  };
+
+  let run = await safeRunPrompt(activePrompt, 'primary');
+  if (!run) {
+    activePrompt = compactPrompt;
+    usedCompactPrompt = true;
+    run = await safeRunPrompt(activePrompt, 'compact-fallback');
+  }
+  if (!run) {
+    activePrompt = ultraCompactPrompt;
+    usedUltraCompactPrompt = true;
+    run = await safeRunPrompt(activePrompt, 'ultra-compact-fallback');
+  }
+  if (!run) {
+    const fallbackCode = buildDeterministicFallbackClipCode(params);
+    const fallbackOutput = JSON.stringify(
+      {
+        componentCode: fallbackCode,
+        degradedMode: true,
+        reason: 'all_opencode_runs_timed_out',
+      },
+      null,
+      2
+    );
+    const fallbackDiagnostics = summarizeOpenCodeOutput(fallbackOutput);
+    opencodeWarn('Using deterministic fallback clip code after repeated no-output timeouts', {
+      index: params.moment.index,
+      promptChars: activePrompt.length,
+    });
+    return {
+      output: fallbackOutput,
+      code: fallbackCode,
+      diagnostics: fallbackDiagnostics,
+      usedAgent: null,
+      fallbackWithoutAgent: Boolean(preferredAgent),
+      usedExaClipCode: false,
+      usedRemotionSkill: false,
+    };
+  }
+
+  let output = run.output;
+  let diagnostics = summarizeOpenCodeOutput(output);
+  let usedExaClipCode = detectExaUsage(diagnostics, output);
+  let usedRemotionSkill = detectRemotionSkillUsage(diagnostics, output);
+
+  if (requireExaForAnimation && !usedExaClipCode && !degradedMode) {
+    const retryExaPrompt = `${activePrompt}
+
+HARD REQUIREMENT:
+You must call Exa MCP tools before final JSON. If you did not call Exa MCP tools yet, call them now and then answer.`;
+    if (debugOutputDir) {
+      try {
+        fs.writeFileSync(
+          path.join(debugOutputDir, `clip-code-prompt-${params.moment.index}.exa-retry.sent.txt`),
+          retryExaPrompt,
+          'utf8'
+        );
+      } catch (error) {
+        opencodeWarn('Failed to write Exa retry clip code prompt snapshot', {
+          debugOutputDir,
+          index: params.moment.index,
+          error: summarizeForLog(error instanceof Error ? error.message : String(error), 160),
+        });
+      }
+    }
+    const retryRun = await safeRunPrompt(retryExaPrompt, 'exa-retry');
+    if (retryRun) {
+      run = retryRun;
+      output = run.output;
+      diagnostics = summarizeOpenCodeOutput(output);
+      usedExaClipCode = detectExaUsage(diagnostics, output);
+      usedRemotionSkill = detectRemotionSkillUsage(diagnostics, output);
+    }
+  }
+
+  if (requireExaForAnimation && !usedExaClipCode && !degradedMode) {
+    throw new Error('OpenCode did not use Exa MCP during clip code generation after retry.');
+  }
+
+  if (requireRemotionSkill && !usedRemotionSkill && !degradedMode) {
+    const retryPrompt = `${activePrompt}
+
+HARD REQUIREMENT:
+You must call the "skill" tool and load "remotion-best-practices" before final JSON.
+${requireExaForAnimation ? 'You must also call Exa MCP tools before final JSON.' : ''}`;
+    if (debugOutputDir) {
+      try {
+        fs.writeFileSync(
+          path.join(debugOutputDir, `clip-code-prompt-${params.moment.index}.retry.sent.txt`),
+          retryPrompt,
+          'utf8'
+        );
+      } catch (error) {
+        opencodeWarn('Failed to write retry clip code prompt snapshot', {
+          debugOutputDir,
+          index: params.moment.index,
+          error: summarizeForLog(error instanceof Error ? error.message : String(error), 160),
+        });
+      }
+    }
+    const retryRun = await safeRunPrompt(retryPrompt, 'skill-retry');
+    if (retryRun) {
+      run = retryRun;
+      output = run.output;
+      diagnostics = summarizeOpenCodeOutput(output);
+      usedExaClipCode = detectExaUsage(diagnostics, output);
+      usedRemotionSkill = detectRemotionSkillUsage(diagnostics, output);
+    }
+  }
+
+  if (requireExaForAnimation && !usedExaClipCode && !degradedMode) {
+    throw new Error('OpenCode did not use Exa MCP during clip code generation after skill retry.');
+  }
+
+  if (requireRemotionSkill && !usedRemotionSkill && !degradedMode) {
+    throw new Error('OpenCode did not use the remotion-best-practices skill for clip code generation.');
+  }
+  if ((requireExaForAnimation && !usedExaClipCode) || (requireRemotionSkill && !usedRemotionSkill)) {
+    opencodeWarn('Proceeding in degraded clip-code mode due timeout-related tool unavailability', {
+      index: params.moment.index,
+      usedExaClipCode,
+      usedRemotionSkill,
+      degradedMode,
+    });
+  }
+
+  let code = extractGeneratedClipCode(output);
+  if (!code || !/\bexport\s+const\s+GeneratedClip\b/.test(code)) {
+    degradedMode = true;
+    code = buildDeterministicFallbackClipCode(params);
+    output = JSON.stringify(
+      {
+        componentCode: code,
+        degradedMode: true,
+        reason: 'invalid_or_missing_component_code',
+      },
+      null,
+      2
+    );
+    diagnostics = summarizeOpenCodeOutput(output);
+    opencodeWarn('Using deterministic fallback clip code due invalid model output', {
+      index: params.moment.index,
+    });
+  }
+
+  opencodeInfo('Clip code generation diagnostics', {
+    index: params.moment.index,
+    usedCompactPrompt,
+    usedUltraCompactPrompt,
+    degradedMode,
+    promptChars: activePrompt.length,
+    usedExaClipCode,
+    usedRemotionSkill,
+    diagnostics,
+  });
+
+  return {
+    output,
+    code,
+    diagnostics,
+    usedAgent: run.usedAgent,
+    fallbackWithoutAgent: run.fallbackWithoutAgent,
+    usedExaClipCode,
+    usedRemotionSkill,
   };
 }
 
@@ -1007,7 +2343,7 @@ export async function generateSFXPlanWithResearch(
   overlayTimings: Array<{ start: number; description: string }>,
   options?: { model?: string; videoDuration?: number }
 ): Promise<string> {
-  const model = options?.model || 'pro';
+  const model = options?.model || 'minimax';
   const maxTimestamp = overlayTimings.length > 0 ? Math.max(...overlayTimings.map((t) => t.start)) : 15;
   const videoDuration = options?.videoDuration || maxTimestamp + 5;
 

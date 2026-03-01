@@ -2,25 +2,26 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import type { OverlayClip, SubtitleClip, Track } from '../schema/project';
-import { generateAnimationPlanWithResearch, parseOpenCodeJSON } from '../agents/gemini3agent';
+import {
+  generateAnimationPlanWithResearch,
+  generateRemotionClipCodeWithSkill,
+  parseOpenCodeJSON,
+} from '../agents/gemini3agent';
 
 const REMOTION_ROOT_DIR = path.join(process.cwd(), 'storage', 'remotion-animation');
 const RENDERED_ANIMATIONS_ROOT_DIR = path.join(process.cwd(), 'storage', 'rendered-animations');
-const PROMPT_PATHS = [
-  path.join(REMOTION_ROOT_DIR, 'ANIMATION_OVERLAY_PROMPT.md'),
-  path.join(process.cwd(), 'backend1', 'storage', 'remotion-animation', 'ANIMATION_OVERLAY_PROMPT.md'),
-];
-const REMOTION_COMPOSITION_ID = 'StewiePeterOverlay';
+const REMOTION_COMPOSITION_ID = 'GeneratedClip';
 const REMOTION_FPS = 30;
 const PLAN_FILENAME = 'animation-plan.json';
 const REMOTION_VERSION = '4.0.419';
+const REMOTION_GENERATED_CLIP_FILE = path.join(REMOTION_ROOT_DIR, 'src', 'GeneratedClip.tsx');
 
 const DEFAULT_OVERLAY_X = 0.5;
 const DEFAULT_OVERLAY_Y = 0.65;
 const DEFAULT_OVERLAY_SCALE = 0.5;
 const MAX_MOMENTS = 8;
+const MIN_MOMENT_DURATION_SECONDS = 1.2;
 const ANIMATION_DEBUG_ENABLED = process.env.ANIMATION_DEBUG === '1';
-const PROMPT_SNAPSHOT_FILENAME = 'animation-prompt.sent.txt';
 const OPENCODE_OUTPUT_FILENAME = 'animation-opencode.raw.txt';
 const DEBUG_TRACE_FILENAME = 'animation-debug-trace.json';
 const GENERIC_CONTENT_PATTERNS = [
@@ -41,10 +42,12 @@ export type AnimationMoment = {
   duration: number;
   type: string;
   content: string;
+  subtitle?: string;
   visualStyle?: string;
   motion?: string;
   layout?: string;
   emphasis?: string;
+  animationPrompt?: string;
 };
 
 export type AnimationPlan = {
@@ -197,18 +200,22 @@ function buildDialogueContext(subtitleClips: SubtitleClip[]): string {
     .join('\n');
 }
 
-function fallbackMomentsFromSubtitles(subtitleClips: SubtitleClip[], videoDurationSeconds: number): AnimationMoment[] {
+function fallbackMomentsFromSubtitles(
+  subtitleClips: SubtitleClip[],
+  videoDurationSeconds: number,
+  maxMoments: number
+): AnimationMoment[] {
   if (subtitleClips.length === 0 || videoDurationSeconds <= 0) return [];
 
   const sorted = [...subtitleClips].sort((a, b) => a.start - b.start);
-  const desired = clamp(Math.ceil(videoDurationSeconds / 12), 1, MAX_MOMENTS);
+  const desired = clamp(Math.ceil(videoDurationSeconds / 12), 1, Math.max(1, maxMoments));
   const stride = Math.max(1, Math.floor(sorted.length / desired));
   const moments: AnimationMoment[] = [];
   const fallbackStyles = ['spotlight', 'split-comparison', 'flow-diagram', 'orbit-stat', 'timeline-lane'];
   const fallbackMotion = ['snap', 'glide', 'sweep', 'orbit', 'parallax'];
   const fallbackLayout = ['center', 'split', 'timeline', 'radial', 'left-focus'];
 
-  for (let i = 0; i < sorted.length && moments.length < MAX_MOMENTS; i += stride) {
+  for (let i = 0; i < sorted.length && moments.length < Math.max(1, maxMoments); i += stride) {
     const clip = sorted[i];
     const start = clamp(clip.start, 0, Math.max(0, videoDurationSeconds - 0.05));
     const maxDuration = Math.max(0.2, videoDurationSeconds - start);
@@ -217,18 +224,25 @@ function fallbackMomentsFromSubtitles(subtitleClips: SubtitleClip[], videoDurati
       start,
       duration,
       type: 'callout',
-      content: cleanText(clip.text).slice(0, 120) || `Animation moment ${moments.length + 1}`,
+      subtitle: cleanText(clip.text).slice(0, 120) || `Animation moment ${moments.length + 1}`,
+      content: cleanText(clip.text).split(' ').slice(0, 5).join(' ') || `Animation moment ${moments.length + 1}`,
       visualStyle: fallbackStyles[moments.length % fallbackStyles.length],
       motion: fallbackMotion[moments.length % fallbackMotion.length],
       layout: fallbackLayout[moments.length % fallbackLayout.length],
       emphasis: cleanText(clip.text).split(' ').slice(0, 2).join(' '),
+      animationPrompt: `Use abstract concept visuals for: ${cleanText(clip.text).slice(0, 100)}`,
     });
   }
 
   return moments.sort((a, b) => a.start - b.start);
 }
 
-function normalizePlan(raw: unknown, subtitleClips: SubtitleClip[], videoDurationSeconds: number): AnimationPlan {
+function normalizePlan(
+  raw: unknown,
+  subtitleClips: SubtitleClip[],
+  videoDurationSeconds: number,
+  maxMoments: number
+): AnimationPlan {
   const fallbackDuration = Math.max(1, videoDurationSeconds || 1);
   const asObj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null;
 
@@ -279,10 +293,18 @@ function normalizePlan(raw: unknown, subtitleClips: SubtitleClip[], videoDuratio
       'callout';
     const content =
       (typeof moment.content === 'string' && moment.content) ||
+      (typeof moment.visualContent === 'string' && moment.visualContent) ||
+      (typeof moment.sceneContent === 'string' && moment.sceneContent) ||
+      (typeof moment.clipConcept === 'string' && moment.clipConcept) ||
       (typeof moment.headline === 'string' && moment.headline) ||
       (typeof moment.text === 'string' && moment.text) ||
       (typeof moment.description === 'string' && moment.description) ||
       (typeof moment.title === 'string' && moment.title) ||
+      '';
+    const subtitle =
+      (typeof moment.subtitle === 'string' && moment.subtitle) ||
+      (typeof moment.subtitleContent === 'string' && moment.subtitleContent) ||
+      (typeof moment.scriptLine === 'string' && moment.scriptLine) ||
       '';
     const normalizedContent = cleanText(content).slice(0, 180);
     if (isGenericMomentContent(normalizedContent)) continue;
@@ -303,16 +325,23 @@ function normalizePlan(raw: unknown, subtitleClips: SubtitleClip[], videoDuratio
       (typeof moment.emphasis === 'string' && moment.emphasis) ||
       (typeof moment.keyword === 'string' && moment.keyword) ||
       '';
+    const animationPrompt =
+      (typeof moment.animationPrompt === 'string' && moment.animationPrompt) ||
+      (typeof moment.scenePrompt === 'string' && moment.scenePrompt) ||
+      (typeof moment.directionPrompt === 'string' && moment.directionPrompt) ||
+      '';
 
     normalized.push({
       start,
       duration,
       type: cleanText(type).slice(0, 40) || 'callout',
       content: normalizedContent || 'Animation moment',
+      subtitle: cleanText(subtitle).slice(0, 220) || undefined,
       visualStyle: cleanText(visualStyle).slice(0, 40) || undefined,
       motion: cleanText(motion).slice(0, 30) || undefined,
       layout: cleanText(layout).slice(0, 24) || undefined,
       emphasis: cleanText(emphasis).slice(0, 60) || undefined,
+      animationPrompt: cleanText(animationPrompt).slice(0, 400) || undefined,
     });
   }
 
@@ -324,70 +353,115 @@ function normalizePlan(raw: unknown, subtitleClips: SubtitleClip[], videoDuratio
       const startGap = Math.abs(moment.start - prev.start);
       return startGap > 0.1 || moment.content !== prev.content;
     })
-    .slice(0, MAX_MOMENTS);
+    .slice(0, Math.max(1, maxMoments));
 
-  const moments = deduped.length > 0 ? deduped : fallbackMomentsFromSubtitles(subtitleClips, safeDuration);
-  return { videoDurationSeconds: safeDuration, moments };
+  const moments =
+    deduped.length > 0 ? deduped : fallbackMomentsFromSubtitles(subtitleClips, safeDuration, maxMoments);
+  return { videoDurationSeconds: safeDuration, moments: applyAnimationCadence(moments, safeDuration) };
 }
 
-function readPromptTemplate(): { template: string; sourcePath: string | null } {
-  for (const promptPath of PROMPT_PATHS) {
-    if (fs.existsSync(promptPath)) {
+function getAnimationCoverageLimit(videoDurationSeconds: number): number {
+  if (videoDurationSeconds <= 12) return 0.6;
+  if (videoDurationSeconds <= 20) return 0.56;
+  if (videoDurationSeconds <= 40) return 0.5;
+  return 0.45;
+}
+
+function getMinimumGapSeconds(videoDurationSeconds: number): number {
+  if (videoDurationSeconds <= 12) return 0.7;
+  if (videoDurationSeconds <= 20) return 0.8;
+  return 0.9;
+}
+
+function applyAnimationCadence(moments: AnimationMoment[], videoDurationSeconds: number): AnimationMoment[] {
+  if (moments.length === 0 || videoDurationSeconds <= 0) return moments;
+
+  const minGap = getMinimumGapSeconds(videoDurationSeconds);
+  const perMomentMax = videoDurationSeconds <= 12 ? 4 : videoDurationSeconds <= 20 ? 4.5 : 5.5;
+  const minDuration = videoDurationSeconds <= 12 ? 1.2 : 1.4;
+  const maxTotalAnimated = videoDurationSeconds * getAnimationCoverageLimit(videoDurationSeconds);
+
+  const arranged = [...moments]
+    .sort((a, b) => a.start - b.start)
+    .map((moment) => {
+      const maxInsideTimeline = Math.max(minDuration, videoDurationSeconds - moment.start);
       return {
-        template: fs.readFileSync(promptPath, 'utf8'),
-        sourcePath: promptPath,
+        ...moment,
+        duration: clamp(moment.duration, minDuration, Math.min(perMomentMax, maxInsideTimeline)),
       };
+    });
+
+  const enforceSequentialCaps = (): void => {
+    for (let i = 0; i < arranged.length - 1; i++) {
+      const current = arranged[i];
+      const next = arranged[i + 1];
+      const maxDurationBeforeNext = Math.max(MIN_MOMENT_DURATION_SECONDS, next.start - current.start - minGap);
+      current.duration = Math.min(current.duration, maxDurationBeforeNext);
     }
-  }
-  return {
-    template: `You are a short-form Remotion animation planner for VERTICAL 9:16 educational videos.
-Plan visually distinct motion scenes, not repetitive text cards.
-
-TOPIC: {{TOPIC}}
-VIDEO_DURATION_SECONDS: {{VIDEO_DURATION_SECONDS}}
-MAX_MOMENTS: {{MAX_MOMENTS}}
-
-DIALOGUE_CONTEXT:
-{{DIALOGUE_CONTEXT}}
-
-Return JSON only:
-{
-  "videoDurationSeconds": number,
-  "moments": [
-    {
-      "start": number,
-      "duration": number,
-      "type": string,
-      "content": string,
-      "visualStyle": string,
-      "motion": string,
-      "layout": string,
-      "emphasis": string
-    }
-  ]
-}
-
-Rules:
-- Output JSON only (no markdown/prose).
-- Use at most MAX_MOMENTS moments.
-- Every moment must stay inside the video duration.
-- Duration per moment: 1.0 to 6.0 seconds.
-- Prefer non-overlapping moments and natural spacing across the timeline.
-- One core idea per moment; avoid repeated generic title cards.
-- Design for fast mobile readability (short, scannable text).
-- Prefer varied moment types and varied visualStyle/layout values across the plan.
-- Avoid long sentences, dense jargon, code snippets, and tiny-text concepts.`,
-    sourcePath: null,
+    const last = arranged[arranged.length - 1];
+    const maxInsideTimeline = Math.max(MIN_MOMENT_DURATION_SECONDS, videoDurationSeconds - last.start);
+    last.duration = Math.min(last.duration, maxInsideTimeline);
   };
+
+  enforceSequentialCaps();
+
+  let totalAnimated = arranged.reduce((sum, moment) => sum + moment.duration, 0);
+  if (totalAnimated > maxTotalAnimated) {
+    const scale = maxTotalAnimated / totalAnimated;
+    for (const moment of arranged) {
+      moment.duration = Math.max(MIN_MOMENT_DURATION_SECONDS, moment.duration * scale);
+    }
+    enforceSequentialCaps();
+    totalAnimated = arranged.reduce((sum, moment) => sum + moment.duration, 0);
+
+    if (totalAnimated > maxTotalAnimated) {
+      let excess = totalAnimated - maxTotalAnimated;
+      const adjustable = arranged
+        .map((moment, index) => ({ index, slack: Math.max(0, moment.duration - MIN_MOMENT_DURATION_SECONDS) }))
+        .sort((a, b) => b.slack - a.slack);
+      for (const item of adjustable) {
+        if (excess <= 0) break;
+        const reducible = Math.min(arranged[item.index].duration - MIN_MOMENT_DURATION_SECONDS, excess);
+        if (reducible <= 0) continue;
+        arranged[item.index].duration -= reducible;
+        excess -= reducible;
+      }
+      enforceSequentialCaps();
+    }
+  }
+
+  return arranged.map((moment) => ({
+    ...moment,
+    start: Number(moment.start.toFixed(2)),
+    duration: Number(moment.duration.toFixed(2)),
+  }));
 }
 
-function applyPromptTemplate(template: string, values: Record<string, string>): string {
-  let result = template;
-  for (const [key, value] of Object.entries(values)) {
-    const pattern = new RegExp(`{{\\s*${key}\\s*}}`, 'g');
-    result = result.replace(pattern, value);
-  }
-  return result;
+function computeTargetMomentCount(videoDurationSeconds: number): number {
+  if (videoDurationSeconds <= 12) return 2;
+  if (videoDurationSeconds <= 20) return 3;
+  if (videoDurationSeconds <= 35) return 4;
+  return clamp(Math.round(videoDurationSeconds / 8), 4, MAX_MOMENTS);
+}
+
+function cleanGeneratedCode(raw: string): string {
+  const text = raw.trim();
+  const fenced = text.match(/```(?:tsx|ts|jsx|js)?\s*([\s\S]*?)\s*```/i);
+  const candidate = fenced?.[1] ? fenced[1].trim() : text;
+  return candidate.replace(/\r\n/g, '\n').trim();
+}
+
+function looksLikeGeneratedClipCode(source: string): boolean {
+  return (
+    /\bexport\s+const\s+GeneratedClip\b/.test(source) &&
+    /from\s+["']remotion["']/.test(source) &&
+    /useCurrentFrame/.test(source)
+  );
+}
+
+function writeGeneratedClipSource(source: string): void {
+  ensureDir(path.dirname(REMOTION_GENERATED_CLIP_FILE));
+  fs.writeFileSync(REMOTION_GENERATED_CLIP_FILE, source, 'utf8');
 }
 
 function ensureDir(dirPath: string): void {
@@ -501,10 +575,12 @@ async function renderMomentWithRemotion(
   const props = {
     type: moment.type,
     content: moment.content,
+    subtitle: moment.subtitle,
     visualStyle: moment.visualStyle,
     motion: moment.motion,
     layout: moment.layout,
     emphasis: moment.emphasis,
+    animationPrompt: moment.animationPrompt,
     topic,
     seed: index + 1,
     durationSeconds: moment.duration,
@@ -593,40 +669,30 @@ export async function generateAnimationPlanAndRender(params: {
   resetDir(renderedProjectDir);
 
   const dialogueContext = buildDialogueContext(subtitleClips);
-  const { template: promptTemplate, sourcePath: promptSourcePath } = readPromptTemplate();
-  const finalPrompt = applyPromptTemplate(promptTemplate, {
-    TOPIC: topic,
-    VIDEO_DURATION_SECONDS: String(videoDurationSeconds),
-    MAX_MOMENTS: String(MAX_MOMENTS),
-    DIALOGUE_CONTEXT: dialogueContext,
-  });
-  const promptMentionsSkill = /\bskills?\b/i.test(finalPrompt);
-  const promptSnapshotPath = path.join(remotionProjectDir, PROMPT_SNAPSHOT_FILENAME);
-  fs.writeFileSync(promptSnapshotPath, finalPrompt, 'utf8');
-  animationInfo('Prompt prepared', {
+  const targetMomentCount = computeTargetMomentCount(videoDurationSeconds);
+  const promptSourcePath = 'backend1/src/agents/gemini3agent.ts (inline fallbackTimelinePrompt)';
+  animationInfo('Timeline prompt source selected', {
     projectId,
-    source: promptSourcePath || 'inline-default',
-    promptChars: finalPrompt.length,
+    source: promptSourcePath,
     dialogueChars: dialogueContext.length,
-    promptMentionsSkill,
-    promptSnapshotPath,
+    targetMomentCount,
   });
 
   let parsedPlan: unknown = null;
   let aiOutput = '';
   let aiUsedAgent: string | null = null;
   let aiFallbackWithoutAgent = false;
-  let aiPromptMentionsSkill = promptMentionsSkill;
+  let aiPromptMentionsSkill = false;
   let aiDiagnostics: unknown = null;
   let aiUsedExaResearch = false;
+  let aiUsedExaDirection = false;
   let aiUsedRemotionSkill = false;
   let aiResearchSummary: string | null = null;
   let aiResearchDiagnostics: unknown = null;
   try {
     const aiResult = await generateAnimationPlanWithResearch(topic, dialogueContext, {
       videoDurationSeconds,
-      maxMoments: MAX_MOMENTS,
-      promptTemplate: finalPrompt,
+      maxMoments: targetMomentCount,
       debugOutputDir: remotionProjectDir,
     });
     aiOutput = aiResult.output;
@@ -635,6 +701,7 @@ export async function generateAnimationPlanAndRender(params: {
     aiPromptMentionsSkill = aiResult.promptMentionsSkill;
     aiDiagnostics = aiResult.diagnostics;
     aiUsedExaResearch = aiResult.usedExaResearch;
+    aiUsedExaDirection = aiResult.usedExaDirection;
     aiUsedRemotionSkill = aiResult.usedRemotionSkill;
     aiResearchSummary = aiResult.researchSummary;
     aiResearchDiagnostics = aiResult.researchDiagnostics;
@@ -649,6 +716,7 @@ export async function generateAnimationPlanAndRender(params: {
       fallbackWithoutAgent: aiFallbackWithoutAgent,
       promptMentionsSkill: aiPromptMentionsSkill,
       usedExaResearch: aiUsedExaResearch,
+      usedExaDirection: aiUsedExaDirection,
       usedRemotionSkill: aiUsedRemotionSkill,
       outputChars: aiOutput.length,
       outputSnapshotPath: aiOutputPath,
@@ -673,7 +741,7 @@ export async function generateAnimationPlanAndRender(params: {
   }
 
   const parsedMomentCount = countRawMoments(parsedPlan);
-  const normalizedPlan = normalizePlan(parsedPlan, subtitleClips, videoDurationSeconds);
+  const normalizedPlan = normalizePlan(parsedPlan, subtitleClips, videoDurationSeconds, targetMomentCount);
   const usedFallbackMoments = parsedMomentCount === 0;
   animationInfo('Plan normalized', {
     projectId,
@@ -686,6 +754,7 @@ export async function generateAnimationPlanAndRender(params: {
       duration: moment.duration,
       type: moment.type,
       content: summarizeForLog(moment.content, 100),
+      subtitle: summarizeForLog(moment.subtitle || '', 100),
       visualStyle: moment.visualStyle,
       motion: moment.motion,
       layout: moment.layout,
@@ -698,9 +767,86 @@ export async function generateAnimationPlanAndRender(params: {
 
   const renderedMoments: Array<{ moment: AnimationMoment; outputPath: string }> = [];
   const renderFailures: Array<{ index: number; message: string }> = [];
+  let clipCodeGeneratedCount = 0;
+  let clipCodeUsedExaCount = 0;
+  let clipCodeUsedSkillCount = 0;
   for (let i = 0; i < normalizedPlan.moments.length; i++) {
-    const moment = normalizedPlan.moments[i];
+    const sourceMoment = normalizedPlan.moments[i];
+    const moment: AnimationMoment = {
+      ...sourceMoment,
+      subtitle: sourceMoment.subtitle || sourceMoment.content,
+    };
     const outputPath = path.join(renderedProjectDir, `moment_${i}.mp4`);
+
+    let clipCode = '';
+    try {
+      const clipCodeResult = await generateRemotionClipCodeWithSkill(
+        {
+          topic,
+          dialogueContext,
+          researchSummary: aiResearchSummary,
+          moment: {
+            index: i,
+            totalMoments: normalizedPlan.moments.length,
+            start: moment.start,
+            duration: moment.duration,
+            type: moment.type,
+            content: moment.content,
+            subtitle: moment.subtitle,
+            animationPrompt: moment.animationPrompt,
+            emphasis: moment.emphasis,
+            visualStyle: moment.visualStyle,
+            motion: moment.motion,
+            layout: moment.layout,
+          },
+        },
+        {
+          debugOutputDir: remotionProjectDir,
+        }
+      );
+
+      const clipCodeOutputPath = path.join(remotionProjectDir, `clip-code-output-${i}.raw.txt`);
+      fs.writeFileSync(clipCodeOutputPath, clipCodeResult.output, 'utf8');
+      const candidate = cleanGeneratedCode(clipCodeResult.code || '');
+      if (!candidate || !looksLikeGeneratedClipCode(candidate)) {
+        throw new Error('Generated clip code was empty or invalid.');
+      }
+      clipCode = candidate;
+      if (clipCodeResult.usedExaClipCode) clipCodeUsedExaCount += 1;
+      if (clipCodeResult.usedRemotionSkill) clipCodeUsedSkillCount += 1;
+      animationInfo('Clip code generated', {
+        projectId,
+        index: i,
+        usedAgent: clipCodeResult.usedAgent,
+        fallbackWithoutAgent: clipCodeResult.fallbackWithoutAgent,
+        usedExaClipCode: clipCodeResult.usedExaClipCode,
+        usedRemotionSkill: clipCodeResult.usedRemotionSkill,
+        diagnostics: clipCodeResult.diagnostics,
+        outputSnapshotPath: clipCodeOutputPath,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      animationWarn('Failed generating clip code in strict mode', {
+        projectId,
+        index: i,
+        message,
+      });
+      throw new Error(`Strict mode: failed generating Remotion clip code for moment ${i}: ${message}`);
+    }
+
+    clipCodeGeneratedCount += 1;
+
+    writeGeneratedClipSource(clipCode);
+    try {
+      fs.writeFileSync(path.join(remotionProjectDir, `clip-code-${i}.tsx`), clipCode, 'utf8');
+    } catch (error) {
+      animationWarn('Failed writing generated clip source snapshot', {
+        projectId,
+        index: i,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+
     try {
       animationInfo('Rendering moment', {
         projectId,
@@ -774,19 +920,21 @@ export async function generateAnimationPlanAndRender(params: {
     input: {
       subtitleClipCount: subtitleClips.length,
       videoDurationSeconds,
+      targetMomentCount,
     },
     prompt: {
       sourcePath: promptSourcePath,
-      promptSnapshotPath,
-      promptChars: finalPrompt.length,
-      promptMentionsSkill,
-      preview: summarizeForLog(finalPrompt, 400),
+      promptSnapshotPath: null,
+      promptChars: null,
+      promptMentionsSkill: aiPromptMentionsSkill,
+      preview: 'Prompt is generated inline in generateAnimationPlanWithResearch.',
     },
     ai: {
       usedAgent: aiUsedAgent,
       fallbackWithoutAgent: aiFallbackWithoutAgent,
       promptMentionsSkill: aiPromptMentionsSkill,
       usedExaResearch: aiUsedExaResearch,
+      usedExaDirection: aiUsedExaDirection,
       usedRemotionSkill: aiUsedRemotionSkill,
       researchSummaryPreview: summarizeForLog(aiResearchSummary || '', 320),
       researchDiagnostics: aiResearchDiagnostics,
@@ -794,6 +942,13 @@ export async function generateAnimationPlanAndRender(params: {
       diagnostics: aiDiagnostics,
       parsedMomentCount,
       usedFallbackMoments,
+    },
+    clipCode: {
+      attempted: normalizedPlan.moments.length,
+      generated: clipCodeGeneratedCount,
+      usedExaCount: clipCodeUsedExaCount,
+      usedRemotionSkillCount: clipCodeUsedSkillCount,
+      strictMode: true,
     },
     render: {
       attempted: normalizedPlan.moments.length,
