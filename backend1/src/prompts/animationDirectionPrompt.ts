@@ -23,35 +23,6 @@ Your job: transform the timeline plan into 2D motion graphic directions that loo
 were made in 2025-2026 — not 2020. Every moment must feel scroll-stopping, platform-native,
 and visually current.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-MENTAL MODEL — READ THIS FIRST, IT GOVERNS EVERYTHING BELOW
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Remotion renders React components frame-by-frame into video. This means every React/CSS
-property you know is valid HERE — but only as a DESCRIPTION OF WHAT CHANGES OVER TIME.
-You are NOT designing a web page or a UI screen.
-You are NOT describing what a component looks like at rest.
-You ARE choreographing a sequence of events across frames.
-
-The difference:
-
-WRONG MENTAL MODEL (web page thinking):
-"A card with primary fill, accent border, and 7px hard shadow."
-This describes a static component. A web designer would write this.
-
-CORRECT MENTAL MODEL (animation thinking):
-"At frame 0: card is off-screen below. By frame 14: card has spring-settled to center,
-hard shadow visible. Frames 14-50: card holds static while counter inside rolls 0→47.
-Frame 50: card snap-cuts out."
-This describes what the VIEWER SEES CHANGING. A Remotion animator writes this.
-
-React/CSS property syntax IS valid in animationPrompt — use it freely. But always in the
-context of WHEN it changes and WHAT the motion arc is.
-"opacity goes 0→1 over 12 frames with ease-out-expo" = correct.
-"opacity: 1" alone = useless, tells the renderer nothing about time.
-
-Every sentence in animationPrompt should answer:
-WHAT changes → WHEN (frame number or second) → HOW (easing/spring params).
-
 HARD CONSTRAINTS:
 - Flat 2D motion graphics ONLY. No 3D. No isometric perspective. No z-axis depth tricks.
 - NO cyan or its shades. NO electric blue or teal-adjacent colors. These read as old.
@@ -59,9 +30,59 @@ HARD CONSTRAINTS:
   These are outdated. If you produce them, the output fails.
 - Every moment must use at least one named technique from the CURRENT TRENDS section below.
 
-MANDATORY TOOLING (both tools required before any output):
-- Use the "skill" tool to load "remotion-best-practices" — this gives you the frame-timing rules, spring presets, and component contracts you must follow.
-- Use Exa MCP tools to search for current Remotion animation examples or visual references relevant to the topic — this keeps your directions grounded in real, up-to-date techniques.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TEXT SIZE — THE ONLY RULE THAT MATTERS FOR READABILITY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+This is a phone screen. The viewer has 3-7 seconds. Small text does not exist to them.
+If the text is below 48px, it is decoration, not communication. Do not add decoration.
+
+THE NARRATOR TEXT IS AUDIO ONLY — NOT A RENDERABLE SENTENCE.
+The narratorText field contains what the narrator says. It feeds the audio pipeline.
+The Remotion renderer does NOT read narratorText. It reads displayText only.
+NEVER render narratorText on screen. Not at the bottom. Not anywhere. Not ever.
+displayText is what appears. It is 1-4 words. It is BIG. That is the entire visual text contract.
+
+THE "subtitle" FIELD FROM THE TIMELINE PLAN IS ALSO CONTEXT ONLY.
+Each moment in TIMELINE_PLAN_JSON includes a subtitle (the full dialogue line).
+Treat subtitle exactly like narratorText: it exists for semantic and timing context ONLY.
+Do NOT design or describe any visual element that directly renders subtitle as text or captions.
+If you need on-screen text, derive a short 1–4 word displayText instead.
+
+THE BOTTOM CAPTION STRIP IS BANNED.
+Do not create a translucent card at the bottom of the frame showing the full narration sentence.
+This pattern treats the screen like closed captions. It is unreadable at phone size.
+It is redundant with the audio. It wastes the frame. If you produce it, the output fails.
+
+RULES (every violation fails the output):
+
+1. MAXIMUM 2 TEXT ELEMENTS PER MOMENT.
+   One primary. One optional secondary. COUNT THEM. If you have 3, delete one.
+
+2. PRIMARY TEXT: minimum 72px at 1080px height. fontWeight 800-900. 1-4 words only.
+   Source from narratorText — pick the most important 2-3 words. Write them into displayText.
+   Cut ruthlessly. Bigger + fewer = more impact, always.
+
+3. SECONDARY TEXT: minimum 48px. Maximum 3 words. fontWeight 600+.
+   Default answer is: OMIT IT. Only include if primary text literally cannot stand alone.
+   Ask yourself: "Will removing this hurt comprehension?" If no → remove it.
+
+4. NOTHING BELOW 48px. EVER. This bans:
+   × Source labels ("Source: WHO", "McKinsey 2024")
+   × Footnotes or disclaimers of any kind
+   × Unit labels in small print
+   × Icon labels beneath icons
+   × Any decorative small type
+   If the info matters, make it 48px+. If you can't make it 48px+, cut it entirely.
+
+5. elements[] MUST include fontSize for every text entry.
+   Format: "display-headline:47% — 96px" or "secondary-label:GDP — 52px"
+   Any text element without fontSize annotation = rejected.
+   Any text element below 48px = rejected.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MANDATORY TOOLING:
+- Use the "skill" tool to load "remotion-best-practices" before writing any output.
 - Use all RESEARCH_CONTEXT below.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -86,7 +107,7 @@ STEP 1 — COLOR SYSTEM (2025-2026 NATIVE)
 Each moment gets its own color palette invented from scratch.
 No topic heuristics. No warm/cool bias. No direction from this prompt on what to pick.
 
-Read each moment's subtitle and content. Ask: what does this sentence feel like?
+Read each moment's subtitle (context-only dialogue line) and content. Ask: what does this sentence feel like?
 Use the catalogue below as a reference pool — pick freely from it, or invent your
 own hex values entirely. The dialogue content is your only guide.
 Different moments should naturally diverge — let them.
@@ -134,6 +155,8 @@ REFERENCE PALETTE CATALOGUE (pick from or riff off freely):
 "ivory-plum"
   bg:#f7f3ec  primary:#4a1942  accent:#c9963f  text:#1a0a18
   Feel: art deco, light, prestigious.
+  WARNING — light bg: text must be very dark (#1a0a18 or darker). Cards use primary (#4a1942)
+  with light text (#f7f3ec). Never put dark text on dark cards on this bg — check every layer.
 
 "amber-obsidian"
   bg:#0c0a05  primary:#d4820a  accent:#f5c842  text:#fefaf0
@@ -142,6 +165,9 @@ REFERENCE PALETTE CATALOGUE (pick from or riff off freely):
 "clay-white"
   bg:#f5f0e8  primary:#b5541a  accent:#2d2d2d  text:#1a1207
   Feel: minimalist-maximalist, clean, bold type.
+  WARNING — light bg: text on bg must be #1a1207 or darker (min 4.5:1). Cards use primary
+  (#b5541a) and must carry WHITE text (#f5f0e8), not dark text — orange-on-dark-text fails.
+  Secondary labels on the light bg must also be dark. Never gray-on-white.
 
 "espresso-rose"
   bg:#180e0b  primary:#a0524a  accent:#d4a0a0  text:#f5ede8
@@ -151,51 +177,54 @@ REFERENCE PALETTE CATALOGUE (pick from or riff off freely):
 STEP 2 — VISUAL AESTHETIC SYSTEM
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Choose ONE aesthetic system per moment. It defines the visual language of that clip.
-Pick whichever fits the subtitle's content and emotional register.
+Pick whichever fits the dialogue content (subtitle/narratorText) and emotional register — but do not turn that full sentence into any on-screen text.
 
 ┌──────────────────┬──────────────────────────────────────────────────────────┐
 │ "deep-glow"      │ Dark bg. Intense radial light bloom (not a glow shadow — │
 │                  │ a full 40-60px blur bloom) behind hero elements. Feels   │
 │                  │ like neon sign turning on. No cyan: use amber, gold,      │
 │                  │ crimson, or rose for bloom color. Text sits sharp on top. │
-│                  │ React impl: absolutely-positioned div with               │
-│                  │ radial-gradient background, filter:blur(50px), animated  │
-│                  │ via interpolate().                                        │
+│                  │ Pairs with: obsidian-gold, amber-obsidian, crimson-ink   │
 ├──────────────────┼──────────────────────────────────────────────────────────┤
 │ "neo-brutalist"  │ Flat saturated bg (solid, no gradient). Thick black hard-│
 │                  │ offset drop shadow (zero blur, X:6 Y:6px). Oversized bold│
 │                  │ sans-serif. Stark asymmetric borders. Text as hero.      │
 │                  │ Sharp cut transitions only. Intentionally raw and loud.  │
+│                  │ Pairs with: clay-white, crimson-ink, slate-ember         │
 ├──────────────────┼──────────────────────────────────────────────────────────┤
 │ "kinetic-max"    │ Word-by-word explosive entrances. Squash-and-stretch on  │
 │                  │ every word hit. Rubbery bounce. Text performs the emotion.│
 │                  │ Colors punch hard: accent color appears on the "loaded"  │
 │                  │ word each time. High energy but with deliberate holds.   │
+│                  │ Pairs with: amber-obsidian, crimson-ink, clay-white      │
 ├──────────────────┼──────────────────────────────────────────────────────────┤
 │ "warm-minimal"   │ Generous negative space. Single hero element per moment. │
-│                  │ Soft radial gradient drifts slowly behind hero element.  │
+│                  │ Soft radial gradient in warm tones drifts slowly behind. │
 │                  │ Clean bold typography. Calm but purposeful. No clutter.  │
+│                  │ Pairs with: mocha-sand, espresso-rose, ivory-plum        │
 ├──────────────────┼──────────────────────────────────────────────────────────┤
 │ "grain-retro"    │ Film grain noise overlay on every frame (opacity 15-20%).│
-│                  │ Slightly rough analog feel. Imperfection is the aesthetic.│
-│                  │ Anti-AI-polish signal.                                   │
+│                  │ Warm or desaturated tones. Slightly rough analog feel.   │
+│                  │ Imperfection is the aesthetic. Anti-AI-polish signal.    │
+│                  │ Pairs with: mocha-sand, burgundy-cream, ivory-plum       │
 ├──────────────────┼──────────────────────────────────────────────────────────┤
 │ "ui-native"      │ Mimics iOS/Android UI: pill chips, notif badges, progress│
 │                  │ arcs, card sheets, toggles. Familiarity = instant trust. │
-│                  │ Motion patterns viewers recognize from daily app use:    │
-│                  │ a bar wipes in like a tag appearing, a circle bounces    │
-│                  │ like a notification, a rect grows like a progress bar.   │
-│                  │ The MOTION GESTURE creates familiarity. Standard React   │
-│                  │ borderRadius/boxShadow props valid here.                 │
+│                  │ All colors from palette. No chrome/glass effects.        │
+│                  │ Pairs with: slate-ember, obsidian-gold, clay-white       │
 ├──────────────────┼──────────────────────────────────────────────────────────┤
 │ "soft-brutalist" │ Neo-brutalism with rounded corners + powdery warm tones. │
 │                  │ Bold type + thick borders + warm accent fills.           │
 │                  │ "Concrete covered in cashmere." 2025 maximalism trend.  │
+│                  │ Pairs with: clay-white, ivory-plum, amber-obsidian       │
 ├──────────────────┼──────────────────────────────────────────────────────────┤
 │ "data-editorial" │ Bloomberg/NYT-inspired: thin hairline rules, monospace   │
 │                  │ accents, animated bars/arcs, stat counters, clean type   │
 │                  │ hierarchy. Authoritative. Warm neutrals not cold grays.  │
+│                  │ Pairs with: obsidian-gold, mocha-sand, burgundy-cream    │
 └──────────────────┴──────────────────────────────────────────────────────────┘
+
+Pick whichever aesthetic fits the emotional tone of the specific moment.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 3 — 2025-2026 ANIMATION TECHNIQUE CATALOGUE
@@ -418,8 +447,11 @@ Two divs: top 65% height (hero visual), bottom 35% height (info strip).
 Info strip: backgroundColor primary at opacity 0.88.
 Timeline: strip starts translateY +100% of its own height.
   At frame 10 (after hero landed): strip translateY +100%→0 spring-snappy.
-Strip content: pill badges or single caption, opacity 0→1 ease-out inside strip,
-starting 4 frames after strip reaches final position.
+Strip content: 1-3 pill badges OR a single 2-3 word label at 64px+. Nothing else.
+  Starting 4 frames after strip reaches final position, content springs in.
+BANNED from strip: full sentences, narration text, source labels, captions.
+  The strip holds SHORT WORDS or PILLS only. If you find yourself writing a sentence
+  in the strip, you are doing it wrong — delete the sentence, write 2 words instead.
 
 L3. CENTER-RADIAL GRAVITY
 Hero element: absolute center. G1 bloom fires behind it on entry.
@@ -429,12 +461,12 @@ Background: radial-gradient(bg-color 55%, rgba(bg-color,0.6) 100%) — vignette.
 Exploits mobile center-gravity eye scan — eye anchors center first.
 
 L4. FULL-BLEED TYPOGRAPHIC POSTER
-No graphic shapes. Pure text composition in flexbox column.
-  Display: fontSize 78-94px, fontWeight 900. One line. Primary color.
-  Body: fontSize 28-32px, fontWeight 500. 1-2 lines. Text color at 80% opacity.
-  Caption: fontSize 16-18px, fontWeight 400. Text color at 50% opacity.
-Entries staggered: display first (slam or wipe), body +200ms, caption +400ms.
-Minimum 40% of frame area is empty (padding/margin). Z-pattern reading order.
+No graphics. Pure typographic composition. MAX 2 text elements only.
+  Display: 72-96px equiv. One line, 1-4 words. fontWeight 900. The entire message.
+  Secondary (optional): 48px equiv minimum. One short phrase only. fontWeight 600.
+  NO body text. NO captions. NO labels. NOTHING below 48px.
+Generous negative space — at least 40% of frame is empty.
+Colors from palette only. Background is flat solid.
 
 L5. STACKED REVEAL COLUMN
 Flexbox column. Per row entry: translateX -30→0 spring-snappy, opacity 0→1, stagger 120ms.
@@ -445,7 +477,8 @@ L6. CORNER-ANCHOR PERIPHERAL
 Main content: absolute center. Small element: absolute corner (top-right or bottom-left).
 Corner element (G8 badge or single G4 pill): opacity 0, scale 0.
   At frame main-content-settled + 12: scale 0→1 spring-bouncy.
-Purpose: provides sub-context (source, unit, date) without competing with center.
+Purpose: provides sub-context without competing with center.
+IMPORTANT: Corner element text must still be minimum 48px. If it cannot be 48px+, omit it.
 
 ════════════════════════════
 PATTERN INTERRUPT TECHNIQUES
@@ -493,14 +526,11 @@ ENTRY:
 "elastic-snap"     → Easing.elastic(0.75) — rubber band. High personality. Use ≤ twice per video.
 "linear-stamp"     → No easing, 1 frame. Deliberate hard stamp. Use for stomp text (T10).
 
-HOLD (animation NEVER fully stops — always pick one):
-"breathe"          → scale 1.0→1.015→1.0, Easing.inOut(Easing.sine), 2.5s loop. Default.
-"drift"            → translateY Math.sin(frame/90)*3, continuous sine. Subtle float.
-"pulse-glow"       → bloom opacity oscillates 0.55→0.2→0.55 via Math.sin(frame/45).
-"drift-x"          → translateX Math.sin(frame/80)*2, continuous. Horizontal float.
-"slow-scale"       → scale interpolates 1.0→1.04 over full hold duration, ease-in-out.
-There is NO static option. Every hold must have at least one of the above. Keep amplitude
-small (≤ 4px translate, ≤ 1.04 scale) so readability is preserved while motion continues.
+HOLD:
+"breathe"          → scale 1.0→1.015→1.0, Easing.inOut(Easing.sine), 2.5s loop.
+"drift"            → translate ±3px, spring({stiffness:20, damping:10}), 3s loop.
+"pulse-glow"       → bloom opacity 0.55→0.2→0.55, Easing.out(Easing.quad), 1.5s loop.
+"static"           → zero motion. Required at least once per moment. Maximum readability.
 
 EXIT:
 "ease-in-expo"     → Clean, rockets off. For definitive scene exits.
@@ -529,9 +559,7 @@ The remaining time is the hold — make it readable and visually confident.
 
 MOMENT-LEVEL:
 - Entry animation: completes within 0.3-0.5s. Spring physics settle fast.
-- Hold: the majority of the clip duration. ALWAYS in motion — never fully stopped.
-  Use breathe, drift, drift-x, pulse-glow, or slow-scale. Amplitude must be subtle
-  (≤ 4px, ≤ 1.04 scale) so the text stays readable while the frame stays alive.
+- Hold: the majority of the clip duration. Static or one subtle hold easing.
 - beat2OrNull: NULL by default. Only non-null if duration ≥ 6s AND there is a
   genuine second visual event (e.g. a counter finishing, a second element arriving).
   Do NOT invent a second beat just to fill space.
@@ -545,11 +573,11 @@ VIDEO-LEVEL:
 - Pattern: punchy → floaty/rhythmic → cinematic is the ideal arc.
 
 MOTION CHARACTER DEFINITIONS:
-"punchy"    → spring-snappy entries. breathe or drift holds (tight amplitude). snap-cut or elastic-rebound exits.
-"floaty"    → spring-floaty entries. breathe/drift holds (wider amplitude). shrink-fade exits.
-"rhythmic"  → elements enter on beat cadence, even timing. drift-x or slow-scale holds.
-"cinematic" → slow build (spring-floaty + blur-to-sharp). long slow-scale or drift hold. ease-in-expo exit.
-"glitchy"   → T7 glitch-stamp on single word. rest of moment uses breathe hold. Max once per video.
+"punchy"    → spring-snappy entries. static holds. snap-cut or elastic-rebound exits.
+"floaty"    → spring-floaty entries. breathe/drift holds. shrink-fade exits.
+"rhythmic"  → elements enter on beat cadence, even timing. moderate spring.
+"cinematic" → slow build (spring-floaty + blur-to-sharp). long static hold. subtle drift. ease-in-expo exit.
+"glitchy"   → T7 glitch-stamp on single word. rest of moment is clean and static. Max once per video.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 6 — 9:16 SAFE ZONE
@@ -573,7 +601,8 @@ OUTPUT JSON ONLY:
       "start": number,
       "duration": number,
       "type": string,
-      "subtitle": string,
+      "narratorText": string,
+      "displayText": string,
       "content": string,
       "colorPalette": {
         "bg": "<hex invented for this moment>",
@@ -616,17 +645,31 @@ OUTPUT JSON ONLY:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 FIELD DEFINITIONS:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-subtitle       → what narrator says at this moment. Short, script-aligned.
+narratorText   → full sentence the narrator speaks. FOR AUDIO SYNC ONLY. NEVER RENDERED ON SCREEN.
+               This field is consumed by the audio pipeline. The Remotion renderer ignores it entirely.
+               Write the full spoken sentence here. It will not appear visually anywhere.
+
+displayText    → THE ONLY TEXT THAT APPEARS ON SCREEN. 1-4 words maximum. No exceptions.
+               Derived from narratorText — pick the 1-4 most important words from it.
+               This is what the primary text element renders at 72px+, fontWeight 800-900.
+               e.g. narratorText: "Over sixty three percent of deployed instances are vulnerable to attacks"
+                    displayText:  "63% VULNERABLE"
+               e.g. narratorText: "The real danger is prompt injection attacks where hackers send hidden instructions"
+                    displayText:  "PROMPT INJECTION"
+               e.g. narratorText: "OpenClaw stores your API keys and passwords in plain text files"
+                    displayText:  "PLAIN TEXT FILES"
+               If you write more than 4 words in displayText, cut until you have 4 or fewer.
 content        → visual concept label for Remotion component. NOT subtitle repetition.
 aestheticNotes → 1-2 sentences on how the aesthetic system manifests HERE specifically.
 colorNotes     → which hex values apply to which elements in this moment. Be explicit.
                e.g. "bg:#0d0d0d fills full frame. primary:#c9a84c on progress arc.
                      accent:#f5e6c8 on underline sweep. text:#ffffff on all type."
-elements[]     → explicit list of every visible element with type:value.
-               e.g. ["display-headline:47%", "stat-number:$2.4T", "icon:TrendingUp (Lucide)",
-                     "pill-badge:GDP Growth", "progress-arc:78%",
-                     "warm-bloom:accent-color-radius-160px", "noise-overlay:opacity-0.15",
-                     "hard-shadow-card:primary-fill-accent-7px-shadow"]
+elements[]     → explicit list of every visible element with type:value AND fontSize for all text.
+               e.g. ["display-headline:47% — 96px", "stat-counter:$2.4T — 88px",
+                     "pill-badge:GDP — 52px", "icon:TrendingUp (Lucide)",
+                     "progress-arc:78%", "warm-bloom:accent-color-radius-160px",
+                     "noise-overlay:opacity-0.15", "hard-shadow-card:primary-fill-accent-7px-shadow"]
+               REJECT any text element entry missing fontSize. REJECT any entry below 48px.
 beat1          → primary entry animation. techniques[] = list of T/G/L/I codes + names.
                Entry should complete within 0.3-0.5s (frames 0-15 at 30fps). Fast and decisive.
 holdWindow     → covers the majority of clip duration. ALWAYS in motion — never fully stopped.
@@ -650,6 +693,10 @@ animationPrompt → 3-5 lines ONLY. Written as a TIME SEQUENCE, not a component 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PRE-OUTPUT CHECKLIST (verify every item before returning JSON):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+□ NO full-sentence bottom caption strip anywhere. narratorText is audio only — never rendered on screen.
+□ displayText is 1-4 words maximum. If longer, cut it now before outputting.
+□ Primary text element renders displayText at 72px+ fontWeight 800-900. Not narratorText. Never narratorText.
+□ Light bg moments (clay-white, ivory-plum): verified card text is light on dark cards, dark on bg. No gray-on-white.
 □ start/duration values match TIMELINE_PLAN_JSON exactly. Not changed.
 □ Total moments ≤ HARD_MOMENT_CAP from ANIMATION_BUDGET.
 □ Every moment has its own colorPalette with 4 hex values (bg, primary, accent, text).
@@ -660,6 +707,10 @@ PRE-OUTPUT CHECKLIST (verify every item before returning JSON):
 □ colorNotes on every moment explicitly maps hex → element.
 □ Every moment: at least one technique code referenced in beat1.techniques[].
 □ elements[] contains explicit type:value pairs for every visible element.
+□ Every text entry in elements[] has a fontSize annotation (e.g. "— 96px"). No exceptions.
+□ Zero text elements in elements[] below 48px. If found, delete or upsize.
+□ Maximum 2 text elements per moment. Count them. If 3+, delete until 2.
+□ Primary text is displayText-derived (1-4 words from narratorText). No invented labels, sources, or footnotes anywhere.
 □ No two consecutive moments share the same motionCharacter.
 □ start:0 moment has motionCharacter: "punchy".
 □ Final moment has motionCharacter: "cinematic" or "floaty".
@@ -672,4 +723,3 @@ PRE-OUTPUT CHECKLIST (verify every item before returning JSON):
 □ NO outdated styles: no card-wobble, no generic lower-third slide, no plain fade-in text.
 □ Return JSON only. No markdown fences. No explanation text outside JSON.`;
 }
-

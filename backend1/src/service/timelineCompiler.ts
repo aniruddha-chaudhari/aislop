@@ -54,12 +54,23 @@ function isStillImageAsset(filePath: string): boolean {
   return /\.(png|jpe?g|gif|webp)$/i.test(filePath);
 }
 
-function addOverlayInput(command: any, overlayPath: string, durationSeconds: number): void {
+/**
+ * Add an overlay as an input. For still images: loop for full timeline.
+ * For video (e.g. animation moment): trim to clip.duration only so overlay plays 0→duration in order;
+ * the filter chain must apply setpts=PTS+clip.start/TB so it lines up with timeline.
+ */
+function addOverlayInput(
+  command: any,
+  overlayPath: string,
+  clip: OverlayClip,
+  timelineDurationSeconds: number
+): void {
   if (isStillImageAsset(overlayPath)) {
-    command.input(overlayPath).inputOptions(['-loop', '1', '-t', durationSeconds.toString()]);
+    command.input(overlayPath).inputOptions(['-loop', '1', '-t', timelineDurationSeconds.toString()]);
     return;
   }
-  command.input(overlayPath).inputOptions(['-stream_loop', '-1', '-t', durationSeconds.toString()]);
+  const clipDur = Math.max(0.05, clip.duration);
+  command.input(overlayPath).inputOptions(['-t', clipDur.toString()]);
 }
 
 type TimeRange = { start: number; end: number };
@@ -269,13 +280,13 @@ export async function compileTimeline(
     }
 
     // Overlay media (images/videos) for image and animation plans.
-    const overlayInputs: { clip: OverlayClip; inputIndex: number }[] = [];
+    const overlayInputs: { clip: OverlayClip; inputIndex: number; overlayPath: string }[] = [];
     if (exportStep >= 3) {
       overlayClips.forEach((clip) => {
         const overlayPath = clip.path ?? path.join(IMAGE_UPLOAD_DIR, project.audioSessionId, `${clip.assetId}.png`);
         if (fs.existsSync(overlayPath)) {
-          addOverlayInput(command, overlayPath, duration);
-          overlayInputs.push({ clip, inputIndex: nextInputIndex++ });
+          addOverlayInput(command, overlayPath, clip, duration);
+          overlayInputs.push({ clip, inputIndex: nextInputIndex++, overlayPath });
         }
       });
     }
@@ -323,14 +334,16 @@ export async function compileTimeline(
     const OVERLAY_BASE_H = 720;
     const OVERLAY_LEGACY_TOP_Y = 40;
     if (exportStep >= 3) {
-      overlayInputs.forEach(({ clip, inputIndex }, index) => {
+      overlayInputs.forEach(({ clip, inputIndex, overlayPath }, index) => {
         const isReplace = isReplaceOverlayClip(clip);
+        const isVideoOverlay = !isStillImageAsset(overlayPath);
+        const setpts = isVideoOverlay ? `setpts=PTS+${clip.start}/TB,` : '';
         const scaledLabel = isReplace ? `replace_scaled_${index}` : `scaled_${index}`;
         const overlayLabel = isReplace ? `with_replace_${index}` : `with_overlay_${index}`;
 
         if (isReplace) {
           // Preserve full overlay frame (no destructive crop) and letterbox/pillarbox into 9:16.
-          filterComplex += `;[${inputIndex}:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:0x101014[${scaledLabel}]`;
+          filterComplex += `;[${inputIndex}:v]${setpts}scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:0x101014[${scaledLabel}]`;
           filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
           lastLabel = overlayLabel;
           return;
@@ -344,7 +357,7 @@ export async function compileTimeline(
           OVERLAY_BASE_H,
           OVERLAY_LEGACY_TOP_Y
         );
-        filterComplex += `;[${inputIndex}:v]scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
+        filterComplex += `;[${inputIndex}:v]${setpts}scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
         filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
         lastLabel = overlayLabel;
       });

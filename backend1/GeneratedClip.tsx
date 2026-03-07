@@ -1,5 +1,5 @@
 import React from "react";
-import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig } from "remotion";
+import { useCurrentFrame, useVideoConfig, interpolate, spring, Easing } from "remotion";
 
 export type GeneratedClipProps = {
   subtitle?: string;
@@ -10,242 +10,325 @@ export type GeneratedClipProps = {
   emphasis?: string;
 };
 
-const COLORS = {
-  bg: "#180e0b",
-  primary: "#a0524a",
-  accent: "#d4a0a0",
-};
-
-const Building2Icon: React.FC<{ color: string; size: number }> = ({ color, size }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z" />
-    <path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2" />
-    <path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2" />
-    <path d="M10 6h4" />
-    <path d="M10 10h4" />
-    <path d="M10 14h4" />
-    <path d="M10 18h4" />
-  </svg>
-);
-
-const AlertOctagonIcon: React.FC<{ color: string; size: number }> = ({ color, size }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 2v6" />
-    <path d="m15.5 4.5 4.5 4.5" />
-    <path d="M22 8.5v7" />
-    <path d="m19.5 15.5 4.5 4.5" />
-    <path d="M12 16v6" />
-    <path d="m8.5 19.5-4.5-4.5" />
-    <path d="M2 15.5v-7" />
-    <path d="m4.5 8.5-4.5-4.5" />
-    <path d="m8 12-2-2" />
-    <path d="m14 12 2-2" />
-    <path d="m12 8 2 2" />
-    <path d="m12 16-2 2" />
-  </svg>
-);
-
 export const GeneratedClip: React.FC<GeneratedClipProps> = ({
-  subtitle = "Cisco and Sophos warn: 63% vulnerable, recommend blocking entirely or sandboxing",
-  content = "Expert Warning Panel",
-  emphasis = "63% vulnerable — industry experts recommend blocking",
+  content,
+  emphasis = "The real",
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
 
-  const wipeProgress = interpolate(frame, [0, 22], [0, 1], {
-    extrapolateRight: "clamp",
+  const videoWidth = width;
+  const videoHeight = height;
+
+  const progress = frame / fps;
+
+  const messageEntrance = spring({
+    frame,
+    fps,
+    config: { damping: 200 },
   });
 
-  const easedWipe = 1 - Math.pow(1 - wipeProgress, 3);
+  const sweepProgress = interpolate(
+    progress,
+    [0.3, 1.5],
+    [0, 1],
+    { extrapolateRight: "clamp" }
+  );
 
-  const counterValue = interpolate(frame, [0, 60], [0, 63], {
-    extrapolateRight: "clamp",
+  const commandReveal = spring({
+    frame: frame - 60,
+    fps,
+    config: { damping: 200 },
   });
 
-  const driftX = frame > 22 ? Math.sin(frame / 80) * 2 : 0;
+  const threatPulse = interpolate(
+    progress,
+    [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4],
+    [0.6, 1, 0.7, 1, 0.8, 1, 0.7, 1, 0.8]
+  );
 
-  const iconScale = spring({ frame, from: 0, to: 1, fps, config: { damping: 12 } });
-  const emphasisOpacity = interpolate(frame, [30, 50], [0, 1], { extrapolateRight: "clamp" });
+  const messageX = interpolate(messageEntrance, [0, 1], [-300, videoWidth * 0.25]);
+  const messageOpacity = interpolate(messageEntrance, [0, 0.5, 1], [0, 0.5, 1]);
+
+  const hiddenLayerX = interpolate(sweepProgress, [0, 1], [videoWidth * 0.25, videoWidth * 0.55]);
+  const hiddenLayerOpacity = interpolate(
+    sweepProgress,
+    [0, 0.3, 0.7, 1],
+    [0, 0.9, 0.9, 0]
+  );
+
+  const aiPulse = interpolate(
+    progress,
+    [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4],
+    [0.3, 1, 0.4, 1, 0.5, 0.8, 0.6, 0.4]
+  );
+
+  const commandX = interpolate(commandReveal, [0, 1], [videoWidth + 200, videoWidth * 0.75]);
+
+  const dangerGlow = interpolate(
+    progress,
+    [1.5, 2, 2.5, 3, 3.5, 4],
+    [0, 0.8, 0, 0.9, 0, 0.7]
+  );
 
   return (
-    <AbsoluteFill style={{ backgroundColor: COLORS.bg, overflow: "hidden" }}>
-      <svg
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          width: "100%",
-          height: "100%",
-          pointerEvents: "none",
-        }}
-      >
-        <filter id="grainFilter">
-          <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="4" seed={5} result="noise" />
-          <feColorMatrix type="saturate" values="0" result="monoNoise" />
-          <feBlend in="SourceGraphic" in2="monoNoise" mode="multiply" result="blend" />
-          <feComponentTransfer in="blend" result="finalNoise">
-            <feFuncA type="linear" slope={0.15} />
-          </feComponentTransfer>
-        </filter>
-        <rect width="100%" height="100%" filter="url(#grainFilter)" />
-      </svg>
-
+    <div
+      style={{
+        width: videoWidth,
+        height: videoHeight,
+        backgroundColor: "#0d1117",
+        position: "relative",
+        overflow: "hidden",
+      }}
+    >
       <div
         style={{
           position: "absolute",
           top: 0,
           left: 0,
-          width: `${easedWipe * 100}%`,
-          height: "100%",
-          backgroundColor: COLORS.primary,
-          opacity: 0.9,
+          right: 0,
+          bottom: 0,
+          background: `
+            radial-gradient(ellipse at 20% 50%, rgba(56, 189, 248, 0.08) 0%, transparent 50%),
+            radial-gradient(ellipse at 80% 50%, rgba(239, 68, 68, 0.08) 0%, transparent 50%)
+          `,
         }}
       />
 
       <div
         style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: 32,
-          paddingHorizontal: 40,
           position: "absolute",
-          top: "50%",
-          left: "50%",
-          transform: `translate(-50%, -50%) translateX(${driftX}px)`,
+          left: videoWidth * 0.05,
+          top: videoHeight * 0.08,
+          fontSize: Math.floor(videoHeight * 0.045),
+          fontWeight: 700,
+          color: "#f0f6fc",
+          fontFamily: "system-ui, -apple-system, sans-serif",
+          letterSpacing: "0.02em",
+        }}
+      >
+        {emphasis}
+      </div>
+
+      <div
+        style={{
+          position: "absolute",
+          left: messageX,
+          top: videoHeight * 0.35,
+          width: videoWidth * 0.35,
+          padding: videoWidth * 0.03,
+          backgroundColor: "rgba(30, 41, 59, 0.9)",
+          borderRadius: 12,
+          border: "2px solid #475569",
+          opacity: messageOpacity,
+          boxShadow: "0 4px 24px rgba(0,0,0,0.4)",
         }}
       >
         <div
           style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 20,
-            opacity: iconScale,
+            color: "#94a3b8",
+            fontSize: Math.floor(videoHeight * 0.018),
+            fontFamily: "monospace",
+            marginBottom: 8,
           }}
         >
-          <div
-            style={{
-              width: 80,
-              height: 80,
-              borderRadius: 16,
-              backgroundColor: "rgba(160, 82, 74, 0.3)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              border: `2px solid ${COLORS.primary}`,
-            }}
-          >
-            <Building2Icon color={COLORS.accent} size={40} />
-          </div>
-          <div
-            style={{
-              width: 80,
-              height: 80,
-              borderRadius: 16,
-              backgroundColor: "rgba(160, 82, 74, 0.3)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              border: `2px solid ${COLORS.primary}`,
-            }}
-          >
-            <AlertOctagonIcon color={COLORS.accent} size={40} />
-          </div>
+          ✉ Email / Message
         </div>
-
         <div
           style={{
-            fontSize: 48,
-            fontWeight: 700,
-            color: COLORS.accent,
-            textAlign: "center",
-            letterSpacing: -1,
-          }}
-        >
-          {content}
-        </div>
-
-        <div
-          style={{
-            fontSize: 72,
-            fontWeight: 800,
-            color: COLORS.accent,
-            fontVariantNumeric: "tabular-nums",
-          }}
-        >
-          {Math.round(counterValue)}%
-        </div>
-
-        <div
-          style={{
-            fontSize: 24,
-            color: COLORS.accent,
-            opacity: 0.8,
-            textAlign: "center",
-            maxWidth: width * 0.8,
+            color: "#e2e8f0",
+            fontSize: Math.floor(videoHeight * 0.022),
+            fontFamily: "system-ui, -apple-system, sans-serif",
             lineHeight: 1.4,
           }}
         >
-          vulnerable
+          Dear User, click here for amazing offer...
         </div>
+      </div>
 
+      <div
+        style={{
+          position: "absolute",
+          left: hiddenLayerX - videoWidth * 0.15,
+          top: videoHeight * 0.45,
+          width: videoWidth * 0.3,
+          padding: videoWidth * 0.02,
+          backgroundColor: "rgba(127, 29, 29, 0.85)",
+          borderRadius: 8,
+          border: "2px solid #dc2626",
+          opacity: hiddenLayerOpacity,
+          transform: `scale(${0.8 + sweepProgress * 0.2})`,
+          boxShadow: `0 0 ${30 * dangerGlow}px rgba(220, 38, 38, 0.5)`,
+        }}
+      >
         <div
           style={{
-            fontSize: 28,
+            color: "#fecaca",
+            fontSize: Math.floor(videoHeight * 0.016),
+            fontFamily: "monospace",
             fontWeight: 600,
-            color: COLORS.accent,
-            textAlign: "center",
-            opacity: emphasisOpacity,
-            marginTop: 16,
-            paddingHorizontal: 24,
-            paddingVertical: 12,
-            backgroundColor: "rgba(160, 82, 74, 0.4)",
-            borderRadius: 8,
           }}
         >
-          {emphasis}
+          ⚠ HIDDEN LAYER
+        </div>
+        <div
+          style={{
+            color: "#fca5a5",
+            fontSize: Math.floor(videoHeight * 0.014),
+            fontFamily: "monospace",
+            marginTop: 4,
+          }}
+        >
+          [Execute: steal_keys]
+        </div>
+        <div
+          style={{
+            color: "#fca5a5",
+            fontSize: Math.floor(videoHeight * 0.014),
+            fontFamily: "monospace",
+          }}
+        >
+          [Execute: dump_data]
         </div>
       </div>
 
       <div
         style={{
           position: "absolute",
-          bottom: 60,
-          left: 0,
-          right: 0,
+          left: videoWidth * 0.55,
+          top: videoHeight * 0.35,
+          width: videoWidth * 0.4,
+          height: videoHeight * 0.35,
           display: "flex",
+          alignItems: "center",
           justifyContent: "center",
-          paddingHorizontal: 20,
         }}
       >
         <div
           style={{
-            fontSize: 22,
-            color: COLORS.accent,
-            textAlign: "center",
-            opacity: 0.9,
-            maxWidth: width * 0.85,
-            lineHeight: 1.5,
+            width: videoWidth * 0.25,
+            height: videoWidth * 0.25,
+            borderRadius: "50%",
+            backgroundColor: `rgba(56, 189, 248, ${0.1 + aiPulse * 0.3})`,
+            border: `3px solid rgba(56, 189, 248, ${0.4 + aiPulse * 0.5})`,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            boxShadow: `0 0 ${40 * aiPulse}px rgba(56, 189, 248, 0.4)`,
           }}
         >
-          {subtitle}
+          <div
+            style={{
+              color: "#38bdf8",
+              fontSize: Math.floor(videoHeight * 0.028),
+              fontWeight: 700,
+              fontFamily: "system-ui, -apple-system, sans-serif",
+            }}
+          >
+            AI
+          </div>
         </div>
       </div>
 
       <div
         style={{
           position: "absolute",
-          bottom: 12,
-          right: 16,
-          fontSize: 11,
-          color: COLORS.primary,
-          opacity: 0.5,
-          fontFamily: "system-ui, sans-serif",
+          left: videoWidth * 0.55,
+          top: videoHeight * 0.72,
+          width: 4,
+          height: videoHeight * 0.15,
+          backgroundColor: `rgba(56, 189, 248, ${0.3 + sweepProgress * 0.5})`,
+          borderRadius: 2,
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          left: videoWidth * 0.55,
+          top: videoHeight * 0.72,
+          width: 4,
+          height: videoHeight * 0.15,
+          backgroundColor: "#38bdf8",
+          borderRadius: 2,
+          transform: `translateX(${(sweepProgress - 0.5) * videoWidth * 0.3}px)`,
+          opacity: sweepProgress,
+        }}
+      />
+
+      <div
+        style={{
+          position: "absolute",
+          left: commandX,
+          top: videoHeight * 0.78,
+          opacity: commandReveal,
         }}
       >
-        8/8
+        <div
+          style={{
+            color: "#ef4444",
+            fontSize: Math.floor(videoHeight * 0.02),
+            fontWeight: 600,
+            fontFamily: "monospace",
+            textShadow: `0 0 ${10 * dangerGlow}px rgba(239, 68, 68, 0.8)`,
+          }}
+        >
+          ▸ Executing malicious commands...
+        </div>
+        <div
+          style={{
+            color: "#f87171",
+            fontSize: Math.floor(videoHeight * 0.016),
+            fontFamily: "monospace",
+            marginTop: 4,
+          }}
+        >
+          Leaking private keys →
+        </div>
+        <div
+          style={{
+            color: "#f87171",
+            fontSize: Math.floor(videoHeight * 0.016),
+            fontFamily: "monospace",
+          }}
+        >
+          Dumping home directory →
+        </div>
       </div>
-    </AbsoluteFill>
+
+      <div
+        style={{
+          position: "absolute",
+          bottom: videoHeight * 0.05,
+          left: videoWidth * 0.1,
+          right: videoWidth * 0.1,
+          height: 3,
+          backgroundColor: "#1e293b",
+          borderRadius: 2,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            width: `${(progress / 4) * 100}%`,
+            height: "100%",
+            backgroundColor: "#38bdf8",
+            borderRadius: 2,
+          }}
+        />
+      </div>
+
+      <div
+        style={{
+          position: "absolute",
+          bottom: videoHeight * 0.02,
+          right: videoWidth * 0.05,
+          color: "#475569",
+          fontSize: Math.floor(videoHeight * 0.014),
+          fontFamily: "monospace",
+        }}
+      >
+        flow-diagram
+      </div>
+    </div>
   );
 };

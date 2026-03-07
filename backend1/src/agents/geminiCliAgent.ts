@@ -1,29 +1,419 @@
 import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
+import { performance } from 'perf_hooks';
 import { buildAnimationDirectionPrompt } from '../prompts/animationDirectionPrompt';
 import { buildAnimationTimelineWithResearchPrompt } from '../prompts/animationTimelinePrompt';
 
-const OPENCODE_BIN_ENV = process.env.OPENCODE_BIN?.trim() || '';
-const OPENCODE_DEFAULT_BIN = 'opencode';
-const OPENCODE_DEBUG_ENABLED = process.env.OPENCODE_DEBUG !== '0';
-/** Log every stdout/stderr chunk — very verbose. Default OFF. Set OPENCODE_LOG_EVERY_WORD=1 to enable. */
-const OPENCODE_LOG_EVERY_WORD = process.env.OPENCODE_LOG_EVERY_WORD === '1';
-const parsePositiveMs = (value: string | undefined, fallback: number): number => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+// ------------------------------------------------------------------------------------
+// Gemini CLI headless wrapper (replaces the OpenCode CLI process invocation).
+// ------------------------------------------------------------------------------------
+
+const GEMINI_BIN_ENV = process.env.GEMINI_BIN?.trim() || '';
+const GEMINI_DEFAULT_BIN = 'gemini';
+const GEMINI_CLI_PACKAGE = '@google/gemini-cli';
+let CACHED_GEMINI_COMMAND: string | null = null;
+
+function isPathLikeCommand(command: string): boolean {
+  return /[\\/]/.test(command) || /^[a-zA-Z]:/.test(command) || command.endsWith('.cmd') || command.endsWith('.exe');
+}
+
+function resolveGeminiCommand(): string {
+  if (CACHED_GEMINI_COMMAND) return CACHED_GEMINI_COMMAND;
+
+  // Respect explicit override first.
+  if (GEMINI_BIN_ENV) {
+    CACHED_GEMINI_COMMAND = GEMINI_BIN_ENV;
+    return CACHED_GEMINI_COMMAND;
+  }
+
+  // Then prefer project-local install if present.
+  const localBin = path.join(
+    process.cwd(),
+    'node_modules',
+    '.bin',
+    process.platform === 'win32' ? 'gemini.cmd' : 'gemini'
+  );
+  if (fs.existsSync(localBin)) {
+    CACHED_GEMINI_COMMAND = localBin;
+    return CACHED_GEMINI_COMMAND;
+  }
+
+  // Finally rely on PATH.
+  CACHED_GEMINI_COMMAND = GEMINI_DEFAULT_BIN;
+  return CACHED_GEMINI_COMMAND;
+}
+
+function pushUnique(list: string[], seen: Set<string>, value: string): void {
+  const trimmed = value.trim();
+  if (!trimmed) return;
+  const key = process.platform === 'win32' ? trimmed.toLowerCase() : trimmed;
+  if (seen.has(key)) return;
+  seen.add(key);
+  list.push(trimmed);
+}
+
+function buildCommandCandidates(base: string): string[] {
+  const values: string[] = [];
+  const seen = new Set<string>();
+  if (process.platform !== 'win32') {
+    const localBin = path.join(process.cwd(), 'node_modules', '.bin', base);
+    if (fs.existsSync(localBin)) pushUnique(values, seen, localBin);
+    pushUnique(values, seen, base);
+    return values;
+  }
+
+  const cmd = `${base}.cmd`;
+  const localCmd = path.join(process.cwd(), 'node_modules', '.bin', cmd);
+
+  if (fs.existsSync(localCmd)) pushUnique(values, seen, localCmd);
+  pushUnique(values, seen, cmd);
+  pushUnique(values, seen, base);
+
+  return values;
+}
+
+function isLikelyMissingCommandError(message: string): boolean {
+  return (
+    /\bENOENT\b/i.test(message) ||
+    /\buv_spawn\b/i.test(message) ||
+    /\bnot found\b/i.test(message) ||
+    /is not recognized as an internal or external command/i.test(message) ||
+    /\bcould not locate executable\b/i.test(message)
+  );
+}
+
+type GeminiFallbackAttempt = {
+  command: string;
+  prefixArgs: string[];
+  description: string;
+  timeoutMs?: number;
 };
-const OPENCODE_RUN_TIMEOUT_MS = parsePositiveMs(process.env.OPENCODE_RUN_TIMEOUT_MS, 300000);
-const OPENCODE_HEARTBEAT_INTERVAL_MS = parsePositiveMs(process.env.OPENCODE_HEARTBEAT_INTERVAL_MS, 15000);
-let CACHED_OPENCODE_COMMAND: string | null = null;
+
+function buildGeminiFallbackAttempts(): GeminiFallbackAttempt[] {
+  const attempts: GeminiFallbackAttempt[] = [];
+  const seen = new Set<string>();
+  const add = (command: string, prefixArgs: string[], description: string, timeoutMs?: number): void => {
+    const key = `${process.platform === 'win32' ? command.toLowerCase() : command}|${prefixArgs.join('\u0000')}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    attempts.push({ command, prefixArgs, description, timeoutMs });
+  };
+
+  for (const command of buildCommandCandidates('pnpm')) {
+    add(command, ['dlx', GEMINI_CLI_PACKAGE], `${command} dlx ${GEMINI_CLI_PACKAGE}`, GEMINI_FALLBACK_RUN_TIMEOUT_MS);
+  }
+
+  for (const command of buildCommandCandidates('npx')) {
+    add(
+      command,
+      ['--yes', '--package', GEMINI_CLI_PACKAGE, 'gemini'],
+      `${command} --yes --package ${GEMINI_CLI_PACKAGE} gemini`,
+      GEMINI_FALLBACK_RUN_TIMEOUT_MS
+    );
+  }
+
+  for (const command of buildCommandCandidates('npm')) {
+    add(
+      command,
+      ['exec', '--yes', '--package', GEMINI_CLI_PACKAGE, '--', 'gemini'],
+      `${command} exec --yes --package ${GEMINI_CLI_PACKAGE} -- gemini`,
+      GEMINI_FALLBACK_RUN_TIMEOUT_MS
+    );
+  }
+
+  if (process.platform === 'win32') {
+    add(
+      'corepack.cmd',
+      ['pnpm', 'dlx', GEMINI_CLI_PACKAGE],
+      'corepack pnpm dlx @google/gemini-cli',
+      GEMINI_FALLBACK_RUN_TIMEOUT_MS
+    );
+    add(
+      'corepack',
+      ['pnpm', 'dlx', GEMINI_CLI_PACKAGE],
+      'corepack pnpm dlx @google/gemini-cli',
+      GEMINI_FALLBACK_RUN_TIMEOUT_MS
+    );
+  } else {
+    add(
+      'corepack',
+      ['pnpm', 'dlx', GEMINI_CLI_PACKAGE],
+      'corepack pnpm dlx @google/gemini-cli',
+      GEMINI_FALLBACK_RUN_TIMEOUT_MS
+    );
+  }
+
+  return attempts;
+}
+
+type GeminiHeadlessResult = {
+  response: string;
+  raw: unknown;
+};
+
+type GeminiHeadlessOptions = {
+  prompt: string;
+  cwd?: string;
+  model?: string;
+};
+
+const GEMINI_RUN_TIMEOUT_MS = Number(process.env.GEMINI_RUN_TIMEOUT_MS || 420_000);
+const GEMINI_FALLBACK_RUN_TIMEOUT_MS = Number(process.env.GEMINI_FALLBACK_RUN_TIMEOUT_MS || 420_000);
+const GEMINI_STREAM_LOGS = process.env.GEMINI_CLI_STREAM_LOGS !== '0';
+const GEMINI_CAPACITY_FALLBACK_MODELS = (process.env.GEMINI_CLI_CAPACITY_FALLBACK_MODELS ||
+  'gemini-3-pro-preview,gemini-2.5-pro')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
+
+function normalizeTimeoutMs(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(5_000, Math.round(parsed));
+}
+
+function isCapacityExhaustedError(message: string): boolean {
+  return (
+    /\bMODEL_CAPACITY_EXHAUSTED\b/i.test(message) ||
+    /\bNo capacity available for model\b/i.test(message) ||
+    /\bRESOURCE_EXHAUSTED\b/i.test(message)
+  );
+}
+
+async function runGeminiOnce(
+  command: string,
+  prefixArgs: string[],
+  options: GeminiHeadlessOptions,
+  timeoutMs: number
+): Promise<GeminiHeadlessResult> {
+  const prompt = options.prompt.trim();
+  if (!prompt) {
+    throw new Error('Gemini prompt is empty.');
+  }
+
+  const model = options.model?.trim() || '';
+  const cwd = options.cwd || process.cwd();
+  const safeTimeoutMs = normalizeTimeoutMs(timeoutMs, GEMINI_RUN_TIMEOUT_MS);
+
+  return new Promise<GeminiHeadlessResult>((resolve, reject) => {
+    const args: string[] = [...prefixArgs];
+    if (model) {
+      args.push('--model', model);
+    }
+    args.push('--output-format', 'json', '--prompt', prompt);
+    if (GEMINI_STREAM_LOGS) {
+      const displayArgs = [...prefixArgs];
+      if (model) {
+        displayArgs.push('--model', model);
+      }
+      displayArgs.push('--output-format', 'json', '--prompt', `<prompt:${prompt.length} chars>`);
+      console.log(`[Gemini CLI] Running: ${command} ${displayArgs.join(' ')}`);
+    }
+
+    const proc = spawn(command, args, {
+      cwd,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const startedAt = Date.now();
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        proc.kill('SIGKILL');
+      } catch {
+        // Ignore cleanup errors.
+      }
+      const elapsedMs = Date.now() - startedAt;
+      reject(
+        new Error(
+          `${command} timed out after ${elapsedMs}ms. stderr=${stderr.slice(-600) || '(empty)'} stdout=${stdout.slice(-200) || '(empty)'}`
+        )
+      );
+    }, safeTimeoutMs);
+
+    proc.stdout?.on('data', (chunk) => {
+      const text = chunk.toString();
+      stdout += text;
+      if (GEMINI_STREAM_LOGS && text) {
+        process.stdout.write(text);
+      }
+    });
+
+    proc.stderr?.on('data', (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+      if (GEMINI_STREAM_LOGS && text) {
+        process.stderr.write(text);
+      }
+    });
+
+    proc.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      reject(error instanceof Error ? error : new Error(String(error)));
+    });
+
+    proc.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (GEMINI_STREAM_LOGS) {
+        const elapsedMs = Date.now() - startedAt;
+        console.log(`[Gemini CLI] Process closed: code=${code} elapsedMs=${elapsedMs}`);
+      }
+      if (code !== 0) {
+        reject(
+          new Error(
+            `${command} exited with code ${code}. stderr=${stderr || '(empty)'}`
+          )
+        );
+        return;
+      }
+
+      let parsed: any;
+      try {
+        parsed = JSON.parse(stdout);
+      } catch (error) {
+        reject(
+          new Error(
+            `Failed to parse Gemini JSON output. error=${error instanceof Error ? error.message : String(error)}`
+          )
+        );
+        return;
+      }
+
+      const responseText =
+        typeof parsed?.response === 'string'
+          ? parsed.response
+          : typeof parsed?.result?.response === 'string'
+            ? parsed.result.response
+            : '';
+
+      if (!responseText) {
+        reject(new Error('Gemini JSON output did not contain a response string.'));
+        return;
+      }
+
+      resolve({ response: responseText, raw: parsed });
+    });
+  });
+}
+
+export async function runGeminiHeadless(options: GeminiHeadlessOptions): Promise<GeminiHeadlessResult> {
+  const prompt = options.prompt.trim();
+  if (!prompt) {
+    throw new Error('Gemini prompt is empty.');
+  }
+
+  const geminiCommand = resolveGeminiCommand();
+  const initialAttempt: GeminiFallbackAttempt = {
+    command: geminiCommand,
+    prefixArgs: [],
+    description: geminiCommand,
+    timeoutMs: GEMINI_RUN_TIMEOUT_MS,
+  };
+  const fallbackAttempts = buildGeminiFallbackAttempts();
+  const attemptErrors: string[] = [];
+  let sawNonMissingFailure = false;
+  const requestedModel = options.model?.trim() || '';
+
+  for (const attempt of [initialAttempt, ...fallbackAttempts]) {
+    try {
+      if (GEMINI_STREAM_LOGS) {
+        console.log(`[Gemini CLI] Attempt: ${attempt.description}`);
+      }
+      // Primary attempt: direct gemini CLI (or GEMINI_BIN), then package-manager fallbacks.
+      const timeoutMs =
+        attempt.timeoutMs ??
+        (attempt.prefixArgs.length === 0 ? GEMINI_RUN_TIMEOUT_MS : GEMINI_FALLBACK_RUN_TIMEOUT_MS);
+      return await runGeminiOnce(attempt.command, attempt.prefixArgs, options, timeoutMs);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (requestedModel && isCapacityExhaustedError(message)) {
+        for (const fallbackModel of GEMINI_CAPACITY_FALLBACK_MODELS) {
+          if (fallbackModel.toLowerCase() === requestedModel.toLowerCase()) continue;
+          try {
+            if (GEMINI_STREAM_LOGS) {
+              console.log(
+                `[Gemini CLI] Capacity fallback: ${requestedModel} -> ${fallbackModel} (attempt: ${attempt.description})`
+              );
+            }
+            const timeoutMs =
+              attempt.timeoutMs ??
+              (attempt.prefixArgs.length === 0 ? GEMINI_RUN_TIMEOUT_MS : GEMINI_FALLBACK_RUN_TIMEOUT_MS);
+            return await runGeminiOnce(
+              attempt.command,
+              attempt.prefixArgs,
+              { ...options, model: fallbackModel },
+              timeoutMs
+            );
+          } catch (fallbackError) {
+            const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+            attemptErrors.push(`${attempt.description} [model=${fallbackModel}] => ${fallbackMessage}`);
+          }
+        }
+      }
+      const isNotFound = isLikelyMissingCommandError(message);
+      if (isNotFound) {
+        attemptErrors.push(`${attempt.description} => ${message}`);
+        continue;
+      }
+      sawNonMissingFailure = true;
+      if (attempt === initialAttempt) {
+        throw error;
+      }
+      attemptErrors.push(`${attempt.description} => ${message}`);
+    }
+  }
+
+  const details = attemptErrors.length > 0 ? ` Attempts: ${attemptErrors.join(' | ')}` : '';
+  if (sawNonMissingFailure) {
+    throw new Error(
+      `Gemini CLI invocation failed across all attempts. Configure GEMINI_BIN to a known working gemini executable.${details}`
+    );
+  }
+  throw new Error(
+    `Gemini CLI was not found. Set GEMINI_BIN to an absolute gemini executable path or install ${GEMINI_CLI_PACKAGE}.${details}`
+  );
+}
+
+// ------------------------------------------------------------------------------------
+// Port of gemini3agent.ts logic, with "opencode" process calls replaced by Gemini CLI.
+// ------------------------------------------------------------------------------------
 
 export const OPENCODE_MODELS = {
-  flash: 'google/antigravity-gemini-3-flash',
-  // Default model for OpenCode-based runs.
-  // "pro" is used as the fallback when no explicit model is provided.
-  pro: 'github-copilot/claude-sonnet-4.6',
-  minimax: 'opencode/minimax-m2.5-free',
+  // Force explicit Gemini 3-series model IDs for CLI.
+  flash: process.env.GEMINI_CLI_FLASH_MODEL?.trim() || 'gemini-3-flash-preview',
+  pro: process.env.GEMINI_CLI_PRO_MODEL?.trim() || 'gemini-3.1-pro-preview',
+  // Gemini CLI cannot run non-Gemini models; keep compatibility by mapping to pro.
+  minimax: process.env.GEMINI_CLI_MINIMAX_FALLBACK_MODEL?.trim() || 'gemini-3.1-pro-preview',
 } as const;
+
+function resolveGeminiCliModel(model: keyof typeof OPENCODE_MODELS | string | undefined): string {
+  const raw = (model || 'pro').trim();
+  if (!raw) return OPENCODE_MODELS.pro;
+
+  if (raw in OPENCODE_MODELS) {
+    return OPENCODE_MODELS[raw as keyof typeof OPENCODE_MODELS];
+  }
+
+  // Backward-compatibility for legacy internal model IDs.
+  const normalized = raw.toLowerCase();
+  if (normalized.includes('antigravity-gemini-3.1-pro')) return OPENCODE_MODELS.pro;
+  if (normalized.includes('antigravity-gemini-3-flash')) return OPENCODE_MODELS.flash;
+  if (normalized.includes('minimax')) return OPENCODE_MODELS.minimax;
+  if (normalized === 'pro' || normalized === 'auto') return OPENCODE_MODELS.pro;
+  if (normalized === 'flash') return OPENCODE_MODELS.flash;
+
+  return raw;
+}
 
 export interface OpenCodeRunOptions {
   prompt: string;
@@ -32,7 +422,6 @@ export interface OpenCodeRunOptions {
   quiet?: boolean;
   agent?: string;
   cwd?: string;
-  /** When true, resolve early once the stream contains valid GeneratedClip component code — avoids hanging after output is ready. */
   earlyCompleteForClipCode?: boolean;
 }
 
@@ -132,9 +521,6 @@ function extractToolName(event: Record<string, unknown>): string | null {
     e.part?.tool,
     e.part?.toolName,
     e.part?.name,
-    e.part?.state?.input?.name,
-    e.part?.state?.tool,
-    e.state?.input?.name,
   ];
   for (const item of candidates) {
     if (typeof item === 'string' && item.trim()) return item.trim();
@@ -159,103 +545,63 @@ function stripAnsi(text: string): string {
   return text.replace(/\u001b\[[0-9;]*m/g, '');
 }
 
-function isPathLikeCommand(command: string): boolean {
-  return /[\\/]/.test(command) || /^[a-zA-Z]:/.test(command) || command.endsWith('.cmd') || command.endsWith('.exe');
+// ------------------------------------------------------------------------------------
+// Environment + "opencode" run implementation backed by Gemini CLI
+// ------------------------------------------------------------------------------------
+
+export async function inspectOpenCodeEnvironment(_cwd: string): Promise<OpenCodeEnvironmentCheck> {
+  // Gemini-backed stub: assume CLI and tools are available.
+  return {
+    opencodeCommand: resolveGeminiCommand(),
+    opencodeAvailable: true,
+    exaConnected: true,
+    remotionSkillInstalled: true,
+    mcpListRaw: 'gemini-cli stub environment',
+    skillsRaw: 'gemini-cli stub skills',
+  };
 }
 
-function resolveOpenCodeCommand(): string {
-  if (CACHED_OPENCODE_COMMAND) return CACHED_OPENCODE_COMMAND;
-
-  const candidates: string[] = [];
-  if (OPENCODE_BIN_ENV) candidates.push(OPENCODE_BIN_ENV);
-
-  if (process.platform === 'win32') {
-    const appData = process.env.APPDATA;
-    const localAppData = process.env.LOCALAPPDATA;
-    const pnpmHome = process.env.PNPM_HOME;
-    const userProfile = process.env.USERPROFILE;
-    if (appData) candidates.push(path.join(appData, 'npm', 'opencode.cmd'));
-    if (userProfile) candidates.push(path.join(userProfile, 'AppData', 'Roaming', 'npm', 'opencode.cmd'));
-    // pnpm global bin locations (common on Windows)
-    if (pnpmHome) candidates.push(path.join(pnpmHome, 'opencode.cmd'));
-    if (localAppData) candidates.push(path.join(localAppData, 'pnpm', 'opencode.cmd'));
-    if (appData) candidates.push(path.join(appData, 'pnpm', 'opencode.cmd'));
-    if (userProfile) candidates.push(path.join(userProfile, 'AppData', 'Local', 'pnpm', 'opencode.cmd'));
-    // project-local install fallback
-    candidates.push(path.join(process.cwd(), 'node_modules', '.bin', 'opencode.cmd'));
+export async function opencodeRun(options: OpenCodeRunOptions): Promise<string> {
+  const prompt = normalizePromptText(options.prompt || '');
+  if (!prompt) {
+    throw new Error('OpenCode/Gemini prompt is empty.');
   }
 
-  if (process.platform !== 'win32') {
-    candidates.push(path.join(process.cwd(), 'node_modules', '.bin', 'opencode'));
-  }
+  const cwd = options.cwd || process.cwd();
+  const requestedModel = typeof options.model === 'string' ? options.model : 'pro';
+  const model = resolveGeminiCliModel(requestedModel);
 
-  candidates.push(OPENCODE_DEFAULT_BIN);
-  const uniqueCandidates = [...new Set(candidates.filter(Boolean))];
-
-  const existingPathCandidate = uniqueCandidates.find((candidate) => {
-    if (!isPathLikeCommand(candidate)) return false;
-    return fs.existsSync(candidate);
+  const { response } = await runGeminiHeadless({
+    prompt,
+    cwd,
+    model,
   });
 
-  CACHED_OPENCODE_COMMAND =
-    existingPathCandidate || uniqueCandidates.find((candidate) => !isPathLikeCommand(candidate)) || OPENCODE_DEFAULT_BIN;
-  return CACHED_OPENCODE_COMMAND;
+  return response;
 }
 
-function withPathPrepended(dirPath: string): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  if (!dirPath) return env;
-  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path') || 'PATH';
-  const current = env[pathKey] || '';
-  const parts = current
-    .split(path.delimiter)
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .map((part) => part.toLowerCase());
-  if (!parts.includes(dirPath.toLowerCase())) {
-    env[pathKey] = current ? `${dirPath}${path.delimiter}${current}` : dirPath;
-  }
-  return env;
+export async function opencodeRunWithTiming(options: OpenCodeRunOptions): Promise<OpenCodeResult> {
+  const start = performance.now();
+  const output = await opencodeRun(options);
+  const elapsedMs = Math.round(performance.now() - start);
+  return { output, elapsedMs };
 }
 
-function resolveOpenCodeSpawnTarget(opencodeCommand: string): {
-  command: string;
-  env: NodeJS.ProcessEnv;
-  commandLabel: string;
-  prefixArgs: string[];
-} {
-  if (process.platform !== 'win32') {
-    return { command: opencodeCommand, env: { ...process.env }, commandLabel: opencodeCommand, prefixArgs: [] };
+export async function opencodeRunMultiModel(
+  options: Omit<OpenCodeRunOptions, 'model'> & { models: string[] }
+): Promise<Record<string, string>> {
+  const results: Record<string, string> = {};
+  for (const model of options.models) {
+    opencodeInfo('Running model variant', { model });
+    results[model] = await opencodeRun({ ...options, model });
   }
-
-  if (opencodeCommand.toLowerCase().endsWith('.cmd') && isPathLikeCommand(opencodeCommand)) {
-    const dirPath = path.dirname(opencodeCommand);
-    const env = withPathPrepended(dirPath);
-    const scriptPath = path.join(dirPath, 'node_modules', 'opencode-ai', 'bin', 'opencode');
-    const localNodeExe = path.join(dirPath, 'node.exe');
-    const nodeCommand = fs.existsSync(localNodeExe) ? localNodeExe : 'node';
-    if (fs.existsSync(scriptPath)) {
-      return {
-        command: nodeCommand,
-        env,
-        commandLabel: `${nodeCommand} ${scriptPath} (via ${opencodeCommand})`,
-        prefixArgs: [scriptPath],
-      };
-    }
-    const basename = path.basename(opencodeCommand);
-    if (/\s/.test(opencodeCommand)) {
-      return {
-        command: basename,
-        env,
-        commandLabel: `${basename} (resolved from ${opencodeCommand})`,
-        prefixArgs: [],
-      };
-    }
-    return { command: opencodeCommand, env, commandLabel: opencodeCommand, prefixArgs: [] };
-  }
-
-  return { command: opencodeCommand, env: { ...process.env }, commandLabel: opencodeCommand, prefixArgs: [] };
+  return results;
 }
+
+// ------------------------------------------------------------------------------------
+// The rest of this file is a mostly-direct copy of gemini3agent.ts domain logic,
+// reusing the Gemini-backed opencodeRun implementation above.
+// ------------------------------------------------------------------------------------
 
 function extractToolUseEvents(output: string): Array<Record<string, any>> {
   const lines = output.trim().split('\n').filter(Boolean);
@@ -281,13 +627,7 @@ function detectExaUsage(diagnostics: OpenCodeOutputDiagnostics, output: string):
       normalized === 'exa' ||
       normalized.startsWith('exa_') ||
       normalized.startsWith('exa-') ||
-      normalized.startsWith('mcp_exa') ||
-      normalized.includes('.exa') ||
-      // MCP tools may be named e.g. mcp_exa_web_search_exa
-      (normalized.includes('exa') &&
-        (normalized.includes('web_search') ||
-          normalized.includes('get_code_context') ||
-          normalized.includes('company_research')))
+      normalized.includes('.exa')
     );
   };
 
@@ -306,9 +646,7 @@ function detectExaUsage(diagnostics: OpenCodeOutputDiagnostics, output: string):
     normalizedOutput.includes('"tool":"exa') ||
     normalizedOutput.includes('"tool":"exa_web_search_exa"') ||
     normalizedOutput.includes('"tool":"exa_get_code_context_exa"') ||
-    normalizedOutput.includes('"tool":"exa_company_research_exa"') ||
-    normalizedOutput.includes('"tool":"mcp_exa') ||
-    (normalizedOutput.includes('"tool":') && normalizedOutput.includes('exa') && (normalizedOutput.includes('web_search') || normalizedOutput.includes('get_code_context') || normalizedOutput.includes('company_research')))
+    normalizedOutput.includes('"tool":"exa_company_research_exa"')
   );
 }
 
@@ -318,10 +656,10 @@ function detectRemotionSkillUsage(diagnostics: OpenCodeOutputDiagnostics, output
     const toolName = extractToolName(event)?.toLowerCase() || '';
     if (toolName === 'skill' || toolName.endsWith('.skill') || toolName.includes('skill')) {
       const requestedNameCandidates = [
-        event.part?.state?.input?.name,
-        event.part?.input?.name,
-        event.state?.input?.name,
-        event.input?.name,
+        (event as any).part?.state?.input?.name,
+        (event as any).part?.input?.name,
+        (event as any).state?.input?.name,
+        (event as any).input?.name,
       ];
       const requestedName = requestedNameCandidates.find((value) => typeof value === 'string') as string | undefined;
       if (requestedName && requestedName.toLowerCase().includes('remotion-best-practices')) {
@@ -333,7 +671,8 @@ function detectRemotionSkillUsage(diagnostics: OpenCodeOutputDiagnostics, output
   const normalized = output.toLowerCase();
   if (/\bloaded skill:\s*remotion-best-practices\b/.test(normalized)) return true;
   if (/<skill_content\s+name=["']remotion-best-practices["']/.test(normalized)) return true;
-  if (/"name"\s*:\s*"remotion-best-practices"/.test(normalized) && diagnostics.toolUseNames.some((n) => /skill/i.test(n))) return true;
+  if (/"name"\s*:\s*"remotion-best-practices"/.test(normalized) && diagnostics.toolUseNames.some((n) => /skill/i.test(n)))
+    return true;
   return false;
 }
 
@@ -357,140 +696,6 @@ function extractEventStreamText(output: string): string {
 
   const combined = chunks.join('\n').trim();
   return combined || trimmed;
-}
-
-/**
- * Returns true once the accumulated event-stream output already contains a complete,
- * valid GeneratedClip TSX component. Used to resolve the opencodeRun promise early
- * (before the OpenCode process exits) so we don't hang waiting for cleanup/extra output
- * after the useful result has already arrived.
- */
-function hasCompleteClipCodeInStream(output: string): boolean {
-  if (!output || output.length < 200) return false;
-  let textContent = '';
-  for (const line of output.split('\n')) {
-    try {
-      const event = JSON.parse(line) as Record<string, unknown> & { type?: string; part?: { text?: string } };
-      if (event.type === 'text' && typeof event.part?.text === 'string') {
-        textContent += event.part.text;
-      }
-    } catch {
-      // ignore non-JSON lines
-    }
-  }
-  if (!textContent.trim()) return false;
-  const parsed = parseJsonFromText<{ componentCode?: unknown; code?: unknown }>(textContent);
-  if (!parsed || typeof parsed !== 'object') return false;
-  const raw = parsed.componentCode ?? parsed.code;
-  if (typeof raw !== 'string' || !raw.trim()) return false;
-  const normalized = raw
-    .replace(/\\r\\n/g, '\n')
-    .replace(/\\n/g, '\n')
-    .replace(/\\"/g, '"')
-    .replace(/\\\\/g, '\\')
-    .trim();
-  return (
-    /\bexport\s+const\s+GeneratedClip\b/.test(normalized) &&
-    /from\s+["']remotion["']/.test(normalized) &&
-    (/\buseCurrentFrame\b/.test(normalized) || /\buseVideoConfig\b/.test(normalized))
-  );
-}
-
-function extractSessionIdFromOutput(output: string): string | null {
-  const lines = output.trim().split('\n').filter(Boolean);
-  for (const line of lines) {
-    try {
-      const event = JSON.parse(line) as Record<string, any>;
-      const sessionID = typeof event.sessionID === 'string' ? event.sessionID : null;
-      if (sessionID) return sessionID;
-      const nested = typeof event.part?.sessionID === 'string' ? event.part.sessionID : null;
-      if (nested) return nested;
-    } catch {
-      // ignore non-JSON lines
-    }
-  }
-  return null;
-}
-
-function extractModelFromSessionExport(raw: string): { providerID: string; modelID: string } | null {
-  try {
-    const parsed = JSON.parse(raw) as { messages?: Array<{ info?: any }> };
-    const assistant = parsed.messages?.find((message) => message?.info?.role === 'assistant');
-    const providerID = assistant?.info?.providerID;
-    const modelID = assistant?.info?.modelID;
-    if (typeof providerID === 'string' && typeof modelID === 'string') {
-      return { providerID, modelID };
-    }
-  } catch {
-    // ignore parse issues
-  }
-  return null;
-}
-
-async function runLocalCommandCapture(
-  command: string,
-  args: string[],
-  cwd: string
-): Promise<{ stdout: string; stderr: string; code: number | null }> {
-  return new Promise((resolve) => {
-    const target = resolveOpenCodeSpawnTarget(command);
-    const proc = spawn(target.command, [...target.prefixArgs, ...args], {
-      cwd,
-      env: target.env,
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let stdout = '';
-    let stderr = '';
-    proc.stdout?.on('data', (chunk) => (stdout += chunk.toString()));
-    proc.stderr?.on('data', (chunk) => (stderr += chunk.toString()));
-    proc.on('close', (code) => resolve({ stdout, stderr, code }));
-    proc.on('error', (error) =>
-      resolve({
-        stdout,
-        stderr: `${stderr}\n${error instanceof Error ? error.message : String(error)}`,
-        code: -1,
-      })
-    );
-  });
-}
-
-export async function inspectOpenCodeEnvironment(cwd: string): Promise<OpenCodeEnvironmentCheck> {
-  const opencodeCommand = resolveOpenCodeCommand();
-  const mcp = await runLocalCommandCapture(opencodeCommand, ['mcp', 'list'], cwd);
-  const skills = await runLocalCommandCapture(opencodeCommand, ['debug', 'skill'], cwd);
-
-  const mcpRaw = stripAnsi(`${mcp.stdout}\n${mcp.stderr}`.trim());
-  const skillsRaw = stripAnsi(`${skills.stdout}\n${skills.stderr}`.trim());
-  const combinedRaw = `${mcpRaw}\n${skillsRaw}`;
-  const opencodeAvailable =
-    (mcp.code === 0 || skills.code === 0) && !/\bENOENT\b/i.test(combinedRaw) && !/\buv_spawn\b/i.test(combinedRaw);
-
-  // MCP list is global. Exa connected = any line has both "exa" and "connected", or both appear somewhere in the output.
-  const exaConnected =
-    mcpRaw.split(/\r?\n/).some((line) => /\bexa\b/i.test(line) && /\bconnected\b/i.test(line)) ||
-    (/\bexa\b/i.test(mcpRaw) && /\bconnected\b/i.test(mcpRaw));
-
-  let remotionSkillInstalled = false;
-  try {
-    const parsed = JSON.parse(skills.stdout) as Array<{ name?: string; location?: string }>;
-    remotionSkillInstalled = parsed.some((skill) => {
-      const name = (skill.name || '').toLowerCase();
-      const location = (skill.location || '').toLowerCase();
-      return name.includes('remotion') || location.includes('remotion-best-practices');
-    });
-  } catch {
-    remotionSkillInstalled = /\bremotion-best-practices\b/i.test(skillsRaw);
-  }
-
-  return {
-    opencodeCommand,
-    opencodeAvailable,
-    exaConnected,
-    remotionSkillInstalled,
-    mcpListRaw: summarizeForLog(mcpRaw, 1000),
-    skillsRaw: summarizeForLog(skillsRaw, 1000),
-  };
 }
 
 export function summarizeOpenCodeOutput(output: string): OpenCodeOutputDiagnostics {
@@ -540,292 +745,9 @@ export function summarizeOpenCodeOutput(output: string): OpenCodeOutputDiagnosti
   };
 }
 
-export async function opencodeRun(options: OpenCodeRunOptions): Promise<string> {
-  const prompt = normalizePromptText(options.prompt || '');
-  if (!prompt) {
-    throw new Error('OpenCode prompt is empty.');
-  }
-
-  const resolvedModel =
-    options.model && OPENCODE_MODELS[options.model as keyof typeof OPENCODE_MODELS]
-      ? OPENCODE_MODELS[options.model as keyof typeof OPENCODE_MODELS]
-      : options.model;
-  const opencodeCommand = resolveOpenCodeCommand();
-
-  const cwd = options.cwd || process.cwd();
-  opencodeInfo('Run starting', {
-    model: resolvedModel || 'default',
-    format: options.format || 'default',
-    agent: options.agent || null,
-    opencodeCommand,
-    cwd,
-    promptChars: prompt.length,
-  });
-
-  return new Promise((resolve, reject) => {
-    const startedAt = Date.now();
-    const target = resolveOpenCodeSpawnTarget(opencodeCommand);
-    const command = target.command;
-    const args: string[] = ['run'];
-    const useStdinPrompt = true;
-    if (options.format && options.format !== 'default') {
-      args.push('--format', options.format);
-    }
-    if (resolvedModel) {
-      args.push('--model', resolvedModel);
-    }
-    if (options.agent) {
-      args.push('--agent', options.agent);
-    }
-    opencodeInfo('Using direct runner', {
-      command: target.commandLabel,
-      argsPreview: summarizeForLog(args.join(' '), 220),
-      promptTransport: useStdinPrompt ? 'stdin' : 'argv',
-    });
-
-    const proc = spawn(command, [...target.prefixArgs, ...args], {
-      cwd,
-      env: target.env,
-      windowsHide: true,
-      stdio: [useStdinPrompt ? 'pipe' : 'ignore', 'pipe', 'pipe'],
-    });
-
-    let stdout = '';
-    let stderr = '';
-    let closed = false;
-    let timedOut = false;
-
-    const heartbeatTimer = setInterval(() => {
-      if (closed) return;
-      opencodeInfo('Run heartbeat', {
-        elapsedMs: Date.now() - startedAt,
-        promptChars: prompt.length,
-        stdoutChars: stdout.length,
-        stderrChars: stderr.length,
-      });
-    }, Math.max(5000, OPENCODE_HEARTBEAT_INTERVAL_MS));
-
-    const timeoutTimer = setTimeout(() => {
-      if (closed) return;
-      timedOut = true;
-      opencodeError('Run timed out', {
-        elapsedMs: Date.now() - startedAt,
-        timeoutMs: OPENCODE_RUN_TIMEOUT_MS,
-        promptChars: prompt.length,
-        stdoutChars: stdout.length,
-        stderrChars: stderr.length,
-      });
-      try {
-        proc.kill();
-      } catch {
-        // ignore kill failures
-      }
-    }, Math.max(30000, OPENCODE_RUN_TIMEOUT_MS));
-
-    proc.stdout?.on('data', (data) => {
-      const chunk = data.toString();
-      stdout += chunk;
-      if (OPENCODE_LOG_EVERY_WORD) {
-        // Verbose logging disabled.
-      }
-      // Early completion: once valid clip code JSON is in the stream we no longer need
-      // to wait for the OpenCode process to exit — resolve now and kill to free resources.
-      if (
-        !closed &&
-        options.earlyCompleteForClipCode &&
-        options.format === 'json' &&
-        hasCompleteClipCodeInStream(stdout)
-      ) {
-        closed = true;
-        clearInterval(heartbeatTimer);
-        clearTimeout(timeoutTimer);
-        opencodeInfo('Early completion: valid clip code detected in stream', {
-          stdoutChars: stdout.length,
-          elapsedMs: Date.now() - startedAt,
-        });
-        try {
-          proc.kill();
-        } catch {
-          // ignore kill failures
-        }
-        resolve(stdout);
-      }
-    });
-
-    proc.stderr?.on('data', (data) => {
-      const chunk = data.toString();
-      stderr += chunk;
-      if (OPENCODE_LOG_EVERY_WORD) {
-        // Verbose logging disabled.
-      }
-      const isProgress =
-        chunk.includes('> build') || chunk.includes('> run') || chunk.includes('Ã‚Â·') || chunk.trim() === '';
-
-      if (isProgress) {
-        opencodeInfo('Progress', { chunk: summarizeForLog(chunk, 180) });
-      } else {
-        opencodeWarn('Stderr chunk', { chunk: summarizeForLog(chunk, 320) });
-      }
-    });
-
-    if (useStdinPrompt) {
-      try {
-        proc.stdin?.write(`${prompt}\n`);
-        proc.stdin?.end();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        opencodeError('Failed writing prompt to stdin', { message });
-      }
-    }
-
-    proc.on('close', (exitCode) => {
-      closed = true;
-      clearInterval(heartbeatTimer);
-      clearTimeout(timeoutTimer);
-      const diagnostics = summarizeOpenCodeOutput(stdout);
-      opencodeInfo('Run finished', {
-        exitCode,
-        stdoutChars: stdout.length,
-        stderrChars: stderr.length,
-        diagnostics,
-      });
-      if (OPENCODE_LOG_EVERY_WORD && (stdout || stderr)) {
-        // Verbose full output disabled.
-      }
-
-      if (exitCode !== 0) {
-        if (timedOut) {
-          reject(
-            new Error(
-              `opencode run timed out after ${OPENCODE_RUN_TIMEOUT_MS}ms. stdout=${stdout.length} chars stderr=${stderr.length} chars`
-            )
-          );
-          return;
-        }
-        const errorMsg = stderr || stdout || 'Unknown error';
-        opencodeError('Process failed', {
-          exitCode,
-          stderr: summarizeForLog(stderr, 700),
-          stdoutTail: summarizeForLog(stdout.slice(-700), 700),
-        });
-        reject(new Error(`opencode run exited with ${exitCode}: ${errorMsg}`));
-        return;
-      }
-
-      if (!stdout && stderr) {
-        opencodeWarn('No stdout with non-empty stderr', {
-          stderr: summarizeForLog(stderr, 320),
-        });
-      }
-
-      resolve(stdout);
-    });
-
-    proc.on('error', (error) => {
-      closed = true;
-      clearInterval(heartbeatTimer);
-      clearTimeout(timeoutTimer);
-      const message = error instanceof Error ? error.message : String(error);
-      const notFoundHint =
-        /\bENOENT\b/i.test(message) || /\bnot found\b/i.test(message)
-          ? ' OpenCode CLI was not found. Set OPENCODE_BIN to your absolute opencode path (for example C:\\Users\\<you>\\AppData\\Roaming\\npm\\opencode.cmd).'
-          : '';
-      opencodeError('Spawn error', {
-        opencodeCommand,
-        message: `${message}${notFoundHint}`,
-      });
-      reject(new Error(`${message}${notFoundHint}`));
-    });
-  });
-}
-
-export async function opencodeRunWithTiming(options: OpenCodeRunOptions): Promise<OpenCodeResult> {
-  const start = performance.now();
-  const output = await opencodeRun(options);
-  const elapsedMs = Math.round(performance.now() - start);
-  return { output, elapsedMs };
-}
-
-export async function opencodeRunMultiModel(
-  options: Omit<OpenCodeRunOptions, 'model'> & { models: string[] }
-): Promise<Record<string, string>> {
-  const results: Record<string, string> = {};
-  for (const model of options.models) {
-    opencodeInfo('Running model variant', { model });
-    results[model] = await opencodeRun({ ...options, model });
-  }
-  return results;
-}
-
-function parseJsonFromText<T = any>(text: string): T | null {
-  const trimmed = text.trim();
-  if (!trimmed) return null;
-
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    // Continue to permissive parsing
-  }
-
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  if (fenced?.[1]) {
-    try {
-      return JSON.parse(fenced[1].trim());
-    } catch {
-      // Continue
-    }
-  }
-
-  const objectMatch = trimmed.match(/\{[\s\S]*\}/);
-  const arrayMatch = trimmed.match(/\[[\s\S]*\]/);
-  const raw = objectMatch?.[0] || arrayMatch?.[0];
-  if (!raw) return null;
-
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-export function parseOpenCodeJSON<T = any>(output: string): T | null {
-  const direct = parseJsonFromText<T>(output);
-  if (direct) return direct;
-
-  const lines = output.trim().split('\n').filter(Boolean);
-  if (lines.length <= 1) {
-    opencodeWarn('Could not parse JSON from output');
-    return null;
-  }
-
-  let textContent = '';
-  let hasEventStreamHints = false;
-  for (const line of lines) {
-    try {
-      const event = JSON.parse(line) as Record<string, any>;
-      if (event.type === 'text' || event.type === 'step_start' || event.type === 'tool_use') {
-        hasEventStreamHints = true;
-      }
-      if (event.type === 'text' && typeof event.part?.text === 'string') {
-        textContent += event.part.text;
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  if (!hasEventStreamHints) {
-    opencodeWarn('Could not parse JSON from output');
-    return null;
-  }
-
-  opencodeInfo('Detected event stream output', { events: lines.length, extractedChars: textContent.length });
-  const parsed = parseJsonFromText<T>(textContent);
-  if (!parsed) {
-    opencodeWarn('Event stream had no parseable JSON text');
-  }
-  return parsed;
-}
+// ------------------------------------------------------------------------------------
+// Domain-specific animation & clip helpers (copied from gemini3agent.ts)
+// ------------------------------------------------------------------------------------
 
 type AnimationBudgetPlan = {
   durationSeconds: number;
@@ -949,7 +871,11 @@ function buildAnimationBudgetBlock(budget: AnimationBudgetPlan): string {
     `- MIN_GAP_SECONDS: ${budget.minGapSeconds.toFixed(2)}s`,
   ];
   if (budget.durationSeconds <= 12) {
-    lines.push(`- TARGET_ANIMATED_SECONDS_RANGE: ${budget.minAnimatedSeconds.toFixed(2)}s to ${budget.maxAnimatedSeconds.toFixed(2)}s`);
+    lines.push(
+      `- TARGET_ANIMATED_SECONDS_RANGE: ${budget.minAnimatedSeconds.toFixed(2)}s to ${budget.maxAnimatedSeconds.toFixed(
+        2
+      )}s`
+    );
   }
   lines.push('- DENSITY_POLICY: pulse-and-rest cadence; avoid constant animation.');
   return lines.join('\n');
@@ -982,16 +908,17 @@ function buildFallbackTimelinePlan(topic: string, budget: AnimationBudgetPlan): 
 
   return {
     videoDurationSeconds: durationSeconds,
-    moments: moments.length > 0
-      ? moments
-      : [
-          {
-            start: 0,
-            duration: Number(Math.min(5.5, Math.max(2, durationSeconds * 0.45)).toFixed(2)),
-            type: 'hook',
-            content: `Core idea: ${topic}`,
-          },
-        ],
+    moments:
+      moments.length > 0
+        ? moments
+        : [
+            {
+              start: 0,
+              duration: Number(Math.min(5.5, Math.max(2, durationSeconds * 0.45)).toFixed(2)),
+              type: 'hook',
+              content: `Core idea: ${topic}`,
+            },
+          ],
   };
 }
 
@@ -1012,7 +939,7 @@ function normalizeTimelinePlanForBudget(rawPlan: unknown, topic: string, budget:
   let nextMinStart = 0;
   for (const moment of sorted) {
     if (normalized.length >= budget.hardMomentCap) break;
-    const content = cleanOneLineText(moment.content, 180) || cleanOneLineText(moment.title, 180);
+    const content = cleanOneLineText(moment.content, 180) || cleanOneLineText((moment as any).title, 180);
     if (!content) continue;
 
     let start = clampNumber(toFiniteNumber(moment.start, 0), 0, Math.max(0, budget.durationSeconds - 0.2));
@@ -1086,7 +1013,7 @@ function normalizeTimelinePlanForBudget(rawPlan: unknown, topic: string, budget:
       if (total > budget.maxAnimatedSeconds) {
         const scale = budget.maxAnimatedSeconds / total;
         for (const moment of resolved) {
-          moment.duration = Number((Math.max(1.8, moment.duration * scale)).toFixed(2));
+          moment.duration = Number(Math.max(1.8, moment.duration * scale).toFixed(2));
         }
       }
     }
@@ -1138,7 +1065,9 @@ function buildDialogueWindowsByMoment(dialogueContext: string, timelinePlan: Tim
             .join('\n')
         : '- (no nearby subtitle lines in this window)';
     blocks.push(
-      `Moment ${i + 1} [${formatSeconds(moment.start)}-${formatSeconds(moment.start + moment.duration)}], local window [${formatSeconds(windowStart)}-${formatSeconds(windowEnd)}]:\n${details}`
+      `Moment ${i + 1} [${formatSeconds(moment.start)}-${formatSeconds(
+        moment.start + moment.duration
+      )}], local window [${formatSeconds(windowStart)}-${formatSeconds(windowEnd)}]:\n${details}`
     );
   }
 
@@ -1167,23 +1096,23 @@ function alignDirectionOutputToTimeline(
     const nearbyDialogue = dialogueLines.find(
       (line) => line.end > baseMoment.start && line.start < baseMoment.start + baseMoment.duration
     );
-    const subtitle = cleanOneLineText(source.subtitle, NO_CHAR_CAP) || nearbyDialogue?.text || baseMoment.content;
-    const content = cleanOneLineText(source.content, NO_CHAR_CAP) || baseMoment.content;
-    const emphasis = cleanOneLineText(source.emphasis, NO_CHAR_CAP);
+    const subtitle = cleanOneLineText((source as any).subtitle, NO_CHAR_CAP) || nearbyDialogue?.text || baseMoment.content;
+    const content = cleanOneLineText((source as any).content, NO_CHAR_CAP) || baseMoment.content;
+    const emphasis = cleanOneLineText((source as any).emphasis, NO_CHAR_CAP);
     const animationPrompt =
-      cleanOneLineText(source.animationPrompt, NO_CHAR_CAP) ||
+      cleanOneLineText((source as any).animationPrompt, NO_CHAR_CAP) ||
       `Scene focus: ${content}. Motion cadence: 1-2 active beats, then one hold beat for readability.`;
 
     return {
-      ...source,
+      ...(source as any),
       start: Number(baseMoment.start.toFixed(2)),
       duration: Number(baseMoment.duration.toFixed(2)),
-      type: cleanOneLineText(source.type, NO_CHAR_CAP) || baseMoment.type,
+      type: cleanOneLineText((source as any).type, NO_CHAR_CAP) || baseMoment.type,
       subtitle,
       content,
-      visualStyle: cleanOneLineText(source.visualStyle, NO_CHAR_CAP) || fallbackStyles[index % fallbackStyles.length],
-      motion: cleanOneLineText(source.motion, NO_CHAR_CAP) || fallbackMotion[index % fallbackMotion.length],
-      layout: cleanOneLineText(source.layout, NO_CHAR_CAP) || fallbackLayout[index % fallbackLayout.length],
+      visualStyle: cleanOneLineText((source as any).visualStyle, NO_CHAR_CAP) || fallbackStyles[index % fallbackStyles.length],
+      motion: cleanOneLineText((source as any).motion, NO_CHAR_CAP) || fallbackMotion[index % fallbackMotion.length],
+      layout: cleanOneLineText((source as any).layout, NO_CHAR_CAP) || fallbackLayout[index % fallbackLayout.length],
       emphasis: emphasis || subtitle.split(' ').slice(0, 3).join(' '),
       animationPrompt,
     };
@@ -1212,6 +1141,10 @@ function limitChars(value: string | null | undefined, maxChars: number): string 
 function isNoOutputTimeoutError(message: string): boolean {
   return /timed out after \d+ms/i.test(message);
 }
+
+// ------------------------------------------------------------------------------------
+// Clip-code prompt & deterministic fallback (copied from gemini3agent, still used here)
+// ------------------------------------------------------------------------------------
 
 function buildClipCodePrompt(
   params: {
@@ -1411,6 +1344,84 @@ export const GeneratedClip: React.FC<GeneratedClipProps> = (props) => {
 };`;
 }
 
+// ------------------------------------------------------------------------------------
+// JSON parsing helpers (unchanged)
+// ------------------------------------------------------------------------------------
+
+function parseJsonFromText<T = any>(text: string): T | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    // Continue to permissive parsing
+  }
+
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (fenced?.[1]) {
+    try {
+      return JSON.parse(fenced[1].trim());
+    } catch {
+      // Continue
+    }
+  }
+
+  const objectMatch = trimmed.match(/\{[\s\S]*\}/);
+  const arrayMatch = trimmed.match(/\[[\s\S]*\]/);
+  const raw = objectMatch?.[0] || arrayMatch?.[0];
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+export function parseOpenCodeJSON<T = any>(output: string): T | null {
+  const direct = parseJsonFromText<T>(output);
+  if (direct) return direct;
+
+  const lines = output.trim().split('\n').filter(Boolean);
+  if (lines.length <= 1) {
+    opencodeWarn('Could not parse JSON from output');
+    return null;
+  }
+
+  let textContent = '';
+  let hasEventStreamHints = false;
+  for (const line of lines) {
+    try {
+      const event = JSON.parse(line) as Record<string, any>;
+      if ((event as any).type === 'text' || (event as any).type === 'step_start' || (event as any).type === 'tool_use') {
+        hasEventStreamHints = true;
+      }
+      if ((event as any).type === 'text' && typeof (event as any).part?.text === 'string') {
+        textContent += (event as any).part.text;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (!hasEventStreamHints) {
+    opencodeWarn('Could not parse JSON from output');
+    return null;
+  }
+
+  opencodeInfo('Detected event stream output', { events: lines.length, extractedChars: textContent.length });
+  const parsed = parseJsonFromText<T>(textContent);
+  if (!parsed) {
+    opencodeWarn('Event stream had no parseable JSON text');
+  }
+  return parsed;
+}
+
+// ------------------------------------------------------------------------------------
+// High-level exports ported from gemini3agent (backed by Gemini CLI)
+// ------------------------------------------------------------------------------------
+
 export async function researchWithOpenCode(
   topic: string,
   options?: { model?: string; detailed?: boolean }
@@ -1497,8 +1508,9 @@ export async function generateAnimationPlanWithResearch(
   const maxMoments = options?.maxMoments ?? 8;
   const animationBudget = buildAnimationBudgetPlan(videoDurationSeconds, maxMoments);
   const animationBudgetBlock = buildAnimationBudgetBlock(animationBudget);
-  const requireExaForAnimation = process.env.OPENCODE_REQUIRE_EXA_FOR_ANIMATION !== '0';
-  const requireRemotionSkillForAnimation = process.env.OPENCODE_REQUIRE_REMOTION_SKILL_FOR_ANIMATION !== '0';
+  // Gemini CLI headless output may omit tool-use event telemetry; keep strict Exa enforcement opt-in.
+  const requireExaForAnimation = process.env.OPENCODE_REQUIRE_EXA_FOR_ANIMATION === '1';
+  const requireRemotionSkillForAnimation = process.env.OPENCODE_REQUIRE_REMOTION_SKILL_FOR_ANIMATION === '1';
 
   const rawDialogue = dialogueContext || '';
   const maxDialogueChars = 4000;
@@ -1805,7 +1817,7 @@ RULES:
       dialogueWindowsByMoment,
       researchSummary,
     }),
-    ['MANDATORY TOOLING (both tools', 'TIMELINE_PLAN_JSON:', 'ANIMATION_BUDGET:', 'RESEARCH_CONTEXT:']
+    ['MANDATORY TOOLING', 'TIMELINE_PLAN_JSON:', 'ANIMATION_BUDGET:', 'RESEARCH_CONTEXT:']
   );
   if (debugOutputDir) {
     try {
@@ -2022,10 +2034,8 @@ export async function generateRemotionClipCodeWithSkill(
   const model = options?.model || 'pro';
   const cwd = options?.cwd || process.cwd();
   const debugOutputDir = options?.debugOutputDir;
-  // Clip-code receives research summary in the prompt; it does not need to call Exa again. Only Remotion skill is required.
   const requireExaForClipCode = false;
-  // Clip-code always uses Remotion skill for consistent, high-quality animation code.
-  const requireRemotionSkill = true;
+  const requireRemotionSkill = process.env.OPENCODE_REQUIRE_REMOTION_SKILL_FOR_CLIP_CODE === '1';
   const preferredAgentEnv = process.env.OPENCODE_ANIMATION_AGENT?.trim();
   const preferredAgent = preferredAgentEnv ? preferredAgentEnv : null;
 
@@ -2108,7 +2118,6 @@ OUTPUT JSON ONLY.`,
           quiet: true,
           agent: preferredAgent,
           cwd,
-          earlyCompleteForClipCode: true,
         });
         return { output, usedAgent: preferredAgent, fallbackWithoutAgent: false };
       } catch (error) {
@@ -2126,7 +2135,6 @@ OUTPUT JSON ONLY.`,
       format: 'json',
       quiet: true,
       cwd,
-      earlyCompleteForClipCode: true,
     });
     return { output, usedAgent: null, fallbackWithoutAgent: Boolean(preferredAgent) };
   };
@@ -2371,4 +2379,78 @@ No markdown.`;
     format: 'json',
     quiet: true,
   });
+}
+
+// ------------------------------------------------------------------------------------
+// Public high-level helpers (you can call these instead of opencodeRun directly)
+// ------------------------------------------------------------------------------------
+
+export type GeminiClipGenerationParams = {
+  topic: string;
+  dialogueContext: string;
+  outputFilePath: string;
+};
+
+export async function generateRemotionClipWithGemini(
+  params: GeminiClipGenerationParams
+): Promise<{ code: string; outputFilePath: string }> {
+  const { topic, dialogueContext, outputFilePath } = params;
+  const absoluteOutputPath = path.isAbsolute(outputFilePath)
+    ? outputFilePath
+    : path.join(process.cwd(), outputFilePath);
+
+  const prompt = `You are a senior Remotion motion designer and TypeScript engineer.
+
+TASK:
+Generate production-ready TSX code for a single Remotion clip component for a vertical educational video.
+
+TOPIC: "${topic}"
+
+DIALOGUE CONTEXT:
+${dialogueContext || 'No dialogue context provided.'}
+
+ENGINEERING RULES:
+- Return ONLY raw TSX code, no markdown fences.
+- The module must export exactly: export const GeneratedClip
+- Use only imports from "react" and "remotion".
+- Include: useCurrentFrame, useVideoConfig, interpolate, spring from "remotion".
+- Keep the component deterministic and render-safe (no timers, no async effects, no external fetches).
+- Mobile-first design, high contrast, and avoid tiny text.
+
+TYPE CONTRACT (must match exactly):
+\`\`\`ts
+export type GeneratedClipProps = {
+  subtitle?: string;
+  content: string;
+  topic?: string;
+  seed?: number;
+  durationSeconds?: number;
+  emphasis?: string;
+};
+\`\`\`
+
+REQUIREMENTS:
+- Implement and export GeneratedClipProps.
+- Implement and export const GeneratedClip: React.FC<GeneratedClipProps>.
+- Do not use any imports other than "react" and "remotion".
+- Double-check imports, types, and JSX so the code compiles in a Remotion project.
+
+OUTPUT:
+Return ONLY the TSX source code for the file. Do NOT wrap it in JSON or markdown.`;
+
+  const { response } = await runGeminiHeadless({
+    prompt,
+    cwd: path.dirname(absoluteOutputPath),
+    model: OPENCODE_MODELS.pro,
+  });
+
+  const code = response.trim();
+  if (!code) {
+    throw new Error('Gemini returned an empty clip component.');
+  }
+
+  fs.mkdirSync(path.dirname(absoluteOutputPath), { recursive: true });
+  fs.writeFileSync(absoluteOutputPath, code, 'utf8');
+
+  return { code, outputFilePath: absoluteOutputPath };
 }

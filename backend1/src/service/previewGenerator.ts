@@ -53,12 +53,25 @@ function isStillImageAsset(filePath: string): boolean {
   return /\.(png|jpe?g|gif|webp)$/i.test(filePath);
 }
 
-function addOverlayInput(command: any, overlayPath: string, durationSeconds: number): void {
+/**
+ * Add an overlay as an input. For still images: loop for full timeline.
+ * For video (e.g. animation moment): trim to clip.duration only so overlay plays 0→duration in order;
+ * the filter chain must apply setpts=PTS+clip.start/TB so it lines up with timeline.
+ */
+function addOverlayInput(
+  command: any,
+  overlayPath: string,
+  clip: OverlayClip,
+  timelineDurationSeconds: number
+): void {
   if (isStillImageAsset(overlayPath)) {
-    command.input(overlayPath).inputOptions(['-loop', '1', '-t', durationSeconds.toString()]);
+    command.input(overlayPath).inputOptions(['-loop', '1', '-t', timelineDurationSeconds.toString()]);
     return;
   }
-  command.input(overlayPath).inputOptions(['-stream_loop', '-1', '-t', durationSeconds.toString()]);
+  // Video overlay: input only clip.duration seconds from the start (no loop) so the overlay
+  // plays straight 0→duration. Filter will use setpts to align with clip.start on the timeline.
+  const clipDur = Math.max(0.05, clip.duration);
+  command.input(overlayPath).inputOptions(['-t', clipDur.toString()]);
 }
 
 type TimeRange = { start: number; end: number };
@@ -633,15 +646,15 @@ export async function generateTimelinePreview(
       sfxInputs.push({ clip, inputIndex: nextInputIndex++, kind: 'sfx' });
     }
 
-    const overlayInputs: { clip: OverlayClip; inputIndex: number }[] = [];
+    const overlayInputs: { clip: OverlayClip; inputIndex: number; overlayPath: string }[] = [];
     overlayClips.forEach((clip: OverlayClip) => {
       const overlayPath = resolveOverlayAssetPath(clip, audioSessionId);
       if (fs.existsSync(overlayPath)) {
-        addOverlayInput(command, overlayPath, duration);
-        overlayInputs.push({ clip, inputIndex: nextInputIndex++ });
+        addOverlayInput(command, overlayPath, clip, duration);
+        overlayInputs.push({ clip, inputIndex: nextInputIndex++, overlayPath });
       }
     });
-    
+
     let nextIdx = nextInputIndex;
     const charInputs: { clip: CharacterClip; inputIndex: number }[] = [];
     for (const clip of characterClips) {
@@ -673,13 +686,15 @@ export async function generateTimelinePreview(
       lastLabel = 'with_subs';
     }
 
-    overlayInputs.forEach(({ clip, inputIndex }, index) => {
+    overlayInputs.forEach(({ clip, inputIndex, overlayPath }, index) => {
       const isReplace = isReplaceOverlayClip(clip);
+      const isVideoOverlay = !isStillImageAsset(overlayPath);
+      const setpts = isVideoOverlay ? `setpts=PTS+${clip.start}/TB,` : '';
       const scaledLabel = isReplace ? `ov_replace_${index}` : `ov${index}`;
       const overlayLabel = isReplace ? `vr${index}` : `vo${index}`;
       if (isReplace) {
         // Preserve full frame and fit inside vertical canvas for replace mode previews.
-        filterComplex += `;[${inputIndex}:v]scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x101014[${scaledLabel}]`;
+        filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x101014[${scaledLabel}]`;
         filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
         lastLabel = overlayLabel;
         return;
@@ -693,7 +708,7 @@ export async function generateTimelinePreview(
         OVERLAY_BASE_H,
         OVERLAY_LEGACY_TOP_Y
       );
-      filterComplex += `;[${inputIndex}:v]scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
+      filterComplex += `;[${inputIndex}:v]${setpts}scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
       filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
       lastLabel = overlayLabel;
     });
@@ -992,12 +1007,12 @@ export async function generateTimelinePreviewHls(
       sfxInputs.push({ clip, inputIndex: nextInputIndex++, kind: 'sfx' });
     }
 
-    const overlayInputs: { clip: OverlayClip; inputIndex: number }[] = [];
+    const overlayInputs: { clip: OverlayClip; inputIndex: number; overlayPath: string }[] = [];
     overlayClips.forEach((clip: OverlayClip) => {
       const overlayPath = resolveOverlayAssetPath(clip, audioSessionId);
       if (fs.existsSync(overlayPath)) {
-        addOverlayInput(command, overlayPath, duration);
-        overlayInputs.push({ clip, inputIndex: nextInputIndex++ });
+        addOverlayInput(command, overlayPath, clip, duration);
+        overlayInputs.push({ clip, inputIndex: nextInputIndex++, overlayPath });
       }
     });
 
@@ -1031,13 +1046,15 @@ export async function generateTimelinePreviewHls(
       lastLabel = 'with_subs';
     }
 
-    overlayInputs.forEach(({ clip, inputIndex }, index) => {
+    overlayInputs.forEach(({ clip, inputIndex, overlayPath }, index) => {
       const isReplace = isReplaceOverlayClip(clip);
+      const isVideoOverlay = !isStillImageAsset(overlayPath);
+      const setpts = isVideoOverlay ? `setpts=PTS+${clip.start}/TB,` : '';
       const scaledLabel = isReplace ? `ov_replace_${index}` : `ov${index}`;
       const overlayLabel = isReplace ? `vr${index}` : `vo${index}`;
       if (isReplace) {
         // Preserve full frame and fit inside vertical canvas for replace mode previews.
-        filterComplex += `;[${inputIndex}:v]scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x101014[${scaledLabel}]`;
+        filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x101014[${scaledLabel}]`;
         filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
         lastLabel = overlayLabel;
         return;
@@ -1051,7 +1068,7 @@ export async function generateTimelinePreviewHls(
         OVERLAY_BASE_H,
         OVERLAY_LEGACY_TOP_Y
       );
-      filterComplex += `;[${inputIndex}:v]scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
+      filterComplex += `;[${inputIndex}:v]${setpts}scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
       filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
       lastLabel = overlayLabel;
     });
@@ -1384,12 +1401,12 @@ export async function generateTimelineSegmentPreview(
       sfxInputs.push({ clip, inputIndex: nextInputIndex++, kind: 'sfx' });
     }
 
-    const overlayInputs: { clip: OverlayClip; inputIndex: number }[] = [];
+    const overlayInputs: { clip: OverlayClip; inputIndex: number; overlayPath: string }[] = [];
     overlayClips.forEach((clip: OverlayClip) => {
       const overlayPath = resolveOverlayAssetPath(clip, audioSessionId);
       if (fs.existsSync(overlayPath)) {
-        addOverlayInput(command, overlayPath, segmentDuration);
-        overlayInputs.push({ clip, inputIndex: nextInputIndex++ });
+        addOverlayInput(command, overlayPath, clip, segmentDuration);
+        overlayInputs.push({ clip, inputIndex: nextInputIndex++, overlayPath });
       }
     });
 
@@ -1426,14 +1443,16 @@ export async function generateTimelineSegmentPreview(
     }
     lastLabel = 'bg';
 
-    // Overlays in local segment time.
-    overlayInputs.forEach(({ clip, inputIndex }, index) => {
+    // Overlays in local segment time. Video overlays use setpts so they play 0→duration in order.
+    overlayInputs.forEach(({ clip, inputIndex, overlayPath }, index) => {
       const isReplace = isReplaceOverlayClip(clip);
+      const isVideoOverlay = !isStillImageAsset(overlayPath);
+      const setpts = isVideoOverlay ? `setpts=PTS+${clip.start}/TB,` : '';
       const scaledLabel = isReplace ? `ov_replace_${index}` : `ov${index}`;
       const overlayLabel = isReplace ? `vr${index}` : `vo${index}`;
       if (isReplace) {
         // Preserve full frame and fit inside vertical canvas for replace mode previews.
-        filterComplex += `;[${inputIndex}:v]scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x101014[${scaledLabel}]`;
+        filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x101014[${scaledLabel}]`;
         filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
         lastLabel = overlayLabel;
         return;
@@ -1447,7 +1466,7 @@ export async function generateTimelineSegmentPreview(
         OVERLAY_BASE_H,
         OVERLAY_LEGACY_TOP_Y
       );
-      filterComplex += `;[${inputIndex}:v]scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
+      filterComplex += `;[${inputIndex}:v]${setpts}scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
       filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
       lastLabel = overlayLabel;
     });

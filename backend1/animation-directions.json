@@ -1,58 +1,234 @@
 {
-  "videoDurationSeconds": 11.64,
+  "videoDurationSeconds": 181.08,
   "moments": [
     {
       "start": 0,
-      "duration": 3.5,
-      "type": "introduction",
-      "subtitle": "In this lesson, we'll explore what Kubernetes is and why it's used.",
-      "content": "Intro to Kubernetes topic",
+      "duration": 5,
+      "type": "definition",
+      "subtitle": "OpenClaw viral with 180k GitHub stars in 3 weeks",
+      "content": "OpenClaw viral with 180k GitHub stars in 3 weeks, but 40k+ instances exposed without authentication",
       "colorPalette": {
-        "bg": "#0c0a05",
-        "primary": "#d4820a",
-        "accent": "#f5c842",
-        "text": "#fefaf0"
+        "bg": "#0d0d0d",
+        "primary": "#c9a84c",
+        "accent": "#f5e6c8",
+        "text": "#ffffff"
       },
       "composition": {
-        "layout": "L4",
+        "layout": "center-radial-gravity",
         "aestheticSystem": "deep-glow",
         "motionCharacter": "punchy",
-        "aestheticNotes": "Dark obsidian bg with intense amber radial bloom behind hero text. Warm golden bloom creates neon-sign feel. Text sits sharp on top with high contrast.",
-        "colorNotes": "bg:#0c0a05 fills full frame. primary:#d4820a on 'KUBERNETES' display text. accent:#f5c842 on warm radial bloom (G1) and underline highlight sweep (T3). text:#fefaf0 on supporting body text.",
+        "aestheticNotes": "Dark obsidian background with intense amber-gold radial bloom behind hero stat. Text sits sharp on top with no blur. Glitch stamp on the word '180K' for impact.",
+        "colorNotes": "bg:#0d0d0d fills full frame. primary:#c9a84c on stat counter. accent:#f5e6c8 on underline sweep beneath '180K'. text:#ffffff on display headline.",
         "elements": [
-          "display-headline:KUBERNETES",
-          "body-text:In this lesson, we'll explore what it is",
-          "warm-bloom:accent-color-radius-120px",
-          "noise-overlay:opacity-0.15"
+          "display-headline:180K GitHub Stars",
+          "secondary-text:3 weeks",
+          "warm-bloom:accent-color-radius-160px",
+          "highlight-rect:accent-color"
         ],
         "beat1": {
-          "description": "Display text enters with word-by-word slam cascade. Each word scales 0→1.18→1.0 via spring. G1 warm radial bloom fires simultaneously behind text.",
-          "techniques": ["T1", "T10", "G1"],
+          "description": "Entry: stat counter rolls 0→180K with spring settle, word-by-word slam on 'GitHub Stars', G1 warm radial bloom fires behind",
+          "techniques": ["T8: Stat Counter Roll", "T1: Word-by-Word Slam Cascade", "G1: Warm Radial Bloom"],
           "entryEasing": "spring-snappy",
-          "timingHint": "Frames 0-12: words slam in sequentially (80ms stagger). Bloom opacity 0→0.6 over frames 0-15."
+          "timingHint": "Frames 0-12: bloom opacity 0→0.6, scale 0.2→1.0. Frames 0-15: counter rolls 0→180K ease-out-expo. Frames 4-14: words slam sequentially."
         },
         "holdWindow": {
-          "description": "Text breathes (scale 1.0→1.012→1.0). Bloom pulses with subtle opacity oscillation via Math.sin.",
-          "holdEasing": "breathe",
-          "durationHint": "Frames 12-90: main hold period. Bloom oscillates 0.38→0.2→0.38 via Math.sin(frame/45)."
+          "description": "Counter holds at 180K, bloom pulses gently (opacity 0.38→0.2→0.38 via Math.sin), display text breathes (scale 1.0→1.012→1.0)",
+          "holdEasing": "pulse-glow + breathe",
+          "durationHint": "Frames 15-150: bloom oscillates via Math.sin(frame/45)*0.09+0.29. Text scales via Easing.inOut(sine) 2.5s loop."
         },
         "beat2OrNull": {
-          "description": "Highlight sweep (T3) fires on 'KUBERNETES' — accent underline animates width 0→100% of word width.",
-          "techniques": ["T3"],
+          "description": "At frame 60: T3 highlight sweep beneath '180K' word confirms the stat",
+          "techniques": ["T3: Highlight Sweep (Marker Underline)"],
           "patternInterrupt": null,
-          "timingHint": "Frame 25: underline sweep begins, completes by frame 36."
+          "timingHint": "Frame 60: accent-color rect width 0→full phrase width ease-out-expo over 11 frames"
         },
         "exitEasing": "snap-cut"
       },
-      "emphasis": "The word KUBERNETES slams in dramatically with warm amber glow, establishing topic authority.",
-      "animationPrompt": "Frames 0-12: 'KUBERNETES' enters word-by-word via T1 slam cascade, each word spring({stiffness:300,damping:20}) from scale 0→1.0. Frames 0-15: G1 warm radial bloom (amber #f5c842) fades opacity 0→0.6, scale 0.2→1.0, filter blur(55px). Frames 12-90: display text breathes scale 1.0→1.012→1.0 via Easing.inOut(sine), bloom oscillates 0.38→0.2→0.38 via Math.sin(frame/45). Frame 36: underline highlight sweep completes (T3). Frames 90-105: snap-cut exit opacity 1→0."
+      "emphasis": "The 180K star count is the hook — needs maximum visual impact with glitch-stamp energy",
+      "animationPrompt": "Frames 0-3: G1 warm radial bloom (amber #c9a84c) fires behind center, opacity 0→0.6 via ease-out over 15 frames. Frames 0-12: T8 stat counter rolls 0→180K with ease-out-expo, scale spring 1.0→1.07→1.0 on land. Frames 4-14: T1 word-by-word slam cascade on 'GitHub Stars' with spring({stiffness:300,damping:20}). Frames 60-71: T3 highlight sweep beneath '180K' via interpolate width 0→100% ease-out-expo. Hold: pulse-glow on bloom via Math.sin(frame/45), breathe scale on text via Easing.inOut(sine) 2.5s loop. Exit: snap-cut at frame 150."
     },
     {
-      "start": 4.5,
-      "duration": 3.5,
+      "start": 10,
+      "duration": 5,
       "type": "definition",
-      "subtitle": "Kubernetes is a system for automating deployment, scaling, and management of containerized applications.",
-      "content": "Kubernetes as container orchestration system",
+      "subtitle": "40k+ instances exposed without authentication",
+      "content": "40k+ instances exposed without authentication, leaking API keys and credentials",
+      "colorPalette": {
+        "bg": "#14171a",
+        "primary": "#2d3436",
+        "accent": "#e84118",
+        "text": "#f0f0f0"
+      },
+      "composition": {
+        "layout": "ui-native",
+        "aestheticSystem": "soft-brutalist",
+        "motionCharacter": "punchy",
+        "aestheticNotes": "Slate charcoal background with notification badge cascade. Pill badges appear like iOS notifications bouncing in. Red accent signals danger.",
+        "colorNotes": "bg:#14171a fills frame. primary:#2d3436 on pill containers. accent:#e84118 on badge background and warning triangle. text:#f0f0f0 on type.",
+        "elements": [
+          "display-headline:40K+ Exposed",
+          "pill-badge:No Authentication",
+          "pill-badge:API Keys Leaked",
+          "notification-badge:40K",
+          "warning-icon:AlertTriangle"
+        ],
+        "beat1": {
+          "description": "Entry: G4 pill badge cascade with spring-bouncy stagger, G8 notification badge bounces in top-right with bloom behind",
+          "techniques": ["G4: Pill Badge Cascade", "G8: Notification Badge Bounce", "G1: Warm Radial Bloom"],
+          "entryEasing": "spring-bouncy",
+          "timingHint": "Frames 0-12: pills translateY +30→0 spring({stiffness:280,damping:20}), stagger 110ms. Frame 8: badge bounces in scale 0→1.45→1.0."
+        },
+        "holdWindow": {
+          "description": "Pills breathe in unison (scale 1.0→1.028→1.0), badge pulses gently, warning icon drifts",
+          "holdEasing": "breathe + drift",
+          "durationHint": "Frames 20-150: pill scale 1.0→1.028→1.0 via spring({stiffness:200,damping:14}). Badge pulse via scale 1.0→1.05→1.0. Icon drift via Math.sin(frame/90)*3."
+        },
+        "beat2OrNull": null,
+        "exitEasing": "elastic-rebound"
+      },
+      "emphasis": "The exposed instances number needs urgency — notification badge bounce captures attention",
+      "animationPrompt": "Frames 0-12: G4 pill badges enter via spring({stiffness:280,damping:20}), translateY +30→0, stagger 110ms between pills. Frame 8: G8 notification badge bounces in top-right scale 0→1.45→1.0 via spring({stiffness:200,damping:11}), G1 bloom behind badge radius 0→30px opacity 0→0.45→0.2 over 12 frames. Hold: pills breathe scale 1.0→1.028→1.0 via spring({stiffness:200,damping:14}), badge pulses via scale 1.0→1.05→1.0. Warning icon drifts translateY Math.sin(frame/90)*3. Exit: elastic-rebound at frame 150."
+    },
+    {
+      "start": 22,
+      "duration": 5,
+      "type": "definition",
+      "subtitle": "Full system access with shell commands",
+      "content": "Full system access with shell commands, file reading, messaging control; RCE exploit (8.8 severity) within 72 hours",
+      "colorPalette": {
+        "bg": "#0a0a0a",
+        "primary": "#1a1a1a",
+        "accent": "#c0392b",
+        "text": "#ffffff"
+      },
+      "composition": {
+        "layout": "asymmetric-brutalist-split",
+        "aestheticSystem": "neo-brutalist",
+        "motionCharacter": "rhythmic",
+        "aestheticNotes": "Pure black background with crimson accent. Hard-offset card with 7px shadow slides in. Bold statement text as hero.",
+        "colorNotes": "bg:#0a0a0a fills frame. primary:#1a1a1a on card background. accent:#c0392b on hard shadow and highlight words. text:#ffffff on all type.",
+        "elements": [
+          "display-headline:Full System Access",
+          "hard-offset-card:primary-color",
+          "stat-counter:CVSS 8.8",
+          "secondary-text:Remote Code Execution",
+          "divider-line:accent-color"
+        ],
+        "beat1": {
+          "description": "Entry: G3 hard-offset card slides in from below with spring-snappy, L1 asymmetric split draws vertical divider",
+          "techniques": ["G3: Hard-Offset Card (Neo-Brutalist Block)", "L1: Asymmetric Brutalist Split", "T10: Stomp Text"],
+          "entryEasing": "spring-snappy",
+          "timingHint": "Frames 0-12: card translateY +40→0 via spring({stiffness:350,damping:18}), boxShadow '7px 7px 0 #c0392b' visible. Frame 6: divider draws height 0→100% ease-out-expo."
+        },
+        "holdWindow": {
+          "description": "Card holds with breathe scale (1.0→1.012→1.0), divider pulses subtly, CVSS counter drifts with slow-scale",
+          "holdEasing": "breathe + slow-scale",
+          "durationHint": "Frames 15-150: card scale 1.0→1.012→1.0 via Easing.inOut(sine) 2.5s loop. Counter slowly scales 1.0→1.04 via ease-in-out over full hold."
+        },
+        "beat2OrNull": {
+          "description": "At frame 50: T8 stat counter shows '8.8' rolling up",
+          "techniques": ["T8: Stat Counter Roll"],
+          "patternInterrupt": null,
+          "timingHint": "Frame 50: counter rolls 0→8.8 with ease-out-expo over 0.85s"
+        },
+        "exitEasing": "ease-in-expo"
+      },
+      "emphasis": "The CVSS 8.8 severity score is critical — needs to land with force",
+      "animationPrompt": "Frames 0-12: G3 card enters translateY +40→0 via spring({stiffness:350,damping:18}), boxShadow '7px 7px 0 #c0392b' visible at rest. L1 vertical divider draws height 0→100% ease-out-expo frames 6-21. T10 stomp text on 'Full System Access' translateY -50→0 ease-out cubic, scale 1.25→1.0, stagger 130ms. Hold: card breathes scale 1.0→1.012→1.0 via Easing.inOut(sine) 2.5s loop. Frame 50: T8 counter rolls 0→8.8 ease-out-expo, scale spring 1.0→1.07→1.0 on land. Exit: ease-in-expo at frame 150."
+    },
+    {
+      "start": 34,
+      "duration": 5,
+      "type": "definition",
+      "subtitle": "Plain text credential storage",
+      "content": "Plain text credential storage makes keys and passwords perfect targets for malware",
+      "colorPalette": {
+        "bg": "#1c120d",
+        "primary": "#8b5e3c",
+        "accent": "#e8c9a0",
+        "text": "#f5ede0"
+      },
+      "composition": {
+        "layout": "center-radial-gravity",
+        "aestheticSystem": "warm-minimal",
+        "motionCharacter": "floaty",
+        "aestheticNotes": "Mocha dark background with soft amber radial gradient drift. Minimal — single hero element with generous negative space.",
+        "colorNotes": "bg:#1c120d fills frame. primary:#8b5e3c on icon/shape elements. accent:#e8c9a0 on key visual highlight. text:#f5ede0 on display text.",
+        "elements": [
+          "display-headline:Plain Text Secrets",
+          "secondary-text:No Encryption",
+          "warm-bloom:accent-color-radius-120px",
+          "key-icon:Vault"
+        ],
+        "beat1": {
+          "description": "Entry: T5 masked text wipe reveals hero phrase cinematically, G1 warm bloom fades in behind",
+          "techniques": ["T5: Masked Text Wipe (Cinematic Reveal)", "G1: Warm Radial Bloom"],
+          "entryEasing": "spring-floaty",
+          "timingHint": "Frames 0-18: mask width 100%→0 ease-out-expo revealing text from left. Frames 0-15: bloom opacity 0→0.38 scale 0.2→1.0."
+        },
+        "holdWindow": {
+          "description": "Bloom drifts slowly behind hero (scale subtle pulse), text breathes with wider amplitude for floaty feel",
+          "holdEasing": "drift + breathe",
+          "durationHint": "Frames 20-150: bloom scale oscillates via Math.sin(frame/60)*0.08+1.0. Text breathe scale 1.0→1.018→1.0 via Easing.inOut(sine) 2.5s loop."
+        },
+        "beat2OrNull": null,
+        "exitEasing": "shrink-fade"
+      },
+      "emphasis": "The vulnerability of plain text storage needs to feel exposed and vulnerable",
+      "animationPrompt": "Frames 0-18: T5 masked text wipe reveals 'Plain Text Secrets' via parent overflow:hidden, mask width 100%→0 ease-out-expo. G1 bloom behind hero, opacity 0→0.38, scale 0.2→1.0 ease-out over 15 frames. Hold: bloom drifts scale Math.sin(frame/60)*0.08+1.0 (subtle). Text breathes scale 1.0→1.018→1.0 via Easing.inOut(sine) 2.5s loop. Exit: shrink-fade (scale+opacity drop ease-in) at frame 150."
+    },
+    {
+      "start": 46,
+      "duration": 5,
+      "type": "definition",
+      "subtitle": "Malicious plugins exploded from 341 to 800+",
+      "content": "Malicious plugins exploded from 341 to 800+; 20% of registry now compromised with zero moderation",
+      "colorPalette": {
+        "bg": "#2a0a12",
+        "primary": "#c0392b",
+        "accent": "#e8d5b7",
+        "text": "#f5ede0"
+      },
+      "composition": {
+        "layout": "stacked-reveal-column",
+        "aestheticSystem": "data-editorial",
+        "motionCharacter": "cinematic",
+        "aestheticNotes": "Burgundy jewel background. Animated data bars grow from left. Hairline separators. Authoritative editorial feel.",
+        "colorNotes": "bg:#2a0a12 fills frame. primary:#c0392b on progress bars. accent:#e8d5b7 on bar fills and highlights. text:#f5ede0 on all type.",
+        "elements": [
+          "display-headline:341 → 800+",
+          "data-bar:20% Compromised",
+          "secondary-text:Plugin Registry",
+          "progress-arc:20%"
+        ],
+        "beat1": {
+          "description": "Entry: T9 word scatter magnetic assemble on '341 → 800+', G7 animated data bars grow simultaneously",
+          "techniques": ["T9: Word Scatter → Magnetic Assemble", "G7: Animated Data Bars", "G5: Progress Arc Draw"],
+          "entryEasing": "spring-bouncy",
+          "timingHint": "Frames 0-18: words scatter from random offsets (±90px x, ±70px y) via spring({stiffness:200,damping:18,mass:0.9}). Bars grow width 0→target% ease-out-expo, stagger 140ms."
+        },
+        "holdWindow": {
+          "description": "Bars hold at final width, arc pulses gently, words breathe in unison",
+          "holdEasing": "breathe + pulse-glow",
+          "durationHint": "Frames 25-150: words breathe scale 1.0→1.012→1.0 via Easing.inOut(sine) 2.5s loop. Arc stroke oscillates opacity 0.55→0.2→0.55 via Math.sin(frame/45)."
+        },
+        "beat2OrNull": {
+          "description": "At frame 60: G5 progress arc draws to 20% showing the compromise rate",
+          "techniques": ["G5: Progress Arc Draw"],
+          "patternInterrupt": null,
+          "timingHint": "Frame 40-82: arc stroke-dashoffset interpolates circumference→circumference*0.8 via ease-out"
+        },
+        "exitEasing": "ease-in-expo"
+      },
+      "emphasis": "The growth from 341 to 800+ malicious plugins shows the exponential threat",
+      "animationPrompt": "Frames 0-18: T9 word scatter on '341 → 800+' springs from random offsets via spring({stiffness:200,damping:18,mass:0.9}), ±15ms delay variation. G7 bars grow width 0→target% ease-out-expo, stagger 140ms. Frames 40-82: G5 progress arc draws stroke-dashoffset circumference→circumference*0.8 ease-out. Hold: words breathe scale 1.0→1.012→1.0 2.5s loop, arc pulse-glow via Math.sin(frame/45). Exit: ease-in-expo at frame 150."
+    },
+    {
+      "start": 58,
+      "duration": 5,
+      "type": "definition",
+      "subtitle": "Prompt injection attacks",
+      "content": "Prompt injection attacks hide malicious commands in emails; AI executes them silently without user knowledge",
       "colorPalette": {
         "bg": "#0f1f14",
         "primary": "#2d6a4f",
@@ -60,41 +236,126 @@
         "text": "#e8f5e9"
       },
       "composition": {
-        "layout": "L3",
-        "aestheticSystem": "warm-minimal",
-        "motionCharacter": "floaty",
-        "aestheticNotes": "Forest green bg creates depth. Centered hero element with soft radial gradient. Clean typography with generous negative space. Calm but purposeful motion.",
-        "colorNotes": "bg:#0f1f14 fills full frame. primary:#2d6a4f on central container icon. accent:#e9a824 on key term 'containerized' highlight. text:#e8f5e9 on definition text.",
+        "layout": "bottom-third-info-strip",
+        "aestheticSystem": "ui-native",
+        "motionCharacter": "punchy",
+        "aestheticNotes": "Forest green dark background. Bottom info strip slides up like a notification. Amber accent on the 'injection' warning.",
+        "colorNotes": "bg:#0f1f14 fills frame. primary:#2d6a4f on info strip background. accent:#e9a824 on warning highlight and underline. text:#e8f5e9 on type.",
         "elements": [
-          "display-headline:ORCHESTRATION",
-          "body-text:Kubernetes automates deployment, scaling, and management of containerized applications",
-          "pill-badge:deployment",
-          "pill-badge:scaling",
-          "pill-badge:management",
-          "container-icon:abstract-boxes",
-          "warm-bloom:accent-color-radius-80px"
+          "display-headline:Hidden Commands",
+          "bottom-strip:prompt-injection-warning",
+          "pill-badge:Silent Execution",
+          "warning-icon:AlertTriangle"
         ],
         "beat1": {
-          "description": "Hero word 'ORCHESTRATION' wipes in via masked reveal (T5). Supporting pill badges cascade in sequentially (G4) after hero lands.",
-          "techniques": ["T5", "G4"],
-          "entryEasing": "spring-floaty",
-          "timingHint": "Frames 0-20: masked text reveal (ease-out-expo). Frames 20-35: pill badges stagger in 110ms apart."
+          "description": "Entry: L2 bottom-third info strip slides up after hero lands, T1 word cascade on 'Hidden Commands'",
+          "techniques": ["L2: Bottom-Third Info Strip", "T1: Word-by-Word Slam Cascade", "G4: Pill Badge Cascade"],
+          "entryEasing": "spring-snappy",
+          "timingHint": "Frames 0-10: hero text lands via spring-snappy. Frame 10: strip translateY +100%→0 spring-snappy. Frame 14: pills opacity 0→1 stagger 110ms."
         },
         "holdWindow": {
-          "description": "All elements drift gently via slow sine wave. Text scale breathes minimally.",
-          "holdEasing": "drift",
-          "durationHint": "Frames 35-90: translateY Math.sin(frame/90)*3 continuous sine drift. Scale 1.0→1.018→1.0 breathe."
+          "description": "Strip holds with breathe, pills pulse together, amber underline glows on 'injection'",
+          "holdEasing": "breathe + pulse-glow",
+          "durationHint": "Frames 20-150: strip scale 1.0→1.012→1.0 via Easing.inOut(sine) 2.5s loop. Pill pulse via scale 1.0→1.028→1.0. Underline glows via bloom pulse."
+        },
+        "beat2OrNull": null,
+        "exitEasing": "snap-cut"
+      },
+      "emphasis": "The silent execution aspect is the scary part — needs visual punch",
+      "animationPrompt": "Frames 0-10: 'Hidden Commands' enters via T1 word slam cascade spring({stiffness:300,damping:20}). Frame 10: L2 bottom strip slides up translateY +100%→0 via spring-snappy. Frame 14-24: G4 pill badges cascade translateY +30→0 via spring({stiffness:280,damping:20}), stagger 110ms. Hold: strip breathes scale 1.0→1.012→1.0 2.5s loop, pills pulse scale 1.0→1.028→1.0, underline glows via G1 bloom pulse-glow. Exit: snap-cut at frame 150."
+    },
+    {
+      "start": 70,
+      "duration": 5,
+      "type": "definition",
+      "subtitle": "Lethal trifecta: data access, untrusted content, external comm",
+      "content": "Lethal trifecta: private data access, untrusted content exposure, external communication ability",
+      "colorPalette": {
+        "bg": "#0c0a05",
+        "primary": "#d4820a",
+        "accent": "#f5c842",
+        "text": "#fefaf0"
+      },
+      "composition": {
+        "layout": "card-stack-fan",
+        "aestheticSystem": "soft-brutalist",
+        "motionCharacter": "rhythmic",
+        "aestheticNotes": "Amber obsidian background. Three card stack fans out to reveal the three elements of the lethal trifecta.",
+        "colorNotes": "bg:#0c0a05 fills frame. primary:#d4820a on card backgrounds. accent:#f5c842 on card borders and highlights. text:#fefaf0 on type.",
+        "elements": [
+          "display-headline:Lethal Trifecta",
+          "card-stack:3-cards",
+          "icon:Database (Data Access)",
+          "icon:Globe (External Comm)",
+          "icon:FileText (Untrusted Content)"
+        ],
+        "beat1": {
+          "description": "Entry: G12 card stack fan reveals three cards with icons — each card represents one element of the trifecta",
+          "techniques": ["G12: Card Stack Fan", "T6: Bubble / Inflated Typography"],
+          "entryEasing": "spring-bouncy",
+          "timingHint": "Frames 0-15: all 3 cards translateY +60→0 via spring({stiffness:260,damping:20}). Frame 15: fan reveals — left card translateX 0→-75px, right card translateX 0→+75px spring-bouncy."
+        },
+        "holdWindow": {
+          "description": "All three cards breathe in unison (scale 1.0→1.012→1.0), icons drift subtly",
+          "holdEasing": "breathe + drift",
+          "durationHint": "Frames 25-150: cards scale 1.0→1.012→1.0 via Easing.inOut(sine) 2s loop. Icons drift via Math.sin(frame/90)*3."
         },
         "beat2OrNull": {
-          "description": "Key term 'containerized' gets color shift (T11) — text color interpolates to accent with subtle radial glow behind word.",
-          "techniques": ["T11"],
+          "description": "At frame 45: T6 bubble typography inflates each letter of 'Lethal Trifecta'",
+          "techniques": ["T6: Bubble / Inflated Typography"],
           "patternInterrupt": null,
-          "timingHint": "Frame 50: color shift begins, completes by frame 68."
+          "timingHint": "Frame 45: each letter scales 0→1.3→1.0 via Easing.elastic(0.75), stagger 40ms per letter"
+        },
+        "exitEasing": "elastic-rebound"
+      },
+      "emphasis": "The trifecta concept needs to land clearly — three cards fanning out is the visual metaphor",
+      "animationPrompt": "Frames 0-15: G12 card stack enters translateY +60→0 via spring({stiffness:260,damping:20}). Frame 15: fan reveal — left card translateX 0→-75px, right card translateX 0→+75px via spring-bouncy. Hold: all cards breathe scale 1.0→1.012→1.0 via Easing.inOut(sine) 2s loop. Icons drift translateY Math.sin(frame/90)*3. Frame 45: T6 bubble typography inflates 'Lethal Trifecta' each letter scale 0→1.3→1.0 via Easing.elastic(0.75), stagger 40ms. Exit: elastic-rebound at frame 150."
+    },
+    {
+      "start": 82,
+      "duration": 5,
+      "type": "definition",
+      "subtitle": "Cisco names OpenClaw as how NOT to do AI security",
+      "content": "Cisco names OpenClaw as how NOT to do AI security; Sophos recommends blocking entirely",
+      "colorPalette": {
+        "bg": "#f5f0e8",
+        "primary": "#b5541a",
+        "accent": "#2d2d2d",
+        "text": "#1a1207"
+      },
+      "composition": {
+        "layout": "full-bleed-typographic-poster",
+        "aestheticSystem": "grain-retro",
+        "motionCharacter": "cinematic",
+        "aestheticNotes": "Clay white background with film grain overlay. Pure typographic poster — bold statement as hero. Dark accent provides contrast.",
+        "colorNotes": "bg:#f5f0e8 fills frame. primary:#b5541a on accent elements. accent:#2d2d2d on underline/highlight. text:#1a1207 on all type.",
+        "elements": [
+          "display-headline:Block It",
+          "secondary-text:Expert Recommendation",
+          "film-grain-overlay:opacity-0.15",
+          "company-logos:Cisco,Sophos"
+        ],
+        "beat1": {
+          "description": "Entry: T5 masked text wipe reveals 'Block It' cinematically, grain overlay fades in, logos stagger in",
+          "techniques": ["T5: Masked Text Wipe (Cinematic Reveal)", "G2: Noise/Film Grain Overlay", "T11: Split Word Color Shift"],
+          "entryEasing": "spring-floaty",
+          "timingHint": "Frames 0-18: mask width 100%→0 ease-out-expo reveals text. Frame 0-8: grain overlay opacity 0→0.15. Frames 10-20: logos fade in stagger."
+        },
+        "holdWindow": {
+          "description": "Text breathes with slow-scale (1.0→1.04), grain animates subtly, logos drift",
+          "holdEasing": "slow-scale + drift",
+          "durationHint": "Frames 20-150: text scale 1.0→1.04 via ease-in-out over full hold duration. Grain cycles 3 frames at 12fps via Math.floor(frame/2.5)%3. Logos drift via Math.sin(frame/80)*2."
+        },
+        "beat2OrNull": {
+          "description": "At frame 60: T11 split word color shift on 'Block' — word turns accent color with radial glow behind",
+          "techniques": ["T11: Split Word Color Shift"],
+          "patternInterrupt": "I1: Flash-Cut Interrupt",
+          "timingHint": "Frame 50: I1 flash-cut interrupt (accent flash opacity 0→0.35→0 over 10 frames). Frame 60: T11 color shift on 'Block' via interpolate 18 frames ease-out, radial glow behind radius 0→45px."
         },
         "exitEasing": "shrink-fade"
       },
-      "emphasis": "The core definition lands gracefully with floating pill badges representing deployment, scaling, and management — the three pillars of Kubernetes.",
-      "animationPrompt": "Frames 0-20: 'ORCHESTRATION' masked reveal via parent overflow hidden, mask width 100%→0 ease-out-expo. Frames 20-35: three pill badges (deployment, scaling, management) cascade via G4, translateY +30→0 spring({stiffness:280,damping:20}), 110ms stagger. Frames 35-90: all elements drift translateY Math.sin(frame/90)*3, breathe scale 1.0→1.018→1.0 Easing.inOut(sine). Frame 50-68: key term 'containerized' shifts text:#e8f5e9→accent:#e9a824 via T11 color interpolation, radial glow animates radius 0→45px. Frames 90-105: shrink-fade exit scale 1.0→0.8, opacity 1→0 ease-in."
+      "emphasis": "The final recommendation from Cisco/Sophos needs to feel definitive and cautionary",
+      "animationPrompt": "Frames 0-18: T5 masked text wipe reveals 'Block It' via parent overflow:hidden, mask width 100%→0 ease-out-expo. G2 grain overlay fades in opacity 0→0.15. Frames 10-20: company logos stagger opacity 0→1 ease-out. Hold: text slow-scales 1.0→1.04 via ease-in-out over full hold. Grain cycles via Math.floor(frame/2.5)%3. Frame 50: I1 flash-cut interrupt accent flash. Frame 60-78: T11 'Block' shifts text-color→accent-color via interpolate 18 frames, radial glow behind radius 0→45px opacity 0→0.55→0.35. Exit: shrink-fade at frame 150."
     }
   ]
 }

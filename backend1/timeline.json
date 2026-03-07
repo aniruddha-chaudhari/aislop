@@ -1,0 +1,48 @@
+{
+  "videoDurationSeconds": 101.16,
+  "moments": [
+    {
+      "start": 18.28,
+      "duration": 6.0,
+      "type": "stat",
+      "content": "OpenClaw has full system access including shell commands, file reading, and messaging app control",
+      "subtitle": "The tool has full system access and can execute shell commands, read your files, and control your messaging apps, but within seventy two hours of going viral, hackers were already exploiting a critical remote code execution vulnerability rated eight point eight out of ten in severity"
+    },
+    {
+      "start": 38.76,
+      "duration": 5.5,
+      "type": "callout",
+      "content": "OpenClaw stores API keys, OAuth tokens, and passwords in plain text files making them targets for credential-stealing malware",
+      "subtitle": "OpenClaw stores your API keys, OAuth tokens, and passwords in plain text files on your computer, making them perfect targets for credential-stealing malware"
+    },
+    {
+      "start": 46.0,
+      "duration": 5.0,
+      "type": "stat",
+      "content": "Twelve percent of OpenClaw's plugin marketplace ClawHub was infected with malicious code including Atomic macOS Stealer",
+      "subtitle": "and twelve percent of its plugin marketplace called ClawHub was infected with malicious code including the Atomic macOS Stealer that silently exfiltrates your data"
+    },
+    {
+      "start": 57.24,
+      "duration": 6.5,
+      "type": "process",
+      "content": "Prompt injection attacks send hidden malicious instructions in emails or messages that AI executes without user knowledge",
+      "subtitle": "The real danger is prompt injection attacks where hackers send you an email or message with hidden instructions, and when OpenClaw reads it, the AI faithfully executes those malicious commands without your knowledge"
+    },
+    {
+      "start": 77.64,
+      "duration": 5.0,
+      "type": "stat",
+      "content": "Over sixty three percent of deployed OpenClaw instances are vulnerable to attacks with thousands directly exploitable",
+      "subtitle": "Over sixty three percent of deployed instances are vulnerable to attacks, with twelve thousand eight hundred instances directly exploitable via remote code execution"
+    },
+    {
+      "start": 85.0,
+      "duration": 5.0,
+      "type": "callout",
+      "content": "Major security company Sophos classifies OpenClaw as potentially unwanted application and recommends blocking it entirely",
+      "subtitle": "and major companies like Sophos now classify OpenClaw as a potentially unwanted application and recommend blocking it entirely or running it only in disposable sandboxes with no sensitive data access"
+    }
+  ],
+  "researchSummary": "Facts:\n- OpenClaw is an open-source AI agent framework that went viral in January 2026 with 180,000+ GitHub stars\n- CVE-2026-25253 is a high-severity RCE vulnerability (CVSS 8.8) allowing complete system takeover with a single malicious link\n- Over 12,800 instances are directly exploitable via remote code execution\n- 341 malicious skills found on ClawHub marketplace; 12% infected with malware including Atomic macOS Stealer\n- Sophos classifies OpenClaw as a Potentially Unwanted Application (PUA)\n- 63% of deployed instances are vulnerable to attacks\n\nVisual angles:\n- System access visualization: terminal window with glowing connections to files, apps, and shell\n- Vulnerability chain: a single malicious link transforming into full system control\n- Credential theft: lock icons on plain text files being copied by masked figures\n- Prompt injection: email/message with hidden layers of malicious text being read by AI\n- Infection spread: marketplace icon (ClawHub) with percentage infected shown\n- Security classification: warning shield with 'PUA' label from Sophos\n\nSource hints:\n- OASIS Security research on ClawJacked vulnerability\n- Jamf Threat Labs analysis of Atomic macOS Stealer\n- Red Canary threat detection research\n- Sophos classification as PUA\n- CVE-2026-25253 vulnerability details"
+}

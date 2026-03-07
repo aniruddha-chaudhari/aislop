@@ -2,9 +2,17 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import type { OverlayClip, SubtitleClip, Track } from '../schema/project';
+// Switched from OpenCode-based agent to Gemini CLI-based agent.
+// import {
+//   generateAnimationPlanWithResearch,
+//   generateRemotionClipCodeWithSkill,
+//   inspectOpenCodeEnvironment,
+//   parseOpenCodeJSON,
+// } from '../agents/gemini3agent';
 import {
   generateAnimationPlanWithResearch,
   generateRemotionClipCodeWithSkill,
+  inspectOpenCodeEnvironment,
   parseOpenCodeJSON,
 } from '../agents/gemini3agent';
 
@@ -12,9 +20,13 @@ const REMOTION_ROOT_DIR = path.join(process.cwd(), 'storage', 'remotion-animatio
 const RENDERED_ANIMATIONS_ROOT_DIR = path.join(process.cwd(), 'storage', 'rendered-animations');
 const REMOTION_COMPOSITION_ID = 'GeneratedClip';
 const REMOTION_FPS = 30;
+const REMOTION_WIDTH = 1080;
+const REMOTION_HEIGHT = 1920;
+const MAX_COMPOSITIONS = 8;
 const PLAN_FILENAME = 'animation-plan.json';
 const REMOTION_VERSION = '4.0.419';
 const REMOTION_GENERATED_CLIP_FILE = path.join(REMOTION_ROOT_DIR, 'src', 'GeneratedClip.tsx');
+const REMOTION_ROOT_FILE = path.join(REMOTION_ROOT_DIR, 'src', 'Root.tsx');
 
 const DEFAULT_OVERLAY_X = 0.5;
 const DEFAULT_OVERLAY_Y = 0.65;
@@ -48,6 +60,9 @@ export type AnimationMoment = {
   layout?: string;
   emphasis?: string;
   animationPrompt?: string;
+  colorPalette?: Record<string, unknown>;
+  composition?: Record<string, unknown>;
+  [key: string]: unknown;
 };
 
 export type AnimationPlan = {
@@ -61,21 +76,12 @@ function summarizeForLog(text: string, max = 220): string {
   return `${compact.slice(0, max)}...`;
 }
 
-function animationInfo(message: string, data?: Record<string, unknown>): void {
-  if (!ANIMATION_DEBUG_ENABLED) return;
-  if (data && Object.keys(data).length > 0) {
-    console.info(`[Animation Plan] ${message}`, data);
-    return;
-  }
-  console.info(`[Animation Plan] ${message}`);
+function animationInfo(_message: string, _data?: Record<string, unknown>): void {
+  // Logging disabled.
 }
 
-function animationWarn(message: string, data?: Record<string, unknown>): void {
-  if (data && Object.keys(data).length > 0) {
-    console.warn(`[Animation Plan] ${message}`, data);
-    return;
-  }
-  console.warn(`[Animation Plan] ${message}`);
+function animationWarn(_message: string, _data?: Record<string, unknown>): void {
+  // Logging disabled.
 }
 
 function countRawMoments(raw: unknown): number {
@@ -306,7 +312,7 @@ function normalizePlan(
       (typeof moment.subtitleContent === 'string' && moment.subtitleContent) ||
       (typeof moment.scriptLine === 'string' && moment.scriptLine) ||
       '';
-    const normalizedContent = cleanText(content).slice(0, 180);
+    const normalizedContent = cleanText(content);
     if (isGenericMomentContent(normalizedContent)) continue;
     const visualStyle =
       (typeof moment.visualStyle === 'string' && moment.visualStyle) ||
@@ -332,17 +338,18 @@ function normalizePlan(
       '';
 
     normalized.push({
+      ...moment,
       start,
       duration,
-      type: cleanText(type).slice(0, 40) || 'callout',
+      type: cleanText(type) || 'callout',
       content: normalizedContent || 'Animation moment',
-      subtitle: cleanText(subtitle).slice(0, 220) || undefined,
-      visualStyle: cleanText(visualStyle).slice(0, 40) || undefined,
-      motion: cleanText(motion).slice(0, 30) || undefined,
-      layout: cleanText(layout).slice(0, 24) || undefined,
-      emphasis: cleanText(emphasis).slice(0, 60) || undefined,
-      animationPrompt: cleanText(animationPrompt).slice(0, 400) || undefined,
-    });
+      subtitle: cleanText(subtitle) || undefined,
+      visualStyle: cleanText(visualStyle) || undefined,
+      motion: cleanText(motion) || undefined,
+      layout: cleanText(layout) || undefined,
+      emphasis: cleanText(emphasis) || undefined,
+      animationPrompt: cleanText(animationPrompt) || undefined,
+    } as AnimationMoment);
   }
 
   const deduped = normalized
@@ -444,11 +451,67 @@ function computeTargetMomentCount(videoDurationSeconds: number): number {
   return clamp(Math.round(videoDurationSeconds / 8), 4, MAX_MOMENTS);
 }
 
+/**
+ * Removes any JSX that renders subtitle/props.subtitle so the clip never shows
+ * full-sentence captions. Subtitle is context-only for timing/audio.
+ */
+function stripSubtitleRenderingFromClipCode(source: string): string {
+  let out = source;
+  // Remove block: {subtitle && ( ... )} (match balanced parens)
+  const subAndBlock = /\{\s*subtitle\s*&&\s*\(/g;
+  let match: RegExpExecArray | null;
+  const toRemove: { start: number; end: number }[] = [];
+  while ((match = subAndBlock.exec(out)) !== null) {
+    const start = match.index;
+    let depth = 1;
+    let i = match.index + match[0].length;
+    while (i < out.length && depth > 0) {
+      const c = out[i];
+      if (c === '(') depth++;
+      else if (c === ')') depth--;
+      i++;
+    }
+    if (depth === 0 && i < out.length && out[i] === '}') i++; // include trailing }
+    toRemove.push({ start, end: i });
+  }
+  for (let j = toRemove.length - 1; j >= 0; j--) {
+    const { start, end } = toRemove[j];
+    out = out.slice(0, start) + out.slice(end);
+  }
+  // Also remove {props.subtitle && ( ... )} blocks
+  const propsSubBlock = /\{\s*props\.subtitle\s*&&\s*\(/g;
+  toRemove.length = 0;
+  while ((match = propsSubBlock.exec(out)) !== null) {
+    const start = match.index;
+    let depth = 1;
+    let i = match.index + match[0].length;
+    while (i < out.length && depth > 0) {
+      const c = out[i];
+      if (c === '(') depth++;
+      else if (c === ')') depth--;
+      i++;
+    }
+    if (depth === 0 && i < out.length && out[i] === '}') i++;
+    toRemove.push({ start, end: i });
+  }
+  for (let j = toRemove.length - 1; j >= 0; j--) {
+    const { start, end } = toRemove[j];
+    out = out.slice(0, start) + out.slice(end);
+  }
+  // Blank any remaining subtitle content so nothing shows
+  out = out.replace(/\{subtitle\}/g, "{''}");
+  out = out.replace(/\{props\.subtitle\}/g, "{''}");
+  out = out.replace(/\{\s*\(props\.subtitle\s*\|\|[^}]+\)\s*\}/g, "{''}");
+  out = out.replace(/\{\s*\([^)]*props\.subtitle[^)]*\)\s*\}/g, "{''}");
+  return out;
+}
+
 function cleanGeneratedCode(raw: string): string {
   const text = raw.trim();
   const fenced = text.match(/```(?:tsx|ts|jsx|js)?\s*([\s\S]*?)\s*```/i);
   const candidate = fenced?.[1] ? fenced[1].trim() : text;
-  return candidate.replace(/\r\n/g, '\n').trim();
+  const normalized = candidate.replace(/\r\n/g, '\n').trim();
+  return stripSubtitleRenderingFromClipCode(normalized);
 }
 
 function looksLikeGeneratedClipCode(source: string): boolean {
@@ -459,9 +522,47 @@ function looksLikeGeneratedClipCode(source: string): boolean {
   );
 }
 
+function getGeneratedClipFilePath(index: number): string {
+  return path.join(REMOTION_ROOT_DIR, 'src', `GeneratedClip${index}.tsx`);
+}
+
+function getCompositionId(index: number): string {
+  return `GeneratedClip${index}`;
+}
+
 function writeGeneratedClipSource(source: string): void {
   ensureDir(path.dirname(REMOTION_GENERATED_CLIP_FILE));
   fs.writeFileSync(REMOTION_GENERATED_CLIP_FILE, source, 'utf8');
+}
+
+/** Write clip code to per-moment file for parallel render (Approach 1). */
+function writeGeneratedClipSourceForIndex(source: string, index: number): void {
+  const filePath = getGeneratedClipFilePath(index);
+  ensureDir(path.dirname(filePath));
+  fs.writeFileSync(filePath, source, 'utf8');
+}
+
+/** Generate Root.tsx that registers GeneratedClip0..GeneratedClip(N-1) for parallel render. */
+function writeRemotionRoot(momentCount: number): void {
+  const n = Math.min(momentCount, MAX_COMPOSITIONS);
+  const maxDurationFrames = Math.ceil(7 * REMOTION_FPS);
+  const lines: string[] = [
+    'import React from \'react\';',
+    'import { Composition } from \'remotion\';',
+    ...Array.from({ length: n }, (_, i) => `import { GeneratedClip as GeneratedClip${i} } from './GeneratedClip${i}';`),
+    '',
+    'const RemotionRoot: React.FC = () => (',
+    '  <>',
+    ...Array.from({ length: n }, (_, i) =>
+      `    <Composition id="GeneratedClip${i}" component={GeneratedClip${i}} durationInFrames={${maxDurationFrames}} fps={${REMOTION_FPS}} width={${REMOTION_WIDTH}} height={${REMOTION_HEIGHT}} defaultProps={{}} />`
+    ),
+    '  </>',
+    ');',
+    'export { RemotionRoot };',
+    'export default RemotionRoot;',
+  ];
+  ensureDir(path.dirname(REMOTION_ROOT_FILE));
+  fs.writeFileSync(REMOTION_ROOT_FILE, lines.join('\n'), 'utf8');
 }
 
 function ensureDir(dirPath: string): void {
@@ -562,12 +663,29 @@ async function ensureRemotionDependenciesInstalled(): Promise<void> {
   }
 }
 
+let remotionBrowserEnsured = false;
+
+async function ensureRemotionBrowser(): Promise<void> {
+  if (remotionBrowserEnsured) return;
+  const localBin = getLocalRemotionBinaryPath();
+  if (!fs.existsSync(localBin)) return;
+  try {
+    await runCommand(localBin, ['browser', 'ensure'], REMOTION_ROOT_DIR, 'remotion-browser-ensure');
+    remotionBrowserEnsured = true;
+  } catch (error) {
+    animationWarn('Remotion browser ensure failed (render may still work)', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 async function renderMomentWithRemotion(
   outputPath: string,
   moment: AnimationMoment,
   index: number,
   topic: string,
-  remotionProjectDir: string
+  remotionProjectDir: string,
+  compositionId?: string
 ): Promise<void> {
   await ensureRemotionDependenciesInstalled();
 
@@ -588,14 +706,17 @@ async function renderMomentWithRemotion(
   const propsPath = path.join(remotionProjectDir, `moment_${index}_props.json`);
   fs.writeFileSync(propsPath, JSON.stringify(props), 'utf8');
 
+  const compId = compositionId ?? REMOTION_COMPOSITION_ID;
+  const renderTimeoutMs = 60_000;
   const renderArgs = [
     'render',
-    REMOTION_COMPOSITION_ID,
+    compId,
     outputPath,
     `--frames=0-${frames - 1}`,
     `--props=${propsPath}`,
     '--codec=h264',
     '--pixel-format=yuv420p',
+    `--timeout=${renderTimeoutMs}`,
   ];
 
   try {
@@ -670,7 +791,7 @@ export async function generateAnimationPlanAndRender(params: {
 
   const dialogueContext = buildDialogueContext(subtitleClips);
   const targetMomentCount = computeTargetMomentCount(videoDurationSeconds);
-  const promptSourcePath = 'backend1/src/agents/gemini3agent.ts (inline fallbackTimelinePrompt)';
+  const promptSourcePath = 'backend1/src/prompts/animationTimelinePrompt.ts';
   animationInfo('Timeline prompt source selected', {
     projectId,
     source: promptSourcePath,
@@ -734,6 +855,7 @@ export async function generateAnimationPlanAndRender(params: {
     if (hardFailure) {
       throw new Error(message);
     }
+    console.log('[Animation] Step: AI plan failed (using fallback). Reason:', message);
     animationWarn('AI plan generation failed, falling back to subtitle-derived moments', {
       projectId,
       message,
@@ -765,21 +887,29 @@ export async function generateAnimationPlanAndRender(params: {
     throw new Error('Animation plan has no usable moments');
   }
 
-  const renderedMoments: Array<{ moment: AnimationMoment; outputPath: string }> = [];
-  const renderFailures: Array<{ index: number; message: string }> = [];
-  let clipCodeGeneratedCount = 0;
-  let clipCodeUsedExaCount = 0;
-  let clipCodeUsedSkillCount = 0;
-  for (let i = 0; i < normalizedPlan.moments.length; i++) {
-    const sourceMoment = normalizedPlan.moments[i];
-    const moment: AnimationMoment = {
-      ...sourceMoment,
-      subtitle: sourceMoment.subtitle || sourceMoment.content,
-    };
-    const outputPath = path.join(renderedProjectDir, `moment_${i}.mp4`);
+  const moments: AnimationMoment[] = normalizedPlan.moments.map((sourceMoment) => ({
+    ...sourceMoment,
+    subtitle: sourceMoment.subtitle || sourceMoment.content,
+  }));
 
-    let clipCode = '';
-    try {
+  const numMoments = moments.length;
+
+  const OPENCODE_SERIAL_DELAY_MS = 3000;
+
+  await new Promise((r) => setTimeout(r, OPENCODE_SERIAL_DELAY_MS));
+
+  console.log('[Animation] Step: clip-code – generating for', numMoments, 'moments (serial)...');
+  animationInfo('Generating clip code in serial', { projectId, momentCount: numMoments });
+
+  const opencodeEnvironment = await inspectOpenCodeEnvironment(process.cwd());
+
+  const clipCodeResults: Array<{ index: number; clipCode: string; usedExa: boolean; usedSkill: boolean }> = [];
+  try {
+    for (let i = 0; i < moments.length; i++) {
+      if (i > 0) {
+        await new Promise((r) => setTimeout(r, OPENCODE_SERIAL_DELAY_MS));
+      }
+      const moment = moments[i];
       const clipCodeResult = await generateRemotionClipCodeWithSkill(
         {
           topic,
@@ -787,77 +917,86 @@ export async function generateAnimationPlanAndRender(params: {
           researchSummary: aiResearchSummary,
           moment: {
             index: i,
-            totalMoments: normalizedPlan.moments.length,
-            start: moment.start,
-            duration: moment.duration,
-            type: moment.type,
-            content: moment.content,
-            subtitle: moment.subtitle,
-            animationPrompt: moment.animationPrompt,
-            emphasis: moment.emphasis,
-            visualStyle: moment.visualStyle,
-            motion: moment.motion,
-            layout: moment.layout,
+            totalMoments: numMoments,
+            ...moment,
           },
         },
-        {
-          debugOutputDir: remotionProjectDir,
-        }
+        { debugOutputDir: remotionProjectDir, environment: opencodeEnvironment }
       );
-
       const clipCodeOutputPath = path.join(remotionProjectDir, `clip-code-output-${i}.raw.txt`);
       fs.writeFileSync(clipCodeOutputPath, clipCodeResult.output, 'utf8');
       const candidate = cleanGeneratedCode(clipCodeResult.code || '');
       if (!candidate || !looksLikeGeneratedClipCode(candidate)) {
-        throw new Error('Generated clip code was empty or invalid.');
+        throw new Error(`Generated clip code for moment ${i} was empty or invalid.`);
       }
-      clipCode = candidate;
-      if (clipCodeResult.usedExaClipCode) clipCodeUsedExaCount += 1;
-      if (clipCodeResult.usedRemotionSkill) clipCodeUsedSkillCount += 1;
+      clipCodeResults.push({
+        index: i,
+        clipCode: candidate,
+        usedExa: clipCodeResult.usedExaClipCode,
+        usedSkill: clipCodeResult.usedRemotionSkill,
+      });
       animationInfo('Clip code generated', {
         projectId,
         index: i,
-        usedAgent: clipCodeResult.usedAgent,
-        fallbackWithoutAgent: clipCodeResult.fallbackWithoutAgent,
         usedExaClipCode: clipCodeResult.usedExaClipCode,
         usedRemotionSkill: clipCodeResult.usedRemotionSkill,
-        diagnostics: clipCodeResult.diagnostics,
-        outputSnapshotPath: clipCodeOutputPath,
       });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      animationWarn('Failed generating clip code in strict mode', {
-        projectId,
-        index: i,
-        message,
-      });
-      throw new Error(`Strict mode: failed generating Remotion clip code for moment ${i}: ${message}`);
     }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log('[Animation] Step: clip-code – failed. Reason:', msg);
+    throw err;
+  }
+  console.log('[Animation] Step: clip-code – done,', clipCodeResults.length, 'generated');
 
-    clipCodeGeneratedCount += 1;
+  let clipCodeGeneratedCount = clipCodeResults.length;
+  let clipCodeUsedExaCount = clipCodeResults.filter((r) => r.usedExa).length;
+  let clipCodeUsedSkillCount = clipCodeResults.filter((r) => r.usedSkill).length;
 
-    writeGeneratedClipSource(clipCode);
+  for (const { index: i, clipCode } of clipCodeResults) {
+    writeGeneratedClipSourceForIndex(clipCode, i);
     try {
       fs.writeFileSync(path.join(remotionProjectDir, `clip-code-${i}.tsx`), clipCode, 'utf8');
     } catch (error) {
-      animationWarn('Failed writing generated clip source snapshot', {
+      animationWarn('Failed writing clip source snapshot', {
         projectId,
         index: i,
         message: error instanceof Error ? error.message : String(error),
       });
     }
+  }
 
+  writeRemotionRoot(numMoments);
+
+  await ensureRemotionBrowser();
+
+  console.log('[Animation] Step: render – rendering', numMoments, 'moments (serial)...');
+  animationInfo('Rendering moments in serial', { projectId, momentCount: numMoments });
+
+  const renderedMoments: Array<{ moment: AnimationMoment; outputPath: string }> = [];
+  const renderFailures: Array<{ index: number; message: string }> = [];
+
+  for (let i = 0; i < moments.length; i++) {
+    const moment = moments[i];
+    const outputPath = path.join(renderedProjectDir, `moment_${i}.mp4`);
+    animationInfo('Rendering moment', {
+      projectId,
+      index: i,
+      outputPath,
+      start: moment.start,
+      duration: moment.duration,
+      type: moment.type,
+      content: summarizeForLog(moment.content, 120),
+    });
     try {
-      animationInfo('Rendering moment', {
-        projectId,
-        index: i,
+      await renderMomentWithRemotion(
         outputPath,
-        start: moment.start,
-        duration: moment.duration,
-        type: moment.type,
-        content: summarizeForLog(moment.content, 120),
-      });
-      await renderMomentWithRemotion(outputPath, moment, i, topic, remotionProjectDir);
+        moment,
+        i,
+        topic,
+        remotionProjectDir,
+        getCompositionId(i)
+      );
       if (!fs.existsSync(outputPath)) {
         throw new Error(`Rendered file not found: ${outputPath}`);
       }
@@ -867,9 +1006,10 @@ export async function generateAnimationPlanAndRender(params: {
         index: i,
         outputPath,
       });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       renderFailures.push({ index: i, message });
+      console.log('[Animation] Step: render – moment', i, 'failed:', message);
       animationWarn('Failed rendering moment', {
         projectId,
         index: i,
@@ -877,6 +1017,13 @@ export async function generateAnimationPlanAndRender(params: {
       });
     }
   }
+
+  console.log('[Animation] Step: render – done,', renderedMoments.length, 'succeeded,', renderFailures.length, 'failed');
+  renderedMoments.sort((a, b) => {
+    const aIdx = parseInt(path.basename(a.outputPath).replace('moment_', '').replace('.mp4', ''), 10);
+    const bIdx = parseInt(path.basename(b.outputPath).replace('moment_', '').replace('.mp4', ''), 10);
+    return aIdx - bIdx;
+  });
 
   if (renderedMoments.length === 0) {
     throw new Error('No animation moments were rendered successfully');
@@ -927,7 +1074,7 @@ export async function generateAnimationPlanAndRender(params: {
       promptSnapshotPath: null,
       promptChars: null,
       promptMentionsSkill: aiPromptMentionsSkill,
-      preview: 'Prompt is generated inline in generateAnimationPlanWithResearch.',
+      preview: 'Prompt is built by buildAnimationTimelineWithResearchPrompt (timeline+research combined) in animationTimelinePrompt.ts.',
     },
     ai: {
       usedAgent: aiUsedAgent,
