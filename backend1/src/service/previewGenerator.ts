@@ -1316,9 +1316,8 @@ export async function generateTimelinePreviewHls(
  * and offsets clip timings so that local segment time 0 corresponds to the
  * requested playhead position.
  *
- * NOTE: To keep the implementation focused and fast, this segment preview
- * currently omits karaoke subtitles. Full previews still include subtitles via
- * `generateTimelinePreview`.
+ * Segment preview now includes karaoke subtitles in the local segment window
+ * so paused/scrub preview better matches full preview/export behavior.
  */
 export async function generateTimelineSegmentPreview(
   project: Project,
@@ -1412,6 +1411,7 @@ export async function generateTimelineSegmentPreview(
     const characterTrack = timeline?.tracks?.find((t: any) => t.type === 'character');
     const musicTracks = (timeline?.tracks ?? []).filter((t: any) => t.type === 'music');
     const sfxTracks = (timeline?.tracks ?? []).filter((t: any) => t.type === 'sfx');
+    const subtitleTrack = timeline?.tracks?.find((t: any) => t.type === 'subtitle');
 
     const sliceClipsToWindow = <T extends { start: number; duration: number }>(clips: T[]): T[] => {
       const result: T[] = [];
@@ -1434,6 +1434,48 @@ export async function generateTimelineSegmentPreview(
       return result;
     };
 
+    const sliceSubtitleClipsToWindow = (clips: SubtitleClip[]): SubtitleClip[] => {
+      const result: SubtitleClip[] = [];
+      for (const clip of clips) {
+        const globalStart = clip.start;
+        const globalEnd = clip.start + clip.duration;
+        if (globalEnd <= segmentStart || globalStart >= segmentEnd) continue;
+
+        const localStart = Math.max(0, globalStart - segmentStart);
+        const localEnd = Math.min(segmentEnd, globalEnd) - segmentStart;
+        const localDuration = Math.max(0.05, localEnd - localStart);
+
+        let words = clip.words;
+        if (words && words.length > 0) {
+          const clippedWords = words
+            .map((w) => ({
+              word: w.word,
+              absStart: clip.start + w.start,
+              absEnd: clip.start + w.end,
+            }))
+            .filter((w) => w.absEnd > segmentStart && w.absStart < segmentEnd)
+            .map((w) => {
+              const localAbsStart = Math.max(0, w.absStart - segmentStart);
+              const localAbsEnd = Math.max(localAbsStart + 0.01, w.absEnd - segmentStart);
+              return {
+                word: w.word,
+                start: Math.max(0, localAbsStart - localStart),
+                end: Math.max(0.01, localAbsEnd - localStart),
+              };
+            });
+          words = clippedWords.length > 0 ? clippedWords : undefined;
+        }
+
+        result.push({
+          ...clip,
+          start: localStart,
+          duration: localDuration,
+          words,
+        });
+      }
+      return result;
+    };
+
     const overlayClips = sliceClipsToWindow(
       planOverlayTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'overlay') || [])) as OverlayClip[]
     );
@@ -1450,6 +1492,39 @@ export async function generateTimelineSegmentPreview(
       segmentStart,
       segmentEnd
     );
+    let subtitleClips = (subtitleTrack?.clips?.filter((c: any) => c.kind === 'subtitle') || []) as SubtitleClip[];
+    const subtitleClipsBeforeFilter = subtitleClips.length;
+    subtitleClips = excludeSubtitlesInRanges(
+      subtitleClips,
+      buildReplaceOverlayRanges(
+        planOverlayTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'overlay') || [])) as OverlayClip[]
+      )
+    );
+    const subtitleClipsAfterFilter = subtitleClips.length;
+    if (subtitleClips.length > 0) {
+      subtitleClips = await enrichSubtitleClipsWithWords(session, subtitleClips);
+      subtitleClips = sliceSubtitleClipsToWindow(subtitleClips);
+      subtitleClips = excludeSubtitlesInRanges(subtitleClips, buildReplaceOverlayRanges(overlayClips));
+    }
+    const subtitleClipsInWindow = subtitleClips.length;
+    const subtitleWordsInWindow = subtitleClips.reduce((sum, c) => sum + (c.words?.length || 0), 0);
+
+    let assPath: string | null = null;
+    if (subtitleClips.length > 0) {
+      assPath = generateAssFromTimeline(`${projectId}_seg_${Math.round(segmentStart * 1000)}`, subtitleClips);
+    }
+    logPreviewServiceTelemetry('generate_segment_preview_subtitle_state', {
+      projectId,
+      centerTime,
+      windowSeconds,
+      segmentStart,
+      segmentEnd,
+      subtitleClipsBeforeFilter,
+      subtitleClipsAfterFilter,
+      subtitleClipsInWindow,
+      subtitleWordsInWindow,
+      assGenerated: Boolean(assPath),
+    });
 
     const command = ffmpeg();
     const isImage = /\.(jpe?g|png|gif|webp)$/i.test(templatePath);
@@ -1540,6 +1615,15 @@ export async function generateTimelineSegmentPreview(
         `crop=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT},format=yuv420p[bg]`;
     }
     lastLabel = 'bg';
+
+    if (assPath && fs.existsSync(assPath)) {
+      const fontSize = Math.floor(48 * SCALE);
+      const marginV = Math.floor(700 * SCALE);
+      const assPathFixed = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+      const forceStyle = `Fontname=Arial-Black,FontSize=${fontSize},PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H80000000,Bold=1,BorderStyle=1,Outline=3,Shadow=2,Alignment=2,MarginV=${marginV}`;
+      filterComplex += `;[${lastLabel}]subtitles='${assPathFixed}':force_style='${forceStyle}'[with_subs]`;
+      lastLabel = 'with_subs';
+    }
 
     // Overlays in local segment time. Video overlays use setpts so they play 0→duration in order.
     overlayInputs.forEach(({ clip, inputIndex, overlayPath }, index) => {

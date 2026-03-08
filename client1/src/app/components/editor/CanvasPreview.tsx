@@ -27,6 +27,7 @@ type Props = {
   onPreviewReady?: (api: PreviewPlayerApi | null) => void;
   /** Optional: Preview video source (FFmpeg composite) to use instead of template */
   previewVideoSrc?: string | null;
+  previewSourceMode?: 'none' | 'segment' | 'hls';
   isGeneratingPreview?: boolean;
   /** Telemetry hook: fired once when first frame is observed after playback starts. */
   onFirstFrame?: () => void;
@@ -46,6 +47,7 @@ export default function CanvasPreview({
   onUpdateClip,
   onPreviewReady,
   previewVideoSrc,
+  previewSourceMode = 'none',
   isGeneratingPreview = false,
   onFirstFrame,
 }: Props) {
@@ -406,7 +408,8 @@ export default function CanvasPreview({
                     onFirstFrame?.();
                   }
                   lastSeekedRef.current = video.currentTime;
-                  // Only sync video → timeline when playing. When paused, timeline is source of truth.
+                  if (previewSourceMode === 'segment') return;
+                  // Only sync video to timeline when playing. When paused, timeline is source of truth.
                   if (isPlaying) onPlayheadChange(video.currentTime);
                 }}
                 onPlay={() => setMutedForPolicy(false)}
@@ -459,3 +462,6 @@ export default function CanvasPreview({
     </div>
   );
 }
+
+
+

@@ -88,10 +88,12 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const timelineDebounceRef = useRef<NodeJS.Timeout | null>(null);
   const segmentRequestSeqRef = useRef(0);
   const lastPlayAttemptAtRef = useRef<number>(0);
+  const suppressSegmentUntilRef = useRef<number>(0);
   const latestPlayheadRef = useRef<number>(0);
   const isGeneratingPreviewRef = useRef(false);
   const previewSourceModeRef = useRef<'none' | 'segment' | 'hls'>('none');
   const isDirtyRef = useRef(false);
+  const isPlayingRef = useRef(false);
   const isInitialTimelineRef = useRef(true);
   const playClickAtRef = useRef<number | null>(null);
   const hlsRequestAtRef = useRef<number | null>(null);
@@ -108,6 +110,10 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   useEffect(() => {
     isDirtyRef.current = isDirty;
   }, [isDirty]);
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
 
   useEffect(() => {
     latestPlayheadRef.current = playheadTime;
@@ -149,6 +155,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const requestSegmentPreview = useCallback(async (atSeconds: number, reason: 'scrub' | 'timeline_change' | 'timeline_saved') => {
     if (!canGeneratePreview) return;
     if (isGeneratingPreviewRef.current) return;
+    if (isPlayingRef.current) return;
+    if (Date.now() < suppressSegmentUntilRef.current) return;
     if (previewSourceModeRef.current === 'hls' && reason === 'scrub') return;
     if (reason === 'scrub' && Date.now() - lastPlayAttemptAtRef.current < 1500) return;
     const playhead = Math.max(0, Number.isFinite(atSeconds) ? atSeconds : 0);
@@ -162,6 +170,13 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
 
     const applyReady = (payload: Record<string, unknown> | null | undefined): boolean => {
       if (!payload || payload.success !== true || payload.state !== 'ready' || typeof payload.url !== 'string') return false;
+      // Ignore stale segment completions while actively playing or just after play click.
+      if (isPlayingRef.current || Date.now() - lastPlayAttemptAtRef.current < 2000) {
+        return false;
+      }
+      if (Date.now() < suppressSegmentUntilRef.current) {
+        return false;
+      }
       const now = performance.now();
       const baseUrl = toAbsolutePreviewUrl(payload.url);
       const cacheBust = baseUrl.includes('?') ? '&t=' : '?t=';
@@ -221,14 +236,28 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
 
   const handlePlayToggle = async () => {
     const next = !isPlaying;
+    const isSegmentSrc = Boolean(previewVideoSrc && previewVideoSrc.includes('/previews/segments/'));
     logPreviewTelemetry('play_toggle_clicked', {
       from: isPlaying ? 'playing' : 'paused',
       to: next ? 'playing' : 'paused',
       previewSourceMode,
+      isSegmentSrc,
       hasPreviewSrc: Boolean(previewVideoSrc),
     });
     let seekTo: number | undefined;
     if (next) {
+      suppressSegmentUntilRef.current = Date.now() + 5000;
+      // Invalidate any in-flight segment preview requests so they cannot overwrite HLS on play.
+      segmentRequestSeqRef.current += 1;
+      clearSegmentPolling();
+      if (segmentDebounceRef.current) {
+        clearTimeout(segmentDebounceRef.current);
+        segmentDebounceRef.current = null;
+      }
+      if (timelineDebounceRef.current) {
+        clearTimeout(timelineDebounceRef.current);
+        timelineDebounceRef.current = null;
+      }
       lastPlayAttemptAtRef.current = Date.now();
       playClickAtRef.current = performance.now();
       const atEnd = draftProject.duration > 0 && playheadTime >= draftProject.duration;
@@ -244,7 +273,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     if (next && project.template?.src && project.audioSessionId && project.audioSessionId !== 'no-session') {
       // Segment previews are short windows (for scrub feedback), not full playback sources.
       // If current source is segment, force HLS generation for timeline playback.
-      if (!previewVideoSrc || previewSourceMode === 'segment') {
+      if (!previewVideoSrc || previewSourceMode === 'segment' || isSegmentSrc) {
         if (isDirty) {
           try {
             await handleSaveTimeline(true);
@@ -262,6 +291,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             setPreviewVideoSrc(absolutePlaylistUrl);
             setPreviewSourceMode('hls');
             setIsPlaying(true);
+            suppressSegmentUntilRef.current = 0;
             previewReadyAtRef.current = performance.now();
             setTimeout(() => previewPlayerRef.current?.requestPlay?.(seekTo ?? playheadTime), 120);
             return;
@@ -288,6 +318,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
                 setPreviewSourceMode('hls');
                 setIsGeneratingPreview(false);
                 setIsPlaying(true);
+                suppressSegmentUntilRef.current = 0;
                 previewReadyAtRef.current = now;
                 logPreviewTelemetry('hls_ready', {
                   hls_request_to_ready_ms: hlsRequestAtRef.current != null ? Math.round(now - hlsRequestAtRef.current) : null,
@@ -332,6 +363,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     }
     setIsPlaying(next);
     if (next) {
+      suppressSegmentUntilRef.current = 0;
       previewReadyAtRef.current = performance.now();
       logPreviewTelemetry('play_using_existing_preview');
       previewPlayerRef.current?.requestPlay?.(seekTo);
@@ -1475,9 +1507,9 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
           />
 
           {/* Canvas Preview */}
-          <CanvasPreview
-            project={draftProject}
-            isPlaying={isPlaying}
+      <CanvasPreview
+        project={draftProject}
+        isPlaying={isPlaying}
             playheadTime={playheadTime}
             duration={draftProject.duration}
             volume={volume}
@@ -1488,10 +1520,11 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             onSelectClip={setSelected}
             onUpdateClip={updateClip}
             onPreviewReady={(api) => { previewPlayerRef.current = api; }}
-            previewVideoSrc={previewVideoSrc}
-            isGeneratingPreview={isGeneratingPreview}
-            onFirstFrame={handleFirstFrame}
-          />
+        previewVideoSrc={previewVideoSrc}
+        previewSourceMode={previewSourceMode}
+        isGeneratingPreview={isGeneratingPreview}
+        onFirstFrame={handleFirstFrame}
+      />
 
           {/* Right Properties Panel */}
           <TextPropertiesPanel

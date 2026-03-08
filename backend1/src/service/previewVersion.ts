@@ -3,6 +3,12 @@ import type { Project } from '../schema/project';
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
+/**
+ * Bump this (or set PREVIEW_RENDERER_VERSION) when preview rendering behavior changes
+ * and old cached preview artifacts should be invalidated.
+ */
+const PREVIEW_RENDERER_VERSION = process.env.PREVIEW_RENDERER_VERSION || 'renderer-v2-karaoke-segment';
+
 function toStableJsonValue(value: unknown): JsonValue {
   if (value === null) return null;
   if (typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') {
@@ -27,6 +33,7 @@ function toStableJsonValue(value: unknown): JsonValue {
 
 export function computeTimelineHash(project: Project): string {
   const fingerprint = {
+    rendererVersion: PREVIEW_RENDERER_VERSION,
     projectId: project.id,
     format: project.format,
     audioSessionId: project.audioSessionId,
