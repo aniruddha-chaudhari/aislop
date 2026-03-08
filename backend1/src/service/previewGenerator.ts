@@ -21,6 +21,8 @@ if (ffmpegPath) {
 // Preview configuration - scaled 1/3 from 1080x1920 (matches timelineCompiler full export)
 const PREVIEW_DIR = path.join(process.cwd(), 'storage', 'previews');
 const HLS_ROOT_DIR = path.join(PREVIEW_DIR, 'hls');
+const TIMELINE_ROOT_DIR = path.join(PREVIEW_DIR, 'timeline');
+const SEGMENT_ROOT_DIR = path.join(PREVIEW_DIR, 'segments');
 const PREVIEW_WIDTH = 360;
 const PREVIEW_HEIGHT = 640;
 const SCALE = PREVIEW_HEIGHT / 1920; // Same proportion as timelineCompiler 1080x1920
@@ -30,6 +32,37 @@ const PREVIEW_BITRATE = '500k'; // Low bitrate for fast generation
 const OVERLAY_BASE_W = Math.floor(960 * (PREVIEW_WIDTH / 1080)); // 320 at 360px width
 const OVERLAY_BASE_H = Math.floor(720 * (PREVIEW_HEIGHT / 1920)); // 240 at 640px height
 const OVERLAY_LEGACY_TOP_Y = Math.floor(40 * (PREVIEW_HEIGHT / 1920)); // 13 at 640px height (~40px at 1920)
+
+function sanitizePreviewVersion(versionTag?: string): string {
+  const raw = (versionTag || 'latest').trim();
+  const safe = raw.replace(/[^a-zA-Z0-9_-]/g, '_');
+  return safe || 'latest';
+}
+
+export function buildTimelinePreviewOutputPath(projectId: string, versionTag?: string): string {
+  const version = sanitizePreviewVersion(versionTag);
+  return path.join(TIMELINE_ROOT_DIR, projectId, version, 'preview.mp4');
+}
+
+export function buildSegmentPreviewOutputPath(
+  projectId: string,
+  segmentStartSeconds: number,
+  segmentDurationSeconds: number,
+  versionTag?: string
+): string {
+  const version = sanitizePreviewVersion(versionTag);
+  const startMs = Math.max(0, Math.round(segmentStartSeconds * 1000));
+  const durMs = Math.max(50, Math.round(segmentDurationSeconds * 1000));
+  return path.join(SEGMENT_ROOT_DIR, projectId, version, `seg_${startMs}_${durMs}.mp4`);
+}
+
+function logPreviewServiceTelemetry(event: string, data: Record<string, unknown> = {}): void {
+  console.info('[PreviewServiceTelemetry]', {
+    event,
+    timestamp: new Date().toISOString(),
+    ...data,
+  });
+}
 
 function isImageOverlayTrackId(trackId: string): boolean {
   return trackId === 't_imgs' || /^t_imgs_\d+$/.test(trackId);
@@ -102,6 +135,12 @@ if (!fs.existsSync(PREVIEW_DIR)) {
 if (!fs.existsSync(HLS_ROOT_DIR)) {
   fs.mkdirSync(HLS_ROOT_DIR, { recursive: true });
 }
+if (!fs.existsSync(TIMELINE_ROOT_DIR)) {
+  fs.mkdirSync(TIMELINE_ROOT_DIR, { recursive: true });
+}
+if (!fs.existsSync(SEGMENT_ROOT_DIR)) {
+  fs.mkdirSync(SEGMENT_ROOT_DIR, { recursive: true });
+}
 
 /**
  * Generate a low-res preview video from template + audio session
@@ -114,6 +153,8 @@ export async function generatePreview(
   audioSessionId: string,
   onProgress?: (percent: number, message: string) => void
 ): Promise<{ success: boolean; outputPath?: string; error?: string }> {
+  const startedAt = Date.now();
+  logPreviewServiceTelemetry('generate_preview_start', { projectId, audioSessionId });
   try {
     // Load audio session to get dialogue files
     const session = await prisma.session.findUnique({
@@ -238,9 +279,19 @@ export async function generatePreview(
     });
 
     onProgress?.(100, 'Preview ready!');
+    logPreviewServiceTelemetry('generate_preview_success', {
+      projectId,
+      duration_ms: Date.now() - startedAt,
+      outputPath,
+    });
 
     return { success: true, outputPath };
   } catch (error) {
+    logPreviewServiceTelemetry('generate_preview_error', {
+      projectId,
+      duration_ms: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'
@@ -523,8 +574,11 @@ function sliceAudioClipsToWindow<T extends { start: number; duration?: number }>
  */
 export async function generateTimelinePreview(
   project: Project,
-  onProgress?: (percent: number, message: string) => void
+  onProgress?: (percent: number, message: string) => void,
+  options?: { versionTag?: string }
 ): Promise<{ success: boolean; outputPath?: string; error?: string }> {
+  const startedAt = Date.now();
+  logPreviewServiceTelemetry('generate_timeline_preview_start', { projectId: project.id });
   const { id: projectId, template, audioSessionId, timeline } = project;
 
   try {
@@ -557,7 +611,11 @@ export async function generateTimelinePreview(
       return { success: false, error: `Template not found: ${templatePath}` };
     }
 
-    const outputPath = path.join(PREVIEW_DIR, `preview_${projectId}.mp4`);
+    const outputPath = buildTimelinePreviewOutputPath(projectId, options?.versionTag);
+    const outputDir = path.dirname(outputPath);
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
 
     if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
@@ -855,8 +913,18 @@ export async function generateTimelinePreview(
     });
 
     onProgress?.(100, 'Preview ready!');
+    logPreviewServiceTelemetry('generate_timeline_preview_success', {
+      projectId,
+      duration_ms: Date.now() - startedAt,
+      outputPath,
+    });
     return { success: true, outputPath };
   } catch (error) {
+    logPreviewServiceTelemetry('generate_timeline_preview_error', {
+      projectId,
+      duration_ms: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'
@@ -877,6 +945,8 @@ export async function generateTimelinePreviewHls(
   version: string,
   onProgress?: (percent: number, message: string) => void
 ): Promise<{ success: boolean; playlistPath?: string; error?: string }> {
+  const startedAt = Date.now();
+  logPreviewServiceTelemetry('generate_hls_preview_start', { projectId: project.id, version });
   console.log('[HLS Preview] start', { projectId: project.id, version });
   const { id: projectId, template, audioSessionId, timeline } = project;
 
@@ -1211,8 +1281,20 @@ export async function generateTimelinePreviewHls(
     });
 
     onProgress?.(100, 'HLS preview ready!');
+    logPreviewServiceTelemetry('generate_hls_preview_success', {
+      projectId,
+      version,
+      duration_ms: Date.now() - startedAt,
+      playlistPath,
+    });
     return { success: true, playlistPath };
   } catch (error) {
+    logPreviewServiceTelemetry('generate_hls_preview_error', {
+      projectId: project.id,
+      version,
+      duration_ms: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
     console.error('[HLS Preview] generate error', {
       projectId: project.id,
       message: error instanceof Error ? error.message : error,
@@ -1242,8 +1324,15 @@ export async function generateTimelineSegmentPreview(
   project: Project,
   centerTime: number,
   windowSeconds: number = 3,
-  onProgress?: (percent: number, message: string) => void
+  onProgress?: (percent: number, message: string) => void,
+  options?: { versionTag?: string }
 ): Promise<{ success: boolean; outputPath?: string; error?: string }> {
+  const startedAt = Date.now();
+  logPreviewServiceTelemetry('generate_segment_preview_start', {
+    projectId: project.id,
+    centerTime,
+    windowSeconds,
+  });
   const { id: projectId, template, audioSessionId, timeline } = project;
 
   try {
@@ -1287,7 +1376,16 @@ export async function generateTimelineSegmentPreview(
       return { success: false, error: `Template not found: ${templatePath}` };
     }
 
-    const outputPath = path.join(PREVIEW_DIR, `preview_${projectId}.mp4`);
+    const outputPath = buildSegmentPreviewOutputPath(
+      projectId,
+      segmentStart,
+      segmentDuration,
+      options?.versionTag
+    );
+    const outputDir = path.dirname(outputPath);
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
 
     if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
@@ -1587,8 +1685,22 @@ export async function generateTimelineSegmentPreview(
     });
 
     onProgress?.(100, 'Segment preview ready!');
+    logPreviewServiceTelemetry('generate_segment_preview_success', {
+      projectId,
+      duration_ms: Date.now() - startedAt,
+      centerTime,
+      windowSeconds,
+      outputPath,
+    });
     return { success: true, outputPath };
   } catch (error) {
+    logPreviewServiceTelemetry('generate_segment_preview_error', {
+      projectId: project.id,
+      duration_ms: Date.now() - startedAt,
+      centerTime,
+      windowSeconds,
+      error: error instanceof Error ? error.message : String(error),
+    });
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'

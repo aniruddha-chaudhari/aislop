@@ -5,7 +5,15 @@ import { generateSubtitlesAndCharacters, generateImagePlan } from '../service/ai
 import { getSessionDuration } from '../service/sessionDuration';
 import type { Track, SubtitleClip, OverlayClip } from '../schema/project';
 import { compileTimeline } from '../service/timelineCompiler';
-import { generatePreview, generateTimelinePreview, generateTimelineSegmentPreview, generateTimelinePreviewHls } from '../service/previewGenerator';
+import {
+  buildSegmentPreviewOutputPath,
+  buildTimelinePreviewOutputPath,
+  generatePreview,
+  generateTimelinePreview,
+  generateTimelineSegmentPreview,
+  generateTimelinePreviewHls,
+} from '../service/previewGenerator';
+import { getPreviewVersion } from '../service/previewVersion';
 import { ProjectSchema, TimelineSchema } from '../schema/project';
 import fs from 'fs';
 import path from 'path';
@@ -17,6 +25,68 @@ import {
 } from '../service/animationPlanService';
 
 const ANIMATION_DEBUG_ENABLED = process.env.ANIMATION_DEBUG === '1';
+
+function logPreviewTelemetry(event: string, data: Record<string, unknown> = {}): void {
+  console.info('[PreviewTelemetry]', {
+    event,
+    timestamp: new Date().toISOString(),
+    ...data,
+  });
+}
+
+type PreviewJobMode = 'hls' | 'segment';
+type PreviewJobState = 'idle' | 'queued' | 'rendering' | 'ready' | 'error';
+
+type PreviewJobStatus = {
+  mode: PreviewJobMode;
+  state: PreviewJobState;
+  timelineHash: string;
+  progress?: number;
+  url?: string;
+  error?: string;
+  updatedAt: number;
+};
+
+const previewJobs = new Map<string, PreviewJobStatus>();
+const previewJobPromises = new Map<string, Promise<void>>();
+
+function makePreviewJobKey(args: {
+  projectId: string;
+  timelineHash: string;
+  mode: PreviewJobMode;
+  playheadTime?: number;
+  windowSeconds?: number;
+}): string {
+  if (args.mode === 'hls') return `hls:${args.projectId}:${args.timelineHash}`;
+  const playhead = Number.isFinite(args.playheadTime) ? Number(args.playheadTime) : 0;
+  const window = Number.isFinite(args.windowSeconds) ? Number(args.windowSeconds) : 3;
+  return `segment:${args.projectId}:${args.timelineHash}:${playhead.toFixed(3)}:${window.toFixed(3)}`;
+}
+
+function getExistingPreviewJob(args: {
+  projectId: string;
+  timelineHash: string;
+  mode: PreviewJobMode;
+  playheadTime?: number;
+  windowSeconds?: number;
+}): PreviewJobStatus | undefined {
+  return previewJobs.get(makePreviewJobKey(args));
+}
+
+function setPreviewJob(args: {
+  projectId: string;
+  timelineHash: string;
+  mode: PreviewJobMode;
+  playheadTime?: number;
+  windowSeconds?: number;
+  status: Omit<PreviewJobStatus, 'updatedAt'>;
+}): void {
+  const key = makePreviewJobKey(args);
+  previewJobs.set(key, {
+    ...args.status,
+    updatedAt: Date.now(),
+  });
+}
 
 /**
  * Create a new project
@@ -1078,6 +1148,7 @@ export async function deleteProjectImage(ctx: HttpContext): Promise<HandlerResul
  * POST /api/project/:id/preview
  */
 export async function generateProjectPreview(ctx: HttpContext): Promise<HandlerResult> {
+  const startedAt = Date.now();
   try {
     const projectId = ctx.params?.id;
 
@@ -1117,29 +1188,257 @@ export async function generateProjectPreview(ctx: HttpContext): Promise<HandlerR
       typeof body?.playheadTime === 'number' && Number.isFinite(body.playheadTime)
         ? body.playheadTime
         : undefined;
+    const mode = playheadTime !== undefined ? 'segment' : 'timeline';
+    const { timelineHash, shortVersion } = getPreviewVersion(project);
+    logPreviewTelemetry('generate_preview_start', {
+      projectId,
+      mode,
+      playheadTime,
+      timelineHash,
+    });
 
     // If client provides a playheadTime, generate a short segment preview starting there.
     // Otherwise, fall back to the full-length timeline-aware preview.
     const result = playheadTime !== undefined
-      ? await generateTimelineSegmentPreview(project, playheadTime, 3)
-      : await generateTimelinePreview(project);
+      ? await generateTimelineSegmentPreview(project, playheadTime, 3, undefined, { versionTag: shortVersion })
+      : await generateTimelinePreview(project, undefined, { versionTag: shortVersion });
 
     if (!result.success) {
+      logPreviewTelemetry('generate_preview_error', {
+        projectId,
+        mode,
+        timelineHash,
+        duration_ms: Date.now() - startedAt,
+        error: result.error || 'Failed to generate preview',
+      });
       return jsonResponse(500, {
         success: false,
         error: result.error || 'Failed to generate preview',
       });
     }
 
+    logPreviewTelemetry('generate_preview_success', {
+      projectId,
+      mode,
+      timelineHash,
+      duration_ms: Date.now() - startedAt,
+      outputPath: result.outputPath,
+    });
+
     return jsonResponse(200, {
       success: true,
       previewPath: result.outputPath,
+      version: shortVersion,
+      timelineHash,
       message: 'Preview generated successfully',
+    });
+  } catch (error) {
+    logPreviewTelemetry('generate_preview_exception', {
+      projectId: ctx.params?.id,
+      duration_ms: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to generate preview',
+    });
+  }
+}
+
+/**
+ * Queue generation of a timeline segment preview.
+ * POST /api/project/:id/preview/segment
+ */
+export async function generateProjectPreviewSegment(ctx: HttpContext): Promise<HandlerResult> {
+  const startedAt = Date.now();
+  try {
+    const projectId = ctx.params?.id;
+    if (!projectId) return jsonResponse(400, { success: false, error: 'Project ID is required' });
+
+    const project = await projectService.getProject(projectId);
+    if (!project) return jsonResponse(404, { success: false, error: 'Project not found' });
+    if (!project.template?.path) return jsonResponse(400, { success: false, error: 'Project has no template assigned' });
+    if (!project.audioSessionId || project.audioSessionId === 'no-session') {
+      return jsonResponse(400, { success: false, error: 'Project has no audio session assigned' });
+    }
+
+    const body = (ctx.body as any) || {};
+    const playheadTimeRaw = Number(body?.playheadTime);
+    if (!Number.isFinite(playheadTimeRaw)) {
+      return jsonResponse(400, { success: false, error: 'playheadTime (number) is required' });
+    }
+    const playheadTime = Math.max(0, playheadTimeRaw);
+    const windowSecondsRaw = Number(body?.windowSeconds);
+    const windowSeconds = Number.isFinite(windowSecondsRaw) && windowSecondsRaw > 0 ? windowSecondsRaw : 3;
+
+    const { timelineHash, shortVersion } = getPreviewVersion(project);
+    const outputPath = buildSegmentPreviewOutputPath(projectId, playheadTime, windowSeconds, shortVersion);
+    const url = `/api/project/${projectId}/preview?mode=segment&version=${encodeURIComponent(shortVersion)}&playheadTime=${encodeURIComponent(String(playheadTime))}&windowSeconds=${encodeURIComponent(String(windowSeconds))}`;
+
+    if (fs.existsSync(outputPath)) {
+      setPreviewJob({
+        projectId,
+        timelineHash,
+        mode: 'segment',
+        playheadTime,
+        windowSeconds,
+        status: { mode: 'segment', state: 'ready', timelineHash, progress: 100, url },
+      });
+      return jsonResponse(200, {
+        success: true,
+        mode: 'segment',
+        state: 'ready',
+        timelineHash,
+        version: shortVersion,
+        url,
+      });
+    }
+
+    const jobKey = makePreviewJobKey({ projectId, timelineHash, mode: 'segment', playheadTime, windowSeconds });
+    const running = previewJobPromises.get(jobKey);
+    if (!running) {
+      setPreviewJob({
+        projectId,
+        timelineHash,
+        mode: 'segment',
+        playheadTime,
+        windowSeconds,
+        status: { mode: 'segment', state: 'queued', timelineHash, progress: 5 },
+      });
+
+      const task = (async () => {
+        try {
+          setPreviewJob({
+            projectId,
+            timelineHash,
+            mode: 'segment',
+            playheadTime,
+            windowSeconds,
+            status: { mode: 'segment', state: 'rendering', timelineHash, progress: 25 },
+          });
+          const result = await generateTimelineSegmentPreview(
+            project,
+            playheadTime,
+            windowSeconds,
+            undefined,
+            { versionTag: shortVersion }
+          );
+          if (!result.success) {
+            setPreviewJob({
+              projectId,
+              timelineHash,
+              mode: 'segment',
+              playheadTime,
+              windowSeconds,
+              status: {
+                mode: 'segment',
+                state: 'error',
+                timelineHash,
+                progress: 100,
+                error: result.error || 'Failed to generate segment preview',
+              },
+            });
+            return;
+          }
+          setPreviewJob({
+            projectId,
+            timelineHash,
+            mode: 'segment',
+            playheadTime,
+            windowSeconds,
+            status: { mode: 'segment', state: 'ready', timelineHash, progress: 100, url },
+          });
+        } finally {
+          previewJobPromises.delete(jobKey);
+        }
+      })();
+      previewJobPromises.set(jobKey, task);
+    }
+
+    const current = getExistingPreviewJob({ projectId, timelineHash, mode: 'segment', playheadTime, windowSeconds });
+    logPreviewTelemetry('generate_segment_preview_queued', {
+      projectId,
+      timelineHash,
+      playheadTime,
+      windowSeconds,
+      duration_ms: Date.now() - startedAt,
+    });
+    return jsonResponse(202, {
+      success: true,
+      mode: 'segment',
+      state: current?.state ?? 'queued',
+      timelineHash,
+      version: shortVersion,
     });
   } catch (error) {
     return jsonResponse(500, {
       success: false,
-      error: error instanceof Error ? error.message : 'Failed to generate preview',
+      error: error instanceof Error ? error.message : 'Failed to queue segment preview',
+    });
+  }
+}
+
+/**
+ * Get status of a segment preview job.
+ * GET /api/project/:id/preview/segment/status
+ */
+export async function getProjectPreviewSegmentStatus(ctx: HttpContext): Promise<HandlerResult> {
+  try {
+    const projectId = ctx.params?.id;
+    if (!projectId) return jsonResponse(400, { success: false, error: 'Project ID is required' });
+
+    const project = await projectService.getProject(projectId);
+    if (!project) return jsonResponse(404, { success: false, error: 'Project not found' });
+
+    const { timelineHash, shortVersion } = getPreviewVersion(project);
+    const query = (ctx.query ?? {}) as Record<string, string | undefined>;
+    const playheadTime = Number(query.playheadTime);
+    const windowSecondsRaw = Number(query.windowSeconds);
+    const windowSeconds = Number.isFinite(windowSecondsRaw) && windowSecondsRaw > 0 ? windowSecondsRaw : 3;
+
+    if (!Number.isFinite(playheadTime)) {
+      return jsonResponse(400, { success: false, error: 'playheadTime query param is required' });
+    }
+
+    const url = `/api/project/${projectId}/preview?mode=segment&version=${encodeURIComponent(shortVersion)}&playheadTime=${encodeURIComponent(String(playheadTime))}&windowSeconds=${encodeURIComponent(String(windowSeconds))}`;
+    const outputPath = buildSegmentPreviewOutputPath(projectId, playheadTime, windowSeconds, shortVersion);
+    if (fs.existsSync(outputPath)) {
+      return jsonResponse(200, {
+        success: true,
+        mode: 'segment',
+        state: 'ready',
+        timelineHash,
+        version: shortVersion,
+        progress: 100,
+        url,
+      });
+    }
+
+    const current = getExistingPreviewJob({ projectId, timelineHash, mode: 'segment', playheadTime, windowSeconds });
+    if (current) {
+      return jsonResponse(200, {
+        success: true,
+        mode: 'segment',
+        state: current.state,
+        timelineHash,
+        version: shortVersion,
+        progress: current.progress,
+        url: current.url,
+        error: current.error,
+      });
+    }
+
+    return jsonResponse(200, {
+      success: true,
+      mode: 'segment',
+      state: 'idle',
+      timelineHash,
+      version: shortVersion,
+    });
+  } catch (error) {
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to check segment preview status',
     });
   }
 }
@@ -1149,6 +1448,7 @@ export async function generateProjectPreview(ctx: HttpContext): Promise<HandlerR
  * POST /api/project/:id/preview/hls
  */
 export async function generateProjectPreviewHls(ctx: HttpContext): Promise<HandlerResult> {
+  const startedAt = Date.now();
   try {
     const projectId = ctx.params?.id;
 
@@ -1182,42 +1482,102 @@ export async function generateProjectPreviewHls(ctx: HttpContext): Promise<Handl
       });
     }
 
-    // Use updatedAt as a stable-ish version identifier for the current timeline.
-    const rawVersion = project.updatedAt || new Date().toISOString();
-    const safeVersion = rawVersion.replace(/[^a-zA-Z0-9_-]/g, '_');
+    // Version preview assets by timeline hash so unchanged timelines are identifiable.
+    const { timelineHash, shortVersion } = getPreviewVersion(project);
+    const safeVersion = shortVersion;
 
-    console.info('[HLS Preview] requested (no cache)', { projectId, version: safeVersion });
+    console.info('[HLS Preview] requested', { projectId, version: safeVersion });
+    logPreviewTelemetry('generate_hls_preview_start', { projectId, version: safeVersion, timelineHash });
 
-    // Disable HLS preview cache by deleting any existing playlist/segments
-    // for this version before regenerating.
-    const hlsDir = path.join(process.cwd(), 'storage', 'previews', 'hls', projectId, safeVersion);
-    if (fs.existsSync(hlsDir)) {
-      try {
-        fs.rmSync(hlsDir, { recursive: true, force: true });
-      } catch (rmErr) {
-        console.warn('[HLS Preview] failed to clear cache dir', { hlsDir, error: rmErr });
-      }
-    }
-    const result = await generateTimelinePreviewHls(project, safeVersion);
-
-    if (!result.success || !result.playlistPath) {
-      return jsonResponse(500, {
-        success: false,
-        error: result.error || 'Failed to generate HLS preview',
+    const playlistUrl = `/api/project/${projectId}/preview/hls/${encodeURIComponent(safeVersion)}/index.m3u8`;
+    const manifestPath = path.join(process.cwd(), 'storage', 'previews', 'hls', projectId, safeVersion, 'index.m3u8');
+    if (fs.existsSync(manifestPath)) {
+      setPreviewJob({
+        projectId,
+        timelineHash,
+        mode: 'hls',
+        status: { mode: 'hls', state: 'ready', timelineHash, progress: 100, url: playlistUrl },
+      });
+      return jsonResponse(200, {
+        success: true,
+        mode: 'hls',
+        state: 'ready',
+        version: safeVersion,
+        timelineHash,
+        playlistUrl,
+        message: 'HLS preview ready',
       });
     }
 
-    // Return absolute URL for the playlist (frontend will prepend API_BASE_URL if needed)
-    // The playlist itself contains absolute segment URLs after post-processing.
-    const playlistUrl = `/api/project/${projectId}/preview/hls/${encodeURIComponent(safeVersion)}/index.m3u8`;
+    const jobKey = makePreviewJobKey({ projectId, timelineHash, mode: 'hls' });
+    const running = previewJobPromises.get(jobKey);
+    if (!running) {
+      setPreviewJob({
+        projectId,
+        timelineHash,
+        mode: 'hls',
+        status: { mode: 'hls', state: 'queued', timelineHash, progress: 5 },
+      });
+      const task = (async () => {
+        try {
+          setPreviewJob({
+            projectId,
+            timelineHash,
+            mode: 'hls',
+            status: { mode: 'hls', state: 'rendering', timelineHash, progress: 25 },
+          });
+          const result = await generateTimelinePreviewHls(project, safeVersion);
+          if (!result.success || !result.playlistPath) {
+            setPreviewJob({
+              projectId,
+              timelineHash,
+              mode: 'hls',
+              status: {
+                mode: 'hls',
+                state: 'error',
+                timelineHash,
+                progress: 100,
+                error: result.error || 'Failed to generate HLS preview',
+              },
+            });
+            return;
+          }
+          setPreviewJob({
+            projectId,
+            timelineHash,
+            mode: 'hls',
+            status: { mode: 'hls', state: 'ready', timelineHash, progress: 100, url: playlistUrl },
+          });
+          logPreviewTelemetry('generate_hls_preview_success', {
+            projectId,
+            version: safeVersion,
+            timelineHash,
+            duration_ms: Date.now() - startedAt,
+            playlistPath: result.playlistPath,
+          });
+        } finally {
+          previewJobPromises.delete(jobKey);
+        }
+      })();
+      previewJobPromises.set(jobKey, task);
+    }
 
-    return jsonResponse(200, {
+    const current = getExistingPreviewJob({ projectId, timelineHash, mode: 'hls' });
+    return jsonResponse(202, {
       success: true,
+      mode: 'hls',
+      state: current?.state ?? 'queued',
       version: safeVersion,
-      playlistUrl,
-      message: 'HLS preview ready',
+      timelineHash,
+      playlistUrl: current?.state === 'ready' ? playlistUrl : undefined,
+      message: 'HLS preview queued',
     });
   } catch (error) {
+    logPreviewTelemetry('generate_hls_preview_exception', {
+      projectId: ctx.params?.id,
+      duration_ms: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
     console.error('[HLS Preview] controller error', {
       message: error instanceof Error ? error.message : error,
       stack: error instanceof Error ? error.stack : undefined,
@@ -1234,6 +1594,7 @@ export async function generateProjectPreviewHls(ctx: HttpContext): Promise<Handl
  * GET /api/project/:id/preview/hls/status
  */
 export async function getProjectPreviewHlsStatus(ctx: HttpContext): Promise<HandlerResult> {
+  const startedAt = Date.now();
   try {
     const projectId = ctx.params?.id;
 
@@ -1253,29 +1614,50 @@ export async function getProjectPreviewHlsStatus(ctx: HttpContext): Promise<Hand
       });
     }
 
-    // Use updatedAt as version identifier
-    const rawVersion = project.updatedAt || new Date().toISOString();
-    const safeVersion = rawVersion.replace(/[^a-zA-Z0-9_-]/g, '_');
+    // Version identifier derived from current timeline hash.
+    const { timelineHash, shortVersion } = getPreviewVersion(project);
+    const safeVersion = shortVersion;
 
+    const playlistUrl = `/api/project/${projectId}/preview/hls/${encodeURIComponent(safeVersion)}/index.m3u8`;
     const manifestPath = path.join(process.cwd(), 'storage', 'previews', 'hls', projectId, safeVersion, 'index.m3u8');
-    const isReady = fs.existsSync(manifestPath);
+    if (fs.existsSync(manifestPath)) {
+      setPreviewJob({
+        projectId,
+        timelineHash,
+        mode: 'hls',
+        status: { mode: 'hls', state: 'ready', timelineHash, progress: 100, url: playlistUrl },
+      });
+    }
 
-    if (isReady) {
-      const playlistUrl = `/api/project/${projectId}/preview/hls/${encodeURIComponent(safeVersion)}/index.m3u8`;
-      return jsonResponse(200, {
-        success: true,
-        ready: true,
+    const current = getExistingPreviewJob({ projectId, timelineHash, mode: 'hls' });
+    const state: PreviewJobState = current?.state ?? (fs.existsSync(manifestPath) ? 'ready' : 'idle');
+    const ready = state === 'ready';
+    if (ready) {
+      logPreviewTelemetry('hls_status_ready', {
+        projectId,
         version: safeVersion,
-        playlistUrl,
+        timelineHash,
+        duration_ms: Date.now() - startedAt,
       });
     }
 
     return jsonResponse(200, {
       success: true,
-      ready: false,
+      mode: 'hls',
+      state,
+      ready, // backward compatibility for existing frontend polling
       version: safeVersion,
+      timelineHash,
+      progress: current?.progress,
+      playlistUrl: ready ? playlistUrl : undefined,
+      error: current?.error,
     });
   } catch (error) {
+    logPreviewTelemetry('hls_status_exception', {
+      projectId: ctx.params?.id,
+      duration_ms: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to check HLS status',
@@ -1405,9 +1787,26 @@ export async function serveProjectPreview(ctx: HttpContext): Promise<HandlerResu
       });
     }
 
-    const previewPath = path.join(process.cwd(), 'storage', 'previews', `preview_${projectId}.mp4`);
+    const query = (ctx.query ?? {}) as Record<string, string | undefined>;
+    const { shortVersion } = getPreviewVersion(project);
+    const requestedVersion = typeof query.version === 'string' && query.version.trim() ? query.version.trim() : shortVersion;
+    const requestedMode = query.mode === 'segment' ? 'segment' : 'timeline';
+    const playheadTime = query.playheadTime !== undefined ? Number(query.playheadTime) : NaN;
+    const windowSeconds = query.windowSeconds !== undefined ? Number(query.windowSeconds) : 3;
 
-    if (!fs.existsSync(previewPath)) {
+    const candidatePaths: string[] = [];
+    if (requestedMode === 'segment' && Number.isFinite(playheadTime)) {
+      candidatePaths.push(
+        buildSegmentPreviewOutputPath(projectId, playheadTime, Number.isFinite(windowSeconds) ? windowSeconds : 3, requestedVersion)
+      );
+    }
+    candidatePaths.push(buildTimelinePreviewOutputPath(projectId, requestedVersion));
+    // Legacy fallback path while frontend still uses plain /preview URL.
+    candidatePaths.push(path.join(process.cwd(), 'storage', 'previews', `preview_${projectId}.mp4`));
+
+    const previewPath = candidatePaths.find((p) => fs.existsSync(p));
+
+    if (!previewPath) {
       return jsonResponse(404, {
         success: false,
         error: 'Preview not found. Generate it first using POST /api/project/:id/preview',

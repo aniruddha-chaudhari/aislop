@@ -96,6 +96,8 @@ register([
   { method: 'DELETE', pattern: '/api/project/:id/animation-plan', handler: project.deleteAnimationPlanForProject },
   { method: 'POST', pattern: '/api/project/:id/sfx-plan', handler: project.generateSfxPlanForProject },
   { method: 'POST', pattern: '/api/project/:id/preview', handler: project.generateProjectPreview },
+  { method: 'POST', pattern: '/api/project/:id/preview/segment', handler: project.generateProjectPreviewSegment },
+  { method: 'GET', pattern: '/api/project/:id/preview/segment/status', handler: project.getProjectPreviewSegmentStatus },
   { method: 'GET', pattern: '/api/project/:id/preview', handler: project.serveProjectPreview },
   { method: 'POST', pattern: '/api/project/:id/preview/hls', handler: project.generateProjectPreviewHls },
   { method: 'GET', pattern: '/api/project/:id/preview/hls/status', handler: project.getProjectPreviewHlsStatus },

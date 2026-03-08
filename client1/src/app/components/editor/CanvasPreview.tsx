@@ -28,6 +28,8 @@ type Props = {
   /** Optional: Preview video source (FFmpeg composite) to use instead of template */
   previewVideoSrc?: string | null;
   isGeneratingPreview?: boolean;
+  /** Telemetry hook: fired once when first frame is observed after playback starts. */
+  onFirstFrame?: () => void;
 };
 
 export default function CanvasPreview({
@@ -45,6 +47,7 @@ export default function CanvasPreview({
   onPreviewReady,
   previewVideoSrc,
   isGeneratingPreview = false,
+  onFirstFrame,
 }: Props) {
   const playerRef = useRef<HTMLVideoElement | null>(null);
   const playerWrapperRef = useRef<HTMLDivElement | null>(null);
@@ -108,11 +111,19 @@ export default function CanvasPreview({
   const isSyncingFromTimelineRef = useRef(false);
   const lastIntendedPlayheadRef = useRef(0);
   const isBufferingToSeekRef = useRef(false);
+  const firstFrameReportedRef = useRef(false);
 
   useEffect(() => {
     videoReadyRef.current = false;
     setMutedForPolicy(true);
+    firstFrameReportedRef.current = false;
   }, [videoSrc]);
+
+  useEffect(() => {
+    if (!isPlaying) {
+      firstFrameReportedRef.current = false;
+    }
+  }, [isPlaying]);
 
   // Attach HLS.js when previewVideoSrc is an HLS playlist.
   useEffect(() => {
@@ -390,13 +401,23 @@ export default function CanvasPreview({
                   if (isSeekingRef.current || isSyncingFromTimelineRef.current || isBufferingToSeekRef.current) return;
                   const video = getVideoElement();
                   if (!video || !Number.isFinite(video.currentTime)) return;
+                  if (isPlaying && !firstFrameReportedRef.current) {
+                    firstFrameReportedRef.current = true;
+                    onFirstFrame?.();
+                  }
                   lastSeekedRef.current = video.currentTime;
                   // Only sync video → timeline when playing. When paused, timeline is source of truth.
                   if (isPlaying) onPlayheadChange(video.currentTime);
                 }}
                 onPlay={() => setMutedForPolicy(false)}
                 onEnded={() => {
-                  if (isPlaying) onPlayPause();
+                  if (!isPlaying) return;
+                  const video = getVideoElement();
+                  if (!video) return;
+                  // Guard against spurious ended events during source swaps / initial buffering.
+                  if (!Number.isFinite(video.duration) || video.duration < 0.5) return;
+                  if (video.currentTime < video.duration - 0.05) return;
+                  onPlayPause();
                 }}
                 onError={() => {}}
               />
