@@ -14,7 +14,7 @@ import {
   generateRemotionClipCodeWithSkill,
   inspectOpenCodeEnvironment,
   parseOpenCodeJSON,
-} from '../agents/gemini3agent';
+} from '../agents/opencodeagent';
 
 const REMOTION_ROOT_DIR = path.join(process.cwd(), 'storage', 'remotion-animation');
 const RENDERED_ANIMATIONS_ROOT_DIR = path.join(process.cwd(), 'storage', 'rendered-animations');

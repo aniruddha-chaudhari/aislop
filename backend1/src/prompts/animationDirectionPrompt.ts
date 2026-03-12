@@ -43,12 +43,6 @@ The Remotion renderer does NOT read narratorText. It reads displayText only.
 NEVER render narratorText on screen. Not at the bottom. Not anywhere. Not ever.
 displayText is what appears. It is 1-4 words. It is BIG. That is the entire visual text contract.
 
-THE "subtitle" FIELD FROM THE TIMELINE PLAN IS ALSO CONTEXT ONLY.
-Each moment in TIMELINE_PLAN_JSON includes a subtitle (the full dialogue line).
-Treat subtitle exactly like narratorText: it exists for semantic and timing context ONLY.
-Do NOT design or describe any visual element that directly renders subtitle as text or captions.
-If you need on-screen text, derive a short 1–4 word displayText instead.
-
 THE BOTTOM CAPTION STRIP IS BANNED.
 Do not create a translucent card at the bottom of the frame showing the full narration sentence.
 This pattern treats the screen like closed captions. It is unreadable at phone size.
@@ -107,7 +101,7 @@ STEP 1 — COLOR SYSTEM (2025-2026 NATIVE)
 Each moment gets its own color palette invented from scratch.
 No topic heuristics. No warm/cool bias. No direction from this prompt on what to pick.
 
-Read each moment's subtitle (context-only dialogue line) and content. Ask: what does this sentence feel like?
+Read each moment's subtitle and content. Ask: what does this sentence feel like?
 Use the catalogue below as a reference pool — pick freely from it, or invent your
 own hex values entirely. The dialogue content is your only guide.
 Different moments should naturally diverge — let them.
@@ -177,7 +171,7 @@ REFERENCE PALETTE CATALOGUE (pick from or riff off freely):
 STEP 2 — VISUAL AESTHETIC SYSTEM
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Choose ONE aesthetic system per moment. It defines the visual language of that clip.
-Pick whichever fits the dialogue content (subtitle/narratorText) and emotional register — but do not turn that full sentence into any on-screen text.
+Pick whichever fits the subtitle's content and emotional register.
 
 ┌──────────────────┬──────────────────────────────────────────────────────────┐
 │ "deep-glow"      │ Dark bg. Intense radial light bloom (not a glow shadow — │
@@ -331,6 +325,30 @@ Simultaneously: a radial-gradient div behind the word animates from radius 0→4
 (via background-size or scale on a positioned div). opacity 0→0.55→0.35 (settles).
 No physical motion on the word itself — pure color + light change.
 → Best for: deep-glow aesthetic, single key term emphasis, any dark-bg palette.
+
+T12. WORD MORPH SWAP (SHRINK → TRANSFORM → LAND)
+Two words occupy the same position sequentially. Word A is already on screen.
+  Frames 0-6: Word A scaleX 1.0→0, simultaneously filter blur(0→8px). Disappears into itself.
+  Frame 6: Word B replaces Word A in the DOM (same position, same anchor point).
+  Frames 6-14: Word B scaleX 0→1.12→1.0 via spring({stiffness:400,damping:18}),
+               filter blur(8px→0px) ease-out. Motion blur effect: add translateX ±20px→0
+               simultaneously (direction matches reading direction — left to right).
+  Frame 14+: Word B settles and breathes.
+The swap reads as one word physically transforming into another — not a cut.
+→ Best for: "X becomes Y", contrasts, reveals, kinetic-max aesthetic.
+→ Avoid: more than 2 swaps per moment. Words must be similar length for effect to read.
+
+T13. SLOT MACHINE NUMBER (OUTLINE SCROLL + SOLID ANCHOR)
+Hero number div: solid fill, text-color, fontWeight 900, perfectly centered. STATIC — never moves.
+Above and below: 2-3 clones of same number, rendered as text-stroke only (webkit-text-stroke: 2px,
+fill transparent). These clones are stacked with translateY offsets (+lineHeight, +2*lineHeight, etc).
+Animation: all outline clones translateY interpolates continuously upward (or downward) at constant
+velocity — like a film strip or slot machine rolling. Loop seamlessly via modulo on frame count.
+Velocity: approximately 0.8-1.2 lineHeight per second. Clones opacity: 0.2-0.35.
+The solid center number never moves. The outlines scroll through it. Creates depth and energy
+without the center stat ever becoming unreadable.
+→ Best for: large hero statistics, data-editorial and deep-glow aesthetics, any big number moment.
+→ Implementation: parent div overflow:hidden, height = 1 lineHeight, clones positioned absolute.
 
 ════════════════════════════
 GRAPHIC / SHAPE TECHNIQUES
@@ -511,6 +529,31 @@ Root bg div backgroundColor transitions across moment boundary:
   Current moment final 8 frames: bg-color → intermediate warm tone (linear).
   Next moment first 8 frames: intermediate → next moment's bg-color (ease-out).
 NOT a flash — a gradual warm shift. Signals emotional/narrative transition.
+
+I6. HARD CUT COLOR BLOCK (INSTANT SCENE RESET)
+Root bg div: backgroundColor changes in exactly 1 frame — no interpolation, no transition.
+The new bg color is saturated and flat (no gradient). All previous content is gone.
+New moment's content enters immediately on frame 1 of the new bg via spring-snappy.
+Distinct from G9 (which flashes and returns) — this is a permanent scene change.
+The abruptness is the point: it signals a new idea with physical emphasis.
+Accent must be warm and high-contrast. Never use this with a dark→dark color swap —
+the cut only reads if the colors are meaningfully different (dark→light or light→dark).
+→ Best for: transitions between emotionally distinct moments, neo-brutalist aesthetic.
+→ Use maximum twice per video. Every use must feel earned, not arbitrary.
+
+I7. POP-LAND-SLIDE-OUT (SEQUENTIAL SPACE SHARING)
+Two elements share the same screen position sequentially, without cutting the scene.
+Element A:
+  Frames 0-10: scale 0→1.1→1.0 spring-bouncy (pops in).
+  Frames 10-28: holds static (the "pause" — let viewer read it).
+  Frames 28-36: translateY 0→+80px ease-in-expo simultaneously opacity 1→0 (slides out down).
+Element B (enters immediately after A exits):
+  Frames 36-46: translateY -80px→0 spring-snappy, opacity 0→1 (slides in from above).
+  Frames 46+: holds static with breathe.
+The motion direction (A exits down, B enters from above) creates a continuous downward
+"reveal" feel — like a ticker or scoreboard flipping. Can reverse direction (A up, B from below).
+→ Best for: "X → then Y", stat comparisons, "before/after" in a single moment, 6s+ clips only.
+→ Pairs with: T8 stat counter on Element B for maximum impact.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 4 — EASING PHYSICS REFERENCE

@@ -6,7 +6,7 @@ import * as path from 'path';
 const ffmpeg = require('fluent-ffmpeg');
 
 // OpenCode imports for agentic image plan generation with web research
-import { opencodeRun, parseOpenCodeJSON, OPENCODE_MODELS } from "../agents/gemini3agent";
+import { opencodeRun, parseOpenCodeJSON, OPENCODE_MODELS } from "../agents/opencodeagent";
 
 // 🎯 USAGE EXAMPLES AND HELPERS
 export class ImageEmbedderExamples {

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import type { OverlayClip, SubtitleClip, Track } from '../schema/project';
-import { generateSFXPlanWithResearch, parseOpenCodeJSON } from '../agents/gemini3agent';
+import { generateSFXPlanWithResearch, parseOpenCodeJSON } from '../agents/opencodeagent';
 
 type SfxAsset = {
   filename: string;

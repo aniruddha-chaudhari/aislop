@@ -18,12 +18,12 @@ const OPENCODE_HEARTBEAT_INTERVAL_MS = parsePositiveMs(process.env.OPENCODE_HEAR
 let CACHED_OPENCODE_COMMAND: string | null = null;
 
 export const OPENCODE_MODELS = {
-  flash: 'google/antigravity-gemini-3-flash',
-  // Default model for OpenCode-based runs.
-  // "pro" is used as the fallback when no explicit model is provided.
+  default: 'github-copilot/grok-code-fast-1',
   pro: 'github-copilot/claude-sonnet-4.6',
   minimax: 'opencode/minimax-m2.5-free',
 } as const;
+
+const OPENCODE_DEFAULT_MODEL: keyof typeof OPENCODE_MODELS = 'default';
 
 export interface OpenCodeRunOptions {
   prompt: string;
@@ -546,10 +546,11 @@ export async function opencodeRun(options: OpenCodeRunOptions): Promise<string> 
     throw new Error('OpenCode prompt is empty.');
   }
 
+  const modelKeyOrId = options.model ?? OPENCODE_DEFAULT_MODEL;
   const resolvedModel =
-    options.model && OPENCODE_MODELS[options.model as keyof typeof OPENCODE_MODELS]
-      ? OPENCODE_MODELS[options.model as keyof typeof OPENCODE_MODELS]
-      : options.model;
+    modelKeyOrId && OPENCODE_MODELS[modelKeyOrId as keyof typeof OPENCODE_MODELS]
+      ? OPENCODE_MODELS[modelKeyOrId as keyof typeof OPENCODE_MODELS]
+      : modelKeyOrId;
   const opencodeCommand = resolveOpenCodeCommand();
 
   const cwd = options.cwd || process.cwd();
