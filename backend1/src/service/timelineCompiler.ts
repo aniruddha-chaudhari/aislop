@@ -4,6 +4,11 @@ import { Project, Timeline, Track, SubtitleClip, OverlayClip, CharacterClip, Mus
 import { publishFileUpdate } from './eventEmitter';
 import { getCharacterImagePath } from '../utils/characterImages';
 import { enrichSubtitleClipsWithWords } from './previewGenerator';
+import {
+  fixSubtitleClipsTimelineNonOverlap,
+  clampAssEventToClip,
+  getSubtitleWordText,
+} from './subtitleClipNormalize';
 import { getSessionDuration } from './sessionDuration';
 import { computeOverlayPlacement } from './overlayTransform';
 
@@ -18,6 +23,13 @@ if (ffmpegPath) {
 const VIDEO_OUTPUT_DIR = path.join(process.cwd(), 'storage', 'videos');
 const TEMP_DIR = path.join(process.cwd(), 'storage', 'temp');
 const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
+const AUDIO_TAIL_BUFFER_SEC = 1.2;
+
+/**
+ * Gap between karaoke tokens. Plain spaces can collapse next to {\\c...} in libass/ffmpeg.
+ * En space (U+2002) is narrower than em space but still a stable separator.
+ */
+const ASS_INTER_WORD_GAP = '\u2002';
 
 function resolveTemplatePath(templatePath: string): string {
   if (path.isAbsolute(templatePath) && fs.existsSync(templatePath)) return templatePath;
@@ -76,7 +88,7 @@ function addOverlayInput(
 type TimeRange = { start: number; end: number };
 
 function isReplaceOverlayClip(clip: OverlayClip): boolean {
-  return clip.displayMode === 'replace';
+  return clip.displayMode === 'replace' && clip.planStatus !== 'draft';
 }
 
 function buildReplaceOverlayRanges(clips: OverlayClip[]): TimeRange[] {
@@ -245,7 +257,12 @@ export async function compileTimeline(
     let nextInputIndex = 1; // 0 = template
     const dialogueInputIndex = audioPath ? nextInputIndex : null;
     if (audioPath) {
-      command.input(audioPath).inputOptions(['-t', duration.toString()]);
+      const actualAudioDuration = await probeMediaDurationSeconds(audioPath);
+      if (actualAudioDuration > 0) {
+        duration = Math.max(duration, actualAudioDuration + AUDIO_TAIL_BUFFER_SEC);
+      }
+      // Do not trim dialogue input at input level; keep full tail and trim only at output level.
+      command.input(audioPath);
       nextInputIndex++;
     }
 
@@ -283,6 +300,7 @@ export async function compileTimeline(
     const overlayInputs: { clip: OverlayClip; inputIndex: number; overlayPath: string }[] = [];
     if (exportStep >= 3) {
       overlayClips.forEach((clip) => {
+        if (clip.planStatus === 'draft') return;
         const overlayPath = clip.path ?? path.join(IMAGE_UPLOAD_DIR, project.audioSessionId, `${clip.assetId}.png`);
         if (fs.existsSync(overlayPath)) {
           addOverlayInput(command, overlayPath, clip, duration);
@@ -581,6 +599,7 @@ async function generateKaraokeAssSubtitles(
   projectId: string
 ): Promise<string> {
   const outputPath = path.join(TEMP_DIR, `${projectId}_karaoke.ass`);
+  const clips = fixSubtitleClipsTimelineNonOverlap(subtitleClips);
 
   let assContent = `[Script Info]
 Title: Karaoke Subtitles
@@ -600,14 +619,14 @@ Style: Highlight,Arial-Black,48,&H0000FFFF,&H000000FF,&H00000000,&H80000000,1,0,
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
 
-  for (const clip of subtitleClips.sort((a, b) => a.start - b.start)) {
+  for (const clip of clips.sort((a, b) => a.start - b.start)) {
     const speaker = clip.speaker || (clip as { character?: string }).character || 'Speaker';
 
     if (clip.words && clip.words.length > 0) {
       const clipWords = clip.words ?? [];
       for (let i = 0; i < clipWords.length; i += 3) {
         const wordGroup = clipWords.slice(i, Math.min(i + 3, clipWords.length));
-        const fullText = wordGroup.map(w => (w as { word: string }).word || w).join(' ');
+        const fullText = wordGroup.map((w) => getSubtitleWordText(w)).join(' ');
         const isTooLong = fullText.length > 25;
 
         if (isTooLong && wordGroup.length > 2) {
@@ -615,49 +634,67 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
           const thirdWord = wordGroup[2];
 
           firstTwoWords.forEach((word, groupIndex) => {
-            const wordStart = clip.start + (word as { start: number }).start;
-            const wordEnd = groupIndex === firstTwoWords.length - 1
+            let wordStart = clip.start + (word as { start: number }).start;
+            let wordEnd = groupIndex === firstTwoWords.length - 1
               ? clip.start + (thirdWord as { start: number }).start
               : clip.start + (firstTwoWords[groupIndex + 1] as { start: number }).start;
+            ({ start: wordStart, end: wordEnd } = clampAssEventToClip(
+              wordStart,
+              wordEnd,
+              clip.start,
+              clip.duration
+            ));
             let subtitleText = '';
             firstTwoWords.forEach((groupWord, wordIdx) => {
-              const wordText = (groupWord as { word: string }).word || groupWord;
+              const wordText = getSubtitleWordText(groupWord);
               subtitleText += wordIdx === groupIndex ? `{\\c&H0000FFFF&}${wordText}{\\c&H00FFFFFF&}` : wordText;
-              if (wordIdx < firstTwoWords.length - 1) subtitleText += ' ';
+              if (wordIdx < firstTwoWords.length - 1) subtitleText += ASS_INTER_WORD_GAP;
             });
-            subtitleText += `\\N${(thirdWord as { word: string }).word || thirdWord}`;
+            subtitleText += `\\N${getSubtitleWordText(thirdWord)}`;
             assContent += `Dialogue: 0,${formatAssTime(wordStart)},${formatAssTime(wordEnd)},Normal,${speaker},0,0,0,,${subtitleText}\n`;
           });
 
-          const thirdWordStart = clip.start + (thirdWord as { start: number }).start;
-          const thirdWordEnd = i + 2 === clip.words.length - 1
+          let thirdWordStart = clip.start + (thirdWord as { start: number }).start;
+          let thirdWordEnd = i + 2 === clip.words.length - 1
             ? clip.start + (thirdWord as { end: number }).end
             : clip.words[i + 3] ? clip.start + (clip.words[i + 3] as { start: number }).start
             : clip.start + (thirdWord as { end: number }).end;
+          ({ start: thirdWordStart, end: thirdWordEnd } = clampAssEventToClip(
+            thirdWordStart,
+            thirdWordEnd,
+            clip.start,
+            clip.duration
+          ));
           let subtitleText = '';
           firstTwoWords.forEach((groupWord, wordIdx) => {
-            subtitleText += (groupWord as { word: string }).word || groupWord;
-            if (wordIdx < firstTwoWords.length - 1) subtitleText += ' ';
+            subtitleText += getSubtitleWordText(groupWord);
+            if (wordIdx < firstTwoWords.length - 1) subtitleText += ASS_INTER_WORD_GAP;
           });
-          subtitleText += `\\N{\\c&H0000FFFF&}${(thirdWord as { word: string }).word || thirdWord}{\\c&H00FFFFFF&}`;
+          subtitleText += `\\N{\\c&H0000FFFF&}${getSubtitleWordText(thirdWord)}{\\c&H00FFFFFF&}`;
           assContent += `Dialogue: 0,${formatAssTime(thirdWordStart)},${formatAssTime(thirdWordEnd)},Normal,${speaker},0,0,0,,${subtitleText}\n`;
           continue;
         }
 
         wordGroup.forEach((word, groupIndex) => {
-          const wordStart = clip.start + (word as { start: number }).start;
-          const wordEnd = groupIndex === wordGroup.length - 1
+          let wordStart = clip.start + (word as { start: number }).start;
+          let wordEnd = groupIndex === wordGroup.length - 1
             ? (i + groupIndex === clipWords.length - 1
               ? clip.start + (word as { end: number }).end
               : clipWords[i + groupIndex + 1]
                 ? clip.start + (clipWords[i + groupIndex + 1] as { start: number }).start
                 : clip.start + (word as { end: number }).end)
             : clip.start + (wordGroup[groupIndex + 1] as { start: number }).start;
+          ({ start: wordStart, end: wordEnd } = clampAssEventToClip(
+            wordStart,
+            wordEnd,
+            clip.start,
+            clip.duration
+          ));
           let subtitleText = '';
           wordGroup.forEach((groupWord, wordIdx) => {
-            const wordText = (groupWord as { word: string }).word || groupWord;
+            const wordText = getSubtitleWordText(groupWord);
             subtitleText += wordIdx === groupIndex ? `{\\c&H0000FFFF&}${wordText}{\\c&H00FFFFFF&}` : wordText;
-            if (wordIdx < wordGroup.length - 1) subtitleText += ' ';
+            if (wordIdx < wordGroup.length - 1) subtitleText += ASS_INTER_WORD_GAP;
           });
           assContent += `Dialogue: 0,${formatAssTime(wordStart)},${formatAssTime(wordEnd)},Normal,${speaker},0,0,0,,${subtitleText}\n`;
         });
@@ -679,6 +716,23 @@ function formatAssTime(seconds: number): string {
   const secs = Math.floor(seconds % 60);
   const centisecs = Math.floor((seconds % 1) * 100);
   return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${centisecs.toString().padStart(2, '0')}`;
+}
+
+function probeMediaDurationSeconds(filePath: string): Promise<number> {
+  return new Promise<number>((resolve) => {
+    if (!filePath || !fs.existsSync(filePath)) {
+      resolve(0);
+      return;
+    }
+    ffmpeg.ffprobe(filePath, (err: Error | null, metadata: any) => {
+      if (err) {
+        resolve(0);
+        return;
+      }
+      const d = Number(metadata?.format?.duration || 0);
+      resolve(Number.isFinite(d) && d > 0 ? d : 0);
+    });
+  });
 }
 
 async function getAudioPath(project: Project): Promise<string | null> {

@@ -3,6 +3,7 @@ import type { OverlayClip } from '../schema/project';
 const LEGACY_DEFAULT_X = 0.5;
 const LEGACY_DEFAULT_Y = 0.65;
 const LEGACY_DEFAULT_SCALE = 0.5;
+const MIN_OVERLAY_SCALE = 0.2;
 
 function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n));
@@ -22,7 +23,7 @@ export function computeOverlayPlacement(
   legacyTopY: number
 ): { width: number; height: number; x: number; y: number } {
   const rawScale = Number(clip.scale);
-  const safeScale = Number.isFinite(rawScale) ? Math.max(0.05, rawScale) : LEGACY_DEFAULT_SCALE;
+  const safeScale = Number.isFinite(rawScale) ? Math.max(MIN_OVERLAY_SCALE, rawScale) : LEGACY_DEFAULT_SCALE;
   const scaleFactor = safeScale / LEGACY_DEFAULT_SCALE;
 
   const width = Math.max(1, Math.round(baseWidth * scaleFactor));

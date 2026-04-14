@@ -89,6 +89,9 @@ register([
   { method: 'POST', pattern: '/api/project/:id/upload-image', handler: project.uploadImageForClip, multipart: 'single', multipartField: 'image' },
   { method: 'GET', pattern: '/api/project/:id', handler: project.getProject },
   { method: 'PUT', pattern: '/api/project/:id', handler: project.updateProject },
+  // Legacy compatibility: older clients still call broadcasts delete endpoint.
+  { method: 'POST', pattern: '/broadcasts/:id/delete', handler: project.deleteProject },
+  { method: 'POST', pattern: '/api/broadcasts/:id/delete', handler: project.deleteProject },
   { method: 'DELETE', pattern: '/api/project/:id', handler: project.deleteProject },
 
   // Streaming

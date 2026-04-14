@@ -58,6 +58,16 @@ export const OverlayClipSchema = z.object({
   // overlay = regular positioned overlay, replace = full-frame B-roll replacement
   displayMode: z.enum(['overlay', 'replace']).optional(),
   path: z.string().optional(),
+  planStatus: z.enum(['draft', 'approved']).optional(),
+  promptText: z.string().optional(),
+  promptEdited: z.boolean().optional(),
+  animationMomentId: z.string().optional(),
+  animationType: z.string().optional(),
+  animationContent: z.string().optional(),
+  animationSubtitle: z.string().optional(),
+  animationContextSummary: z.string().optional(),
+  fullDialogueContext: z.string().optional(),
+  researchContext: z.string().optional(),
 });
 
 export const CharacterClipSchema = z.object({

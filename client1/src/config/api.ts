@@ -42,6 +42,7 @@ export const API_ENDPOINTS = {
   streamFileUpdates: (sessionId: string) => `${API_BASE_URL}/api/stream/${sessionId}/files`,
   audioAssetsMusic: `${API_BASE_URL}/api/audio-assets/music`,
   audioAssetsSfx: `${API_BASE_URL}/api/audio-assets/sfx`,
+  referenceAudio: `${API_BASE_URL}/api/audio/reference-audio`,
 
   // Video endpoints
   generateVideo: `${API_BASE_URL}/api/video/generate`,
@@ -87,6 +88,7 @@ export const API_ENDPOINTS = {
   generateAiDraft: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/ai-draft`,
   generateImagePlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/image-plan`,
   generateAnimationPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/animation-plan`,
+  approveAnimationPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/animation-plan/approve`,
   deleteAnimationPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/animation-plan`,
   generateSfxPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/sfx-plan`,
   saveTimeline: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/timeline`,

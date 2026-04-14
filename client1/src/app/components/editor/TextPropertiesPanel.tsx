@@ -43,6 +43,11 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
   onProjectUpdate,
 }, ref) {
   const isTemplateClip = selectedRef?.trackId === TEMPLATE_TRACK_ID && selected?.kind === 'overlay';
+  const selectedOverlay = selected?.kind === 'overlay' ? (selected as OverlayClip) : null;
+  const isAnimationOverlayClip = Boolean(selectedOverlay?.animationMomentId);
+  const planStatus = selectedOverlay?.planStatus ?? 'draft';
+  const isDraftAnimationClip = isAnimationOverlayClip && planStatus === 'draft';
+  const isApprovedAnimationClip = isAnimationOverlayClip && planStatus === 'approved';
   const isTemplateVideo = project?.template?.type === 'video' && project?.template?.src;
   const showVideoStart = isTemplateClip && isTemplateVideo;
 
@@ -56,13 +61,38 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
   const [uploadingImage, setUploadingImage] = useState(false);
   const [removingImage, setRemovingImage] = useState(false);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [copiedField, setCopiedField] = useState<'prompt' | 'context' | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleCopy = async (field: 'prompt' | 'context', text: string) => {
+    const value = (text || '').trim();
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedField(field);
+      setTimeout(() => setCopiedField((current) => (current === field ? null : current)), 1200);
+    } catch {
+      // no-op
+    }
+  };
+
+  const buildFullContextPayload = (): string => {
+    if (!selectedOverlay) return '';
+    const dialogue = (selectedOverlay.fullDialogueContext || '').trim();
+    const research = (selectedOverlay.researchContext || '').trim();
+    const moment = (selectedOverlay.animationContextSummary || '').trim();
+    const blocks: string[] = [];
+    if (dialogue) blocks.push(`DIALOGUE_CONTEXT:\n${dialogue}`);
+    if (research) blocks.push(`RESEARCH_CONTEXT:\n${research}`);
+    if (moment) blocks.push(`MOMENT_CONTEXT:\n${moment}`);
+    return blocks.join('\n\n');
+  };
 
   useImperativeHandle(ref, () => ({
     openFileDialog: () => {
-      if (selected?.kind === 'overlay') fileInputRef.current?.click();
+      if (selected?.kind === 'overlay' && !isAnimationOverlayClip) fileInputRef.current?.click();
     },
-  }), [selected?.kind]);
+  }), [selected?.kind, isAnimationOverlayClip]);
 
   const handleMouseDown = () => {
     setIsResizing(true);
@@ -90,17 +120,17 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
 
   // Load image preview when overlay clip is selected (use API URL so img src works in browser)
   useEffect(() => {
-    if (selected?.kind === 'overlay' && projectId) {
+    if (selected?.kind === 'overlay' && projectId && !isAnimationOverlayClip) {
       const overlay = selected as OverlayClip;
       const url = API_ENDPOINTS.serveProjectImage(projectId, overlay.assetId);
       setImagePreview(url);
     } else {
       setImagePreview(null);
     }
-  }, [selected?.kind, selected?.id, (selected as OverlayClip)?.assetId, projectId]);
+  }, [selected?.kind, selected?.id, selectedOverlay?.assetId, projectId, isAnimationOverlayClip]);
 
   const handleUploadImage = async (file: File) => {
-    if (!selected || selected.kind !== 'overlay') return;
+    if (!selected || selected.kind !== 'overlay' || isAnimationOverlayClip) return;
 
     setUploadingImage(true);
     try {
@@ -133,7 +163,7 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
   };
 
   const handleRemoveImage = async () => {
-    if (!selected || selected.kind !== 'overlay' || isTemplateClip) return;
+    if (!selected || selected.kind !== 'overlay' || isTemplateClip || isAnimationOverlayClip) return;
     const overlay = selected as OverlayClip;
     if (!window.confirm('Remove this image from the overlay? The clip will stay; you can upload a new image later.')) return;
     setRemovingImage(true);
@@ -176,7 +206,7 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
 
       {!selected || !selectedRef ? (
         <div className="text-xs text-muted-foreground">
-          Click a clip in the timeline (or an overlay in the preview) to edit. For image overlays, click the image clip in the Images track to upload or replace the image.
+          Click a clip in the timeline to edit it. Draft animation clips expose their animation prompt here, and image overlays expose upload and replace controls here.
         </div>
       ) : (
         <div className="space-y-4">
@@ -221,7 +251,7 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
           )}
 
           {/* When overlay clip is selected (e.g. from timeline), show Image Asset / upload first. Skip for template track. */}
-          {selected.kind === 'overlay' && !isTemplateClip && (
+          {selected.kind === 'overlay' && !isTemplateClip && !isAnimationOverlayClip && (
             <div className="rounded border border-border bg-muted/30 p-3">
               <div className="text-xs font-semibold mb-3">Image Asset</div>
               
@@ -276,36 +306,117 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
               />
               
               <div className="mt-3 text-[10px] text-muted-foreground">
-                <div className="font-semibold mb-1">Asset ID: {(selected as OverlayClip).assetId}</div>
-                <div>Label: {(selected as OverlayClip).label}</div>
+                <div className="font-semibold mb-1">Asset ID: {selectedOverlay?.assetId}</div>
+                <div>Label: {selectedOverlay?.label}</div>
+              </div>
+            </div>
+          )}
+
+          {isAnimationOverlayClip && (
+            <div className="rounded border border-border bg-muted/30 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-semibold">
+                  {isDraftAnimationClip ? 'Draft Animation Review' : 'Animation Prompt Trace'}
+                </div>
+                <span
+                  className={`text-[10px] px-2 py-0.5 rounded border ${
+                    isDraftAnimationClip
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                      : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                  }`}
+                >
+                  {isDraftAnimationClip ? 'Draft' : 'Approved'}
+                </span>
+              </div>
+              <div className="mt-3">
+                <div className="mb-1 flex items-center justify-between">
+                  <label className="text-xs text-muted-foreground block">Prompt</label>
+                  <button
+                    type="button"
+                    onClick={() => handleCopy('prompt', selectedOverlay?.promptText || '')}
+                    className="text-[10px] px-2 py-0.5 rounded border border-border bg-muted hover:bg-accent/10"
+                  >
+                    {copiedField === 'prompt' ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+                <textarea
+                  value={selectedOverlay?.promptText || ''}
+                  disabled={isApprovedAnimationClip}
+                  placeholder={
+                    isDraftAnimationClip
+                      ? 'Add or refine the animation prompt for this draft clip.'
+                      : undefined
+                  }
+                  onChange={(e) =>
+                    onUpdateClip({
+                      promptText: e.target.value,
+                      promptEdited: true,
+                    } as Partial<Clip>)
+                  }
+                  className="w-full min-h-[120px] bg-muted border border-border rounded px-3 py-2 text-xs"
+                />
+                {isDraftAnimationClip ? (
+                  <div className="mt-2 text-[11px] text-muted-foreground">
+                    Add or edit the prompt text here. Timing and moment context stay locked for this review pass.
+                  </div>
+                ) : (
+                  <div className="mt-2 text-[11px] text-muted-foreground">
+                    Prompt is read-only after approval.
+                  </div>
+                )}
+              </div>
+              <div className="mt-3 rounded border border-border bg-muted/40 p-2 space-y-1 text-[11px]">
+                <div><span className="text-muted-foreground">Moment:</span> {selectedOverlay?.animationMomentId}</div>
+                <div><span className="text-muted-foreground">Type:</span> {selectedOverlay?.animationType || 'n/a'}</div>
+                <div><span className="text-muted-foreground">Content:</span> {selectedOverlay?.animationContent || 'n/a'}</div>
+                <div><span className="text-muted-foreground">Subtitle:</span> {selectedOverlay?.animationSubtitle || 'n/a'}</div>
+                <div className="flex items-start justify-between gap-2">
+                  <div><span className="text-muted-foreground">Context:</span> {selectedOverlay?.animationContextSummary || 'n/a'}</div>
+                  <button
+                    type="button"
+                    onClick={() => handleCopy('context', buildFullContextPayload())}
+                    className="shrink-0 text-[10px] px-2 py-0.5 rounded border border-border bg-muted hover:bg-accent/10"
+                  >
+                    {copiedField === 'context' ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+                <div><span className="text-muted-foreground">Edited:</span> {selectedOverlay?.promptEdited ? 'Yes' : 'No'}</div>
               </div>
             </div>
           )}
 
           <div className="rounded border border-border bg-muted/30 p-3">
             <div className="text-xs font-semibold mb-2">Timing</div>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Start (s)</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={selected.start}
-                  onChange={(e) => onUpdateClip({ start: Math.max(0, Number(e.target.value)) })}
-                  className="w-full bg-muted border border-border rounded px-3 py-2 text-xs"
-                />
+            {isAnimationOverlayClip ? (
+              <div className="space-y-1 text-[11px]">
+                <div><span className="text-muted-foreground">Start:</span> {selected.start.toFixed(2)}s</div>
+                <div><span className="text-muted-foreground">Duration:</span> {selected.duration.toFixed(2)}s</div>
+                <div className="text-muted-foreground">Timing is read-only for animation plan review.</div>
               </div>
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Duration (s)</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={selected.duration}
-                  onChange={(e) => onUpdateClip({ duration: Math.max(0.1, Number(e.target.value)) })}
-                  className="w-full bg-muted border border-border rounded px-3 py-2 text-xs"
-                />
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Start (s)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={selected.start}
+                    onChange={(e) => onUpdateClip({ start: Math.max(0, Number(e.target.value)) })}
+                    className="w-full bg-muted border border-border rounded px-3 py-2 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Duration (s)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={selected.duration}
+                    onChange={(e) => onUpdateClip({ duration: Math.max(0.1, Number(e.target.value)) })}
+                    className="w-full bg-muted border border-border rounded px-3 py-2 text-xs"
+                  />
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
           {(selected.kind === 'music' || selected.kind === 'sfx') && (
@@ -343,7 +454,7 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
             </div>
           )}
 
-          {(selected.kind === 'overlay' || selected.kind === 'character') && (
+          {(selected.kind === 'overlay' || selected.kind === 'character') && !isAnimationOverlayClip && (
             <div className="rounded border border-border bg-muted/30 p-3">
               <div className="text-xs font-semibold mb-2">Transform</div>
               <div className="grid grid-cols-3 gap-2">
@@ -373,7 +484,7 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
                     type="number"
                     step="0.01"
                     value={selected.scale}
-                    onChange={(e) => onUpdateClip({ scale: Math.max(0.05, Number(e.target.value)) } as Partial<Clip>)}
+                    onChange={(e) => onUpdateClip({ scale: Math.max(0.2, Number(e.target.value)) } as Partial<Clip>)}
                     className="w-full bg-muted border border-border rounded px-3 py-2 text-xs"
                   />
                 </div>

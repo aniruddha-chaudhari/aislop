@@ -23,6 +23,17 @@ Your job: transform the timeline plan into 2D motion graphic directions that loo
 were made in 2025-2026 — not 2020. Every moment must feel scroll-stopping, platform-native,
 and visually current.
 
+PRIMARY JOB — HIGHLIGHT THE PUNCH (NOT GENERIC DECORATION)
+Motion graphics here mostly punctuate the talking video: they spotlight the specific word,
+number, name, or stat the line is about — the part that would get underlined or circled if
+this were a documentary breakdown.
+Example: narrator says "He made five million dollars" → the graphic hero is "5 MILLION" or
+"$5M" (big type, accent motion), timed to when that phrase lands — not a vague title that
+restates the whole sentence.
+Every moment must answer: "What is the ONE takeaway from this line?" That takeaway is what
+gets displayText, accent color, and the boldest motion. Avoid moments that could apply to
+any clip; tie visuals to the exact hook in the dialogue.
+
 HARD CONSTRAINTS:
 - Flat 2D motion graphics ONLY. No 3D. No isometric perspective. No z-axis depth tricks.
 - NO cyan or its shades. NO electric blue or teal-adjacent colors. These read as old.
@@ -113,10 +124,12 @@ Apply the 60-30-10 rule to every moment:
 
 HARD RULES:
 - bg and text must have contrast ratio ≥ 4.5:1. Readability is non-negotiable.
+- primary surfaces that carry text should target at least 3:1 contrast with that text.
 - accent is used on exactly ONE element per moment — the single most important thing.
 - Never use cyan, electric teal, or aqua. Any hex near #00ffff is banned.
 - Never pure #ffffff or pure #000000 for bg — always a tinted/toned version.
 - Each moment outputs its own colorPalette: bg, primary, accent, text.
+- Prefer harmony logic per moment: analogous-warm (safe editorial) or split-complement with a warm accent.
 
 ──────────────────────────────────────────────────────────
 REFERENCE PALETTE CATALOGUE (pick from or riff off freely):
@@ -133,6 +146,10 @@ REFERENCE PALETTE CATALOGUE (pick from or riff off freely):
 "mocha-sand"
   bg:#1c120d  primary:#8b5e3c  accent:#e8c9a0  text:#f5ede0
   Feel: grounded, warm, trustworthy.
+
+"mocha-mousse-2025"
+  bg:#1a130f  primary:#8a5a44  accent:#d7a06f  text:#f6eee6
+  Feel: comfort-luxury brown family, trend-forward warmth.
 
 "slate-ember"
   bg:#14171a  primary:#2d3436  accent:#e84118  text:#f0f0f0
@@ -754,6 +771,7 @@ PRE-OUTPUT CHECKLIST (verify every item before returning JSON):
 □ Zero text elements in elements[] below 48px. If found, delete or upsize.
 □ Maximum 2 text elements per moment. Count them. If 3+, delete until 2.
 □ Primary text is displayText-derived (1-4 words from narratorText). No invented labels, sources, or footnotes anywhere.
+□ Each moment spotlights the punch in that line (stat/number/name/claim) — not a generic card that could fit any topic.
 □ No two consecutive moments share the same motionCharacter.
 □ start:0 moment has motionCharacter: "punchy".
 □ Final moment has motionCharacter: "cinematic" or "floaty".

@@ -3,6 +3,7 @@ import path from 'path';
 import { spawn } from 'child_process';
 import { buildAnimationDirectionPrompt } from '../prompts/animationDirectionPrompt';
 import { buildAnimationTimelineWithResearchPrompt } from '../prompts/animationTimelinePrompt';
+import { buildAnimationClipCodePrompt } from '../prompts/animationClipCodePrompt';
 
 const OPENCODE_BIN_ENV = process.env.OPENCODE_BIN?.trim() || '';
 const OPENCODE_DEFAULT_BIN = 'opencode';
@@ -17,10 +18,12 @@ const OPENCODE_RUN_TIMEOUT_MS = parsePositiveMs(process.env.OPENCODE_RUN_TIMEOUT
 const OPENCODE_HEARTBEAT_INTERVAL_MS = parsePositiveMs(process.env.OPENCODE_HEARTBEAT_INTERVAL_MS, 15000);
 let CACHED_OPENCODE_COMMAND: string | null = null;
 
+/** OpenCode model ids. `animationGemini` = Gemini 3.1 Pro for the full animation flow (timeline, direction, Remotion TSX). `default` / `pro` = GPT 5.3 Codex for research, SFX, image plans, and other non-animation OpenCode tasks. */
 export const OPENCODE_MODELS = {
-  default: 'github-copilot/grok-code-fast-1',
-  pro: 'github-copilot/claude-sonnet-4.6',
+  default: 'github-copilot/gpt-5.3-codex',
+  pro: 'github-copilot/gpt-5.3-codex',
   minimax: 'opencode/minimax-m2.5-free',
+  animationGemini: 'github-copilot/gemini-3.1-pro-preview',
 } as const;
 
 const OPENCODE_DEFAULT_MODEL: keyof typeof OPENCODE_MODELS = 'default';
@@ -63,6 +66,11 @@ export interface AnimationPlanGenerationResult {
   usedRemotionSkill: boolean;
   researchSummary: string | null;
   researchDiagnostics: OpenCodeOutputDiagnostics | null;
+  timelinePrompt: string;
+  directionPrompt: string;
+  timelinePlanJson: string;
+  dialogueWindowsByMoment: string;
+  timelineOutput: string;
 }
 
 export interface AnimationClipCodeGenerationResult {
@@ -881,12 +889,18 @@ function formatSeconds(seconds: number): string {
   return `${seconds.toFixed(2)}s`;
 }
 
+/** Upper bound on animation moments per video; keep in sync with Remotion MAX_COMPOSITIONS in animationPlanService. */
+export const ANIMATION_GLOBAL_MOMENT_CEILING = 16;
+
 function buildAnimationBudgetPlan(videoDurationSeconds: number, maxMoments: number): AnimationBudgetPlan {
   const durationSeconds = Math.max(1, toFiniteNumber(videoDurationSeconds, 60));
-  const maxAllowedMoments = Math.max(1, Math.min(8, Math.floor(toFiniteNumber(maxMoments, 8))));
+  const maxAllowedMoments = Math.max(
+    1,
+    Math.min(ANIMATION_GLOBAL_MOMENT_CEILING, Math.floor(toFiniteNumber(maxMoments, ANIMATION_GLOBAL_MOMENT_CEILING)))
+  );
 
   if (durationSeconds <= 12) {
-    const hardMomentCap = Math.min(2, maxAllowedMoments);
+    const hardMomentCap = Math.min(4, maxAllowedMoments);
     const maxAnimatedSeconds = Math.min(7, Number((durationSeconds * 0.65).toFixed(2)));
     const minAnimatedSeconds = Math.min(maxAnimatedSeconds, Math.max(3.5, Math.min(5, durationSeconds * 0.45)));
     return {
@@ -901,7 +915,7 @@ function buildAnimationBudgetPlan(videoDurationSeconds: number, maxMoments: numb
   }
 
   if (durationSeconds <= 20) {
-    const hardMomentCap = Math.min(3, maxAllowedMoments);
+    const hardMomentCap = Math.min(6, maxAllowedMoments);
     return {
       durationSeconds,
       targetMomentCount: hardMomentCap,
@@ -914,7 +928,7 @@ function buildAnimationBudgetPlan(videoDurationSeconds: number, maxMoments: numb
   }
 
   if (durationSeconds <= 40) {
-    const hardMomentCap = Math.min(4, maxAllowedMoments);
+    const hardMomentCap = Math.min(10, maxAllowedMoments);
     return {
       durationSeconds,
       targetMomentCount: hardMomentCap,
@@ -926,8 +940,8 @@ function buildAnimationBudgetPlan(videoDurationSeconds: number, maxMoments: numb
     };
   }
 
-  const hardMomentCap = Math.min(8, maxAllowedMoments);
-  const targetMomentCount = Math.min(hardMomentCap, Math.max(4, Math.round(durationSeconds / 10)));
+  const hardMomentCap = Math.min(ANIMATION_GLOBAL_MOMENT_CEILING, maxAllowedMoments);
+  const targetMomentCount = Math.min(hardMomentCap, Math.max(4, Math.round(durationSeconds / 6)));
   return {
     durationSeconds,
     targetMomentCount,
@@ -1238,70 +1252,7 @@ function buildClipCodePrompt(
   },
   options: { requireExa: boolean; requireRemotionSkill: boolean; compact: boolean }
 ): string {
-  const momentPosition = `${params.moment.index + 1}/${params.moment.totalMoments ?? '?'}`;
-  const momentJson = JSON.stringify(params.moment, null, 2);
-  const dialogueContext = params.dialogueContext || 'No dialogue context provided';
-  const researchContext = params.researchSummary || 'No research summary provided';
-  const requiredTools = [
-    options.requireRemotionSkill ? '- Use the "skill" tool and load "remotion-best-practices" before final answer.' : '',
-    options.requireExa ? '- Use Exa MCP tools before final answer.' : '',
-  ]
-    .filter(Boolean)
-    .join('\n');
-
-  return `You are a senior Remotion motion designer and TSX generator.
-
-TASK:
-Generate one production-ready Remotion clip component for a single timeline moment in a short educational 9:16 video.
-
-MANDATORY TOOLS:
-${requiredTools || '- Follow Remotion best practices for performance and readability.'}
-
-INPUTS:
-TOPIC: "${params.topic}"
-CLIP_TYPE: ${params.clipType || 'B-roll moment'}
-MOMENT_POSITION: ${momentPosition}
-MOMENT_JSON:
-${momentJson}
-DIALOGUE_CONTEXT:
-${dialogueContext || 'No dialogue context provided'}
-RESEARCH_CONTEXT:
-${researchContext || 'No research summary provided'}
-
-ENGINEERING RULES:
-- Return TSX code for exactly: export const GeneratedClip
-- Use only imports from "react" and "remotion".
-- Include: useCurrentFrame, useVideoConfig, interpolate, spring, Easing from remotion. Use Easing (capital E) for easing curves: Easing.bezier(), Easing.inOut(), Easing.out(), Easing.linear() — never "easing" (lowercase) which is not a function.
-- Keep code deterministic and render-safe (no timers, no async effects, no DOM measurements, no external fetches).
-- Motion cadence: 1-2 active beats + at least one calmer hold/readability window.
-- Mobile-first composition, high contrast, avoid tiny text.
-- Treat props.subtitle as context only. Do NOT render it. No JSX that displays subtitle or props.subtitle — no bottom caption strip, no full-sentence text. If you need on-screen text, use content/emphasis only (short 1–4 words).
-- Avoid generic full-screen text card. Use layered motion and visual metaphor tied to MOMENT_JSON.
-
-TYPE CONTRACT (must match exactly):
-\`\`\`ts
-export type GeneratedClipProps = {
-  subtitle?: string;
-  content: string;
-  topic?: string;
-  seed?: number;
-  durationSeconds?: number;
-  emphasis?: string;
-};
-\`\`\`
-
-BEFORE FINALIZING OUTPUT:
-- Review the generated TSX for errors: wrong or missing imports, invalid React/Remotion API usage, syntax errors, undefined variables, or use of packages not available in the project (only "react" and "remotion" are allowed).
-- Remotion easing: import Easing (capital E) from "remotion" and use Easing.bezier(), Easing.inOut(), Easing.out(), etc. Do not use "easing" (lowercase) — it is not a function and will throw "easing is not a function".
-- Ensure the component does NOT render subtitle or props.subtitle anywhere (no bottom bar, no caption). Remove any such JSX before returning.
-- Fix any such errors before returning the componentCode. The code must compile and run in a Remotion project with no node_module or runtime errors.
-
-OUTPUT JSON ONLY:
-{
-  "componentCode": "full TSX code string with export const GeneratedClip"
-}
-
-The code must compile as-is in a Remotion project.`;
+  return buildAnimationClipCodePrompt(params, options);
 }
 
 function buildDeterministicFallbackClipCode(params: {
@@ -1479,6 +1430,7 @@ Return your suggestions in a structured format.`;
   });
 }
 
+/** Timeline + research + direction JSON for animation. Defaults to `animationGemini` (Gemini 3.1 Pro). */
 export async function generateAnimationPlanWithResearch(
   topic: string,
   dialogueContext: string,
@@ -1491,11 +1443,11 @@ export async function generateAnimationPlanWithResearch(
     debugOutputDir?: string;
   }
 ): Promise<AnimationPlanGenerationResult> {
-  const model = options?.model || 'pro';
+  const model = options?.model || 'animationGemini';
   const cwd = options?.cwd || process.cwd();
   const debugOutputDir = options?.debugOutputDir;
   const videoDurationSeconds = options?.videoDurationSeconds ?? 60;
-  const maxMoments = options?.maxMoments ?? 8;
+  const maxMoments = options?.maxMoments ?? ANIMATION_GLOBAL_MOMENT_CEILING;
   const animationBudget = buildAnimationBudgetPlan(videoDurationSeconds, maxMoments);
   const animationBudgetBlock = buildAnimationBudgetBlock(animationBudget);
   const requireExaForAnimation = process.env.OPENCODE_REQUIRE_EXA_FOR_ANIMATION !== '0';
@@ -1806,7 +1758,7 @@ RULES:
       dialogueWindowsByMoment,
       researchSummary,
     }),
-    ['MANDATORY TOOLING (both tools', 'TIMELINE_PLAN_JSON:', 'ANIMATION_BUDGET:', 'RESEARCH_CONTEXT:']
+    ['MANDATORY TOOLING:', 'TIMELINE_PLAN_JSON:', 'ANIMATION_BUDGET:', 'RESEARCH_CONTEXT:']
   );
   if (debugOutputDir) {
     try {
@@ -1934,6 +1886,11 @@ You must call the "skill" tool and load "remotion-best-practices" before finaliz
     usedRemotionSkill,
     researchSummary,
     researchDiagnostics,
+    timelinePrompt,
+    directionPrompt: validatedDirectionPrompt,
+    timelinePlanJson,
+    dialogueWindowsByMoment,
+    timelineOutput,
   };
 }
 
@@ -1992,6 +1949,7 @@ function extractGeneratedClipCode(output: string): string | null {
   return textCandidate || null;
 }
 
+/** Per-moment Remotion `GeneratedClip` TSX via OpenCode. Defaults to `animationGemini` (same Gemini 3.1 Pro as planning). */
 export async function generateRemotionClipCodeWithSkill(
   params: {
     topic: string;
@@ -2020,7 +1978,7 @@ export async function generateRemotionClipCodeWithSkill(
     environment?: OpenCodeEnvironmentCheck;
   }
 ): Promise<AnimationClipCodeGenerationResult> {
-  const model = options?.model || 'pro';
+  const model = options?.model || 'animationGemini';
   const cwd = options?.cwd || process.cwd();
   const debugOutputDir = options?.debugOutputDir;
   // Clip-code receives research summary in the prompt; it does not need to call Exa again. Only Remotion skill is required.

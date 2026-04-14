@@ -10,6 +10,7 @@ import type { OverlayClip, SubtitleClip, Track } from '../schema/project';
 //   parseOpenCodeJSON,
 // } from '../agents/gemini3agent';
 import {
+  ANIMATION_GLOBAL_MOMENT_CEILING,
   generateAnimationPlanWithResearch,
   generateRemotionClipCodeWithSkill,
   inspectOpenCodeEnvironment,
@@ -22,8 +23,9 @@ const REMOTION_COMPOSITION_ID = 'GeneratedClip';
 const REMOTION_FPS = 30;
 const REMOTION_WIDTH = 1080;
 const REMOTION_HEIGHT = 1920;
-const MAX_COMPOSITIONS = 8;
+const MAX_COMPOSITIONS = ANIMATION_GLOBAL_MOMENT_CEILING;
 const PLAN_FILENAME = 'animation-plan.json';
+const REVIEW_FILENAME = 'animation-plan-review.json';
 const REMOTION_VERSION = '4.0.419';
 const REMOTION_GENERATED_CLIP_FILE = path.join(REMOTION_ROOT_DIR, 'src', 'GeneratedClip.tsx');
 const REMOTION_ROOT_FILE = path.join(REMOTION_ROOT_DIR, 'src', 'Root.tsx');
@@ -31,7 +33,7 @@ const REMOTION_ROOT_FILE = path.join(REMOTION_ROOT_DIR, 'src', 'Root.tsx');
 const DEFAULT_OVERLAY_X = 0.5;
 const DEFAULT_OVERLAY_Y = 0.65;
 const DEFAULT_OVERLAY_SCALE = 0.5;
-const MAX_MOMENTS = 8;
+const MAX_MOMENTS = ANIMATION_GLOBAL_MOMENT_CEILING;
 const MIN_MOMENT_DURATION_SECONDS = 1.2;
 const ANIMATION_DEBUG_ENABLED = process.env.ANIMATION_DEBUG === '1';
 const OPENCODE_OUTPUT_FILENAME = 'animation-opencode.raw.txt';
@@ -50,6 +52,7 @@ const GENERIC_CONTENT_PATTERNS = [
 ];
 
 export type AnimationMoment = {
+  animationMomentId?: string;
   start: number;
   duration: number;
   type: string;
@@ -60,6 +63,8 @@ export type AnimationMoment = {
   layout?: string;
   emphasis?: string;
   animationPrompt?: string;
+  promptText?: string;
+  promptEdited?: boolean;
   colorPalette?: Record<string, unknown>;
   composition?: Record<string, unknown>;
   [key: string]: unknown;
@@ -69,6 +74,63 @@ export type AnimationPlan = {
   moments: AnimationMoment[];
   videoDurationSeconds?: number;
 };
+
+export type AnimationPlanReviewPayload = {
+  projectId: string;
+  topic: string;
+  generatedAt: string;
+  approvalState?: 'draft' | 'approved';
+  approvedAt?: string;
+  animationPlan: AnimationPlan;
+  dialogueContext: string;
+  researchSummary: string | null;
+  prompts: {
+    timelinePrompt: string;
+    directionPrompt: string;
+    timelinePlanJson: string;
+    dialogueWindowsByMoment: string;
+    timelineOutput: string;
+    directionOutput: string;
+  };
+  diagnostics: {
+    usedAgent: string | null;
+    fallbackWithoutAgent: boolean;
+    promptMentionsSkill: boolean;
+    usedExaResearch: boolean;
+    usedExaDirection: boolean;
+    usedRemotionSkill: boolean;
+    aiDiagnostics: unknown;
+    researchDiagnostics: unknown;
+    parsedMomentCount: number;
+    usedFallbackMoments: boolean;
+  };
+};
+
+export type AnimationPlanDraftResult = {
+  animationPlan: AnimationPlan;
+  review: AnimationPlanReviewPayload;
+  overlayTracks: Track[];
+  remotionProjectDir: string;
+  renderedProjectDir: string;
+};
+
+type AnimationColorPalette = {
+  bg: string;
+  primary: string;
+  accent: string;
+  text: string;
+};
+
+const FALLBACK_ANIMATION_PALETTES: AnimationColorPalette[] = [
+  { bg: '#140F0C', primary: '#8E3F2A', accent: '#F0B45A', text: '#F6EEE6' }, // warm editorial
+  { bg: '#121114', primary: '#6F2E27', accent: '#E7A63C', text: '#F4EEE7' }, // oxblood + amber
+  { bg: '#171613', primary: '#3D3831', accent: '#E1A24A', text: '#F3EEE2' }, // graphite + saffron
+  { bg: '#F3EEE6', primary: '#A94E21', accent: '#2A241E', text: '#1B140F' }, // light clay
+  { bg: '#120E12', primary: '#5B2A4A', accent: '#D9A75E', text: '#F5EEF2' }, // plum + gold
+  { bg: '#101714', primary: '#2D6A4F', accent: '#F0B45A', text: '#EAF4EC' }, // forest + amber
+  { bg: '#19120E', primary: '#8B5E3C', accent: '#E8C9A0', text: '#F7EFE3' }, // mocha sand
+  { bg: '#2A0F16', primary: '#A23A43', accent: '#E7C58A', text: '#F8EEF0' }, // burgundy cream
+];
 
 function summarizeForLog(text: string, max = 220): string {
   const compact = text.replace(/\s+/g, ' ').trim();
@@ -115,6 +177,46 @@ export function getAnimationProjectFolderName(projectId: string): string {
   return safe.startsWith('proj_') ? safe : `proj_${safe}`;
 }
 
+function getAnimationProjectDirs(projectId: string): {
+  projectFolder: string;
+  remotionProjectDir: string;
+  renderedProjectDir: string;
+} {
+  const projectFolder = getAnimationProjectFolderName(projectId);
+  return {
+    projectFolder,
+    remotionProjectDir: path.join(REMOTION_ROOT_DIR, projectFolder),
+    renderedProjectDir: path.join(RENDERED_ANIMATIONS_ROOT_DIR, projectFolder),
+  };
+}
+
+function getAnimationPlanReviewPath(projectId: string): string {
+  const { remotionProjectDir } = getAnimationProjectDirs(projectId);
+  return path.join(remotionProjectDir, REVIEW_FILENAME);
+}
+
+export function loadAnimationPlanReview(projectId: string): AnimationPlanReviewPayload | null {
+  const reviewPath = getAnimationPlanReviewPath(projectId);
+  if (!fs.existsSync(reviewPath)) return null;
+
+  try {
+    const raw = fs.readFileSync(reviewPath, 'utf8');
+    const parsed = JSON.parse(raw) as AnimationPlanReviewPayload;
+    if (!parsed || typeof parsed !== 'object' || !parsed.animationPlan || !Array.isArray(parsed.animationPlan.moments)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveAnimationPlanReview(projectId: string, review: AnimationPlanReviewPayload): void {
+  const reviewPath = getAnimationPlanReviewPath(projectId);
+  ensureDir(path.dirname(reviewPath));
+  fs.writeFileSync(reviewPath, JSON.stringify(review, null, 2), 'utf8');
+}
+
 export function cleanupAnimationCacheForProject(projectId: string): {
   remotionProjectDir: string;
   renderedProjectDir: string;
@@ -150,10 +252,133 @@ function cleanText(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
+function normalizeHex(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  const short = /^#([0-9a-fA-F]{3})$/;
+  const long = /^#([0-9a-fA-F]{6})$/;
+  if (short.test(trimmed)) {
+    const [r, g, b] = trimmed.slice(1).split('');
+    return `#${r}${r}${g}${g}${b}${b}`.toUpperCase();
+  }
+  if (long.test(trimmed)) return trimmed.toUpperCase();
+  return null;
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  return {
+    r: parseInt(hex.slice(1, 3), 16),
+    g: parseInt(hex.slice(3, 5), 16),
+    b: parseInt(hex.slice(5, 7), 16),
+  };
+}
+
+function srgbToLinear(channel: number): number {
+  const value = channel / 255;
+  return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+}
+
+function relativeLuminance(hex: string): number {
+  const { r, g, b } = hexToRgb(hex);
+  const rl = srgbToLinear(r);
+  const gl = srgbToLinear(g);
+  const bl = srgbToLinear(b);
+  return 0.2126 * rl + 0.7152 * gl + 0.0722 * bl;
+}
+
+function contrastRatio(a: string, b: string): number {
+  const l1 = relativeLuminance(a);
+  const l2 = relativeLuminance(b);
+  const lighter = Math.max(l1, l2);
+  const darker = Math.min(l1, l2);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function isNearCyanOrTeal(hex: string): boolean {
+  const { r, g, b } = hexToRgb(hex);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const delta = max - min;
+  if (delta === 0) return false;
+  let hue: number;
+  if (max === r) hue = ((g - b) / delta) % 6;
+  else if (max === g) hue = (b - r) / delta + 2;
+  else hue = (r - g) / delta + 4;
+  hue *= 60;
+  if (hue < 0) hue += 360;
+  const saturation = max === 0 ? 0 : delta / max;
+  return hue >= 165 && hue <= 205 && saturation > 0.24;
+}
+
+function pickPaletteByIndex(index: number): AnimationColorPalette {
+  return FALLBACK_ANIMATION_PALETTES[index % FALLBACK_ANIMATION_PALETTES.length];
+}
+
+function sanitizeColorPalette(
+  rawPalette: unknown,
+  index: number,
+  previousBg: string | null
+): AnimationColorPalette {
+  const rawObj = rawPalette && typeof rawPalette === 'object' ? (rawPalette as Record<string, unknown>) : {};
+  const candidate: AnimationColorPalette = {
+    bg: normalizeHex(rawObj.bg) || '',
+    primary: normalizeHex(rawObj.primary) || '',
+    accent: normalizeHex(rawObj.accent) || '',
+    text: normalizeHex(rawObj.text) || '',
+  };
+  const isComplete = Boolean(candidate.bg && candidate.primary && candidate.accent && candidate.text);
+  const failsRules =
+    !isComplete ||
+    candidate.bg === '#000000' ||
+    candidate.bg === '#FFFFFF' ||
+    isNearCyanOrTeal(candidate.bg) ||
+    isNearCyanOrTeal(candidate.primary) ||
+    isNearCyanOrTeal(candidate.accent) ||
+    contrastRatio(candidate.bg, candidate.text) < 4.5;
+
+  let chosen = failsRules ? pickPaletteByIndex(index) : candidate;
+  if (previousBg && chosen.bg === previousBg) {
+    chosen = pickPaletteByIndex(index + 1);
+  }
+
+  if (contrastRatio(chosen.bg, chosen.text) < 4.5) {
+    const darkContrast = contrastRatio(chosen.bg, '#1A140F');
+    const lightContrast = contrastRatio(chosen.bg, '#F6EEE6');
+    chosen.text = darkContrast >= lightContrast ? '#1A140F' : '#F6EEE6';
+  }
+  return chosen;
+}
+
 function clipLabel(moment: AnimationMoment, index: number): string {
   const snippet = cleanText(moment.content).slice(0, 30);
   if (!snippet) return `Animation ${index + 1}`;
   return snippet.length >= 30 ? `${snippet}...` : snippet;
+}
+
+function getAnimationMomentId(moment: AnimationMoment, index: number): string {
+  const raw = typeof moment.animationMomentId === 'string' ? moment.animationMomentId.trim() : '';
+  if (raw) return raw;
+  return `anim_moment_${index + 1}`;
+}
+
+function buildMomentPrompt(moment: AnimationMoment): string {
+  const provided =
+    (typeof moment.promptText === 'string' && moment.promptText) ||
+    (typeof moment.animationPrompt === 'string' && moment.animationPrompt) ||
+    '';
+  const cleaned = cleanText(provided);
+  if (cleaned) return cleaned;
+
+  const parts = [
+    `Create a ${cleanText(moment.type) || 'kinetic'} animation.`,
+    cleanText(moment.content),
+    moment.subtitle ? `Subtitle context: ${cleanText(moment.subtitle)}` : '',
+    moment.visualStyle ? `Visual style: ${cleanText(moment.visualStyle)}` : '',
+    moment.motion ? `Motion: ${cleanText(moment.motion)}` : '',
+    moment.layout ? `Layout: ${cleanText(moment.layout)}` : '',
+    moment.emphasis ? `Emphasis: ${cleanText(moment.emphasis)}` : '',
+  ].filter(Boolean);
+  return parts.join(' ');
 }
 
 function clipRangesOverlap(aStart: number, aDuration: number, bStart: number, bDuration: number): boolean {
@@ -193,6 +418,48 @@ function assignMomentsToOverlayTracks(clips: OverlayClip[]): Track[] {
   }));
 }
 
+function buildOverlayClipFromMoment(
+  moment: AnimationMoment,
+  index: number,
+  options: {
+    status: 'draft' | 'approved';
+    outputPath?: string;
+    dialogueContext?: string;
+    researchSummary?: string | null;
+  }
+): OverlayClip {
+  const animationMomentId = getAnimationMomentId(moment, index);
+  const promptText = buildMomentPrompt(moment);
+  return {
+    id: options.status === 'draft' ? `anim_draft_${animationMomentId}` : `anim_${animationMomentId}`,
+    kind: 'overlay',
+    start: moment.start,
+    duration: moment.duration,
+    assetId: options.status === 'draft' ? `anim_draft_${animationMomentId}` : `anim_${animationMomentId}`,
+    label: clipLabel(moment, index),
+    x: DEFAULT_OVERLAY_X,
+    y: DEFAULT_OVERLAY_Y,
+    scale: DEFAULT_OVERLAY_SCALE,
+    displayMode: 'replace',
+    path: options.outputPath,
+    planStatus: options.status,
+    promptText,
+    promptEdited: Boolean(moment.promptEdited),
+    animationMomentId,
+    animationType: cleanText(moment.type) || 'callout',
+    animationContent: cleanText(moment.content),
+    animationSubtitle: cleanText(moment.subtitle || ''),
+    animationContextSummary: cleanText(
+      (typeof moment.subtitleWindowContext === 'string' && moment.subtitleWindowContext) ||
+      moment.emphasis ||
+      moment.subtitle ||
+      moment.content
+    ).slice(0, 320),
+    fullDialogueContext: typeof options.dialogueContext === 'string' ? options.dialogueContext : undefined,
+    researchContext: typeof options.researchSummary === 'string' ? options.researchSummary : undefined,
+  };
+}
+
 function buildDialogueContext(subtitleClips: SubtitleClip[]): string {
   if (subtitleClips.length === 0) return '';
   const sorted = [...subtitleClips].sort((a, b) => a.start - b.start);
@@ -204,6 +471,74 @@ function buildDialogueContext(subtitleClips: SubtitleClip[]): string {
       return `[${start}s-${end}s] ${speaker}: ${cleanText(clip.text)}`;
     })
     .join('\n');
+}
+
+function clipSubtitleTextToOverlap(
+  clip: SubtitleClip,
+  overlapStart: number,
+  overlapEnd: number
+): string {
+  const fullText = cleanText(clip.text);
+  if (!fullText) return '';
+
+  if (!clip.words || clip.words.length === 0) {
+    const ratio = clip.duration > 0 ? clamp((overlapEnd - overlapStart) / clip.duration, 0, 1) : 1;
+    if (ratio >= 0.98) return fullText;
+    const words = fullText.split(' ').filter(Boolean);
+    if (words.length <= 1) return fullText;
+    const offsetRatio = clip.duration > 0 ? clamp((overlapStart - clip.start) / clip.duration, 0, 1) : 0;
+    const startIdx = Math.min(words.length - 1, Math.floor(words.length * offsetRatio));
+    const takeCount = Math.max(1, Math.round(words.length * ratio));
+    return words.slice(startIdx, Math.min(words.length, startIdx + takeCount)).join(' ');
+  }
+
+  const wordEntries = clip.words;
+  const lastWord = wordEntries[wordEntries.length - 1];
+  const wordsLookRelative = lastWord.end <= clip.duration + 0.5;
+  const overlapped = wordEntries.filter((word) => {
+    const wordStart = wordsLookRelative ? clip.start + word.start : word.start;
+    const wordEnd = wordsLookRelative ? clip.start + word.end : word.end;
+    return overlapStart < wordEnd && wordStart < overlapEnd;
+  });
+  if (overlapped.length === 0) return fullText;
+  return cleanText(overlapped.map((word) => word.word).join(' '));
+}
+
+function buildMomentSubtitleWindow(
+  subtitleClips: SubtitleClip[],
+  momentStart: number,
+  momentDuration: number
+): { subtitleText: string; contextSummary: string } {
+  const momentEnd = momentStart + momentDuration;
+  const overlapping = subtitleClips
+    .filter((clip) => momentStart < clip.start + clip.duration && clip.start < momentEnd)
+    .sort((a, b) => a.start - b.start);
+
+  if (overlapping.length === 0) {
+    return { subtitleText: '', contextSummary: '' };
+  }
+
+  const subtitleSegments: string[] = [];
+  const contextSegments: string[] = [];
+
+  for (const clip of overlapping) {
+    const overlapStart = Math.max(momentStart, clip.start);
+    const overlapEnd = Math.min(momentEnd, clip.start + clip.duration);
+    if (overlapEnd <= overlapStart) continue;
+
+    const partialText = clipSubtitleTextToOverlap(clip, overlapStart, overlapEnd);
+    if (!partialText) continue;
+    subtitleSegments.push(partialText);
+
+    const relStart = Math.max(0, overlapStart - momentStart).toFixed(2);
+    const relEnd = Math.max(0, overlapEnd - momentStart).toFixed(2);
+    contextSegments.push(`[${relStart}s-${relEnd}s] ${partialText}`);
+  }
+
+  return {
+    subtitleText: cleanText(subtitleSegments.join(' ')).slice(0, 260),
+    contextSummary: cleanText(contextSegments.join(' | ')).slice(0, 320),
+  };
 }
 
 function fallbackMomentsFromSubtitles(
@@ -444,11 +779,22 @@ function applyAnimationCadence(moments: AnimationMoment[], videoDurationSeconds:
   }));
 }
 
+/** Hard cap on parsed moments; must match buildAnimationBudgetPlan buckets in opencodeagent. */
+function computeHardMomentCapForVideo(videoDurationSeconds: number): number {
+  const d = Math.max(1, videoDurationSeconds);
+  const cap = MAX_MOMENTS;
+  if (d <= 12) return Math.min(4, cap);
+  if (d <= 20) return Math.min(6, cap);
+  if (d <= 40) return Math.min(10, cap);
+  return cap;
+}
+
 function computeTargetMomentCount(videoDurationSeconds: number): number {
-  if (videoDurationSeconds <= 12) return 2;
-  if (videoDurationSeconds <= 20) return 3;
-  if (videoDurationSeconds <= 35) return 4;
-  return clamp(Math.round(videoDurationSeconds / 8), 4, MAX_MOMENTS);
+  const d = Math.max(1, videoDurationSeconds);
+  if (d <= 12) return Math.min(4, MAX_MOMENTS);
+  if (d <= 20) return Math.min(6, MAX_MOMENTS);
+  if (d <= 40) return Math.min(10, MAX_MOMENTS);
+  return clamp(Math.round(d / 6), 4, MAX_MOMENTS);
 }
 
 /**
@@ -511,7 +857,15 @@ function cleanGeneratedCode(raw: string): string {
   const fenced = text.match(/```(?:tsx|ts|jsx|js)?\s*([\s\S]*?)\s*```/i);
   const candidate = fenced?.[1] ? fenced[1].trim() : text;
   const normalized = candidate.replace(/\r\n/g, '\n').trim();
-  return stripSubtitleRenderingFromClipCode(normalized);
+  const sanitized = normalized
+    // Some model outputs invent non-existent Remotion aliases like `Easing.ease`.
+    // Normalize them to stable built-ins so render doesn't crash at runtime.
+    .replace(/\bEasing\.inOut\(\s*Easing\.ease\s*\)/g, 'Easing.inOut(Easing.sin)')
+    .replace(/\bEasing\.out\(\s*Easing\.ease\s*\)/g, 'Easing.out(Easing.quad)')
+    .replace(/\bEasing\.in\(\s*Easing\.ease\s*\)/g, 'Easing.in(Easing.quad)')
+    .replace(/\bEasing\.expo\b/g, 'Easing.exp')
+    .replace(/\bEasing\.ease\b/g, 'Easing.sin');
+  return stripSubtitleRenderingFromClipCode(sanitized);
 }
 
 function looksLikeGeneratedClipCode(source: string): boolean {
@@ -756,26 +1110,13 @@ async function renderMomentWithRemotion(
   }
 }
 
-export async function generateAnimationPlanAndRender(params: {
+async function prepareAnimationPlanReview(params: {
   projectId: string;
   topic: string;
   subtitleClips: SubtitleClip[];
   videoDurationSeconds: number;
-}): Promise<{
-  animationPlan: AnimationPlan;
-  overlayTracks: Track[];
-  remotionProjectDir: string;
-  renderedProjectDir: string;
-}> {
+}): Promise<AnimationPlanDraftResult> {
   const { projectId, topic, subtitleClips, videoDurationSeconds } = params;
-  const startedAt = Date.now();
-
-  animationInfo('Generation started', {
-    projectId,
-    topic: summarizeForLog(topic, 120),
-    subtitleClipCount: subtitleClips.length,
-    videoDurationSeconds,
-  });
 
   if (!fs.existsSync(REMOTION_ROOT_DIR)) {
     throw new Error(`Remotion project not found at ${REMOTION_ROOT_DIR}`);
@@ -783,9 +1124,7 @@ export async function generateAnimationPlanAndRender(params: {
 
   ensureDir(RENDERED_ANIMATIONS_ROOT_DIR);
 
-  const projectFolder = getAnimationProjectFolderName(projectId);
-  const remotionProjectDir = path.join(REMOTION_ROOT_DIR, projectFolder);
-  const renderedProjectDir = path.join(RENDERED_ANIMATIONS_ROOT_DIR, projectFolder);
+  const { remotionProjectDir, renderedProjectDir } = getAnimationProjectDirs(projectId);
   resetDir(remotionProjectDir);
   resetDir(renderedProjectDir);
 
@@ -810,10 +1149,16 @@ export async function generateAnimationPlanAndRender(params: {
   let aiUsedRemotionSkill = false;
   let aiResearchSummary: string | null = null;
   let aiResearchDiagnostics: unknown = null;
+  let aiTimelinePrompt = '';
+  let aiDirectionPrompt = '';
+  let aiTimelinePlanJson = '';
+  let aiDialogueWindowsByMoment = '';
+  let aiTimelineOutput = '';
+
   try {
     const aiResult = await generateAnimationPlanWithResearch(topic, dialogueContext, {
       videoDurationSeconds,
-      maxMoments: targetMomentCount,
+      maxMoments: MAX_MOMENTS,
       debugOutputDir: remotionProjectDir,
     });
     aiOutput = aiResult.output;
@@ -826,6 +1171,11 @@ export async function generateAnimationPlanAndRender(params: {
     aiUsedRemotionSkill = aiResult.usedRemotionSkill;
     aiResearchSummary = aiResult.researchSummary;
     aiResearchDiagnostics = aiResult.researchDiagnostics;
+    aiTimelinePrompt = aiResult.timelinePrompt;
+    aiDirectionPrompt = aiResult.directionPrompt;
+    aiTimelinePlanJson = aiResult.timelinePlanJson;
+    aiDialogueWindowsByMoment = aiResult.dialogueWindowsByMoment;
+    aiTimelineOutput = aiResult.timelineOutput;
 
     const aiOutputPath = path.join(remotionProjectDir, OPENCODE_OUTPUT_FILENAME);
     fs.writeFileSync(aiOutputPath, aiOutput, 'utf8');
@@ -863,7 +1213,8 @@ export async function generateAnimationPlanAndRender(params: {
   }
 
   const parsedMomentCount = countRawMoments(parsedPlan);
-  const normalizedPlan = normalizePlan(parsedPlan, subtitleClips, videoDurationSeconds, targetMomentCount);
+  const hardMomentCap = computeHardMomentCapForVideo(videoDurationSeconds);
+  const normalizedPlan = normalizePlan(parsedPlan, subtitleClips, videoDurationSeconds, hardMomentCap);
   const usedFallbackMoments = parsedMomentCount === 0;
   animationInfo('Plan normalized', {
     projectId,
@@ -887,13 +1238,128 @@ export async function generateAnimationPlanAndRender(params: {
     throw new Error('Animation plan has no usable moments');
   }
 
-  const moments: AnimationMoment[] = normalizedPlan.moments.map((sourceMoment) => ({
-    ...sourceMoment,
-    subtitle: sourceMoment.subtitle || sourceMoment.content,
-  }));
+  let previousPaletteBg: string | null = null;
+  const finalMoments: AnimationMoment[] = normalizedPlan.moments.map((sourceMoment, index) => {
+      const animationMomentId = getAnimationMomentId(sourceMoment, index);
+      const windowedSubtitle = buildMomentSubtitleWindow(
+        subtitleClips,
+        sourceMoment.start,
+        sourceMoment.duration
+      );
+      const subtitle = windowedSubtitle.subtitleText || sourceMoment.subtitle || sourceMoment.content;
+      const promptText = buildMomentPrompt({ ...sourceMoment, subtitle, animationMomentId });
+      const palette = sanitizeColorPalette(sourceMoment.colorPalette, index, previousPaletteBg);
+      previousPaletteBg = palette.bg;
+      return {
+        ...sourceMoment,
+        animationMomentId,
+        subtitle,
+        subtitleWindowContext: windowedSubtitle.contextSummary,
+        colorPalette: palette,
+        animationPrompt: promptText,
+        promptText,
+        promptEdited: false,
+      };
+    });
+
+  const finalPlan: AnimationPlan = {
+    videoDurationSeconds: normalizedPlan.videoDurationSeconds,
+    moments: finalMoments,
+  };
+
+  const review: AnimationPlanReviewPayload = {
+    projectId,
+    topic,
+    generatedAt: new Date().toISOString(),
+    approvalState: 'draft',
+    animationPlan: finalPlan,
+    dialogueContext,
+    researchSummary: aiResearchSummary,
+    prompts: {
+      timelinePrompt: aiTimelinePrompt,
+      directionPrompt: aiDirectionPrompt,
+      timelinePlanJson: aiTimelinePlanJson,
+      dialogueWindowsByMoment: aiDialogueWindowsByMoment,
+      timelineOutput: aiTimelineOutput,
+      directionOutput: aiOutput,
+    },
+    diagnostics: {
+      usedAgent: aiUsedAgent,
+      fallbackWithoutAgent: aiFallbackWithoutAgent,
+      promptMentionsSkill: aiPromptMentionsSkill,
+      usedExaResearch: aiUsedExaResearch,
+      usedExaDirection: aiUsedExaDirection,
+      usedRemotionSkill: aiUsedRemotionSkill,
+      aiDiagnostics,
+      researchDiagnostics: aiResearchDiagnostics,
+      parsedMomentCount,
+      usedFallbackMoments,
+    },
+  };
+
+  saveAnimationPlanReview(projectId, review);
+
+  const draftOverlayClips: OverlayClip[] = finalPlan.moments.map((moment, index) =>
+    buildOverlayClipFromMoment(moment, index, {
+      status: 'draft',
+      dialogueContext: review.dialogueContext,
+      researchSummary: review.researchSummary,
+    })
+  );
+  const overlayTracks = assignMomentsToOverlayTracks(draftOverlayClips);
+
+  return {
+    animationPlan: finalPlan,
+    review,
+    overlayTracks,
+    remotionProjectDir,
+    renderedProjectDir,
+  };
+}
+
+async function renderAnimationPlanFromReview(params: {
+  projectId: string;
+  topic: string;
+  review: AnimationPlanReviewPayload;
+  promptOverrides?: Record<string, string>;
+  remotionProjectDir: string;
+  renderedProjectDir: string;
+}): Promise<{
+  animationPlan: AnimationPlan;
+  overlayTracks: Track[];
+  remotionProjectDir: string;
+  renderedProjectDir: string;
+}> {
+  const { projectId, topic, review, promptOverrides, remotionProjectDir, renderedProjectDir } = params;
+  let previousBg: string | null = null;
+  const moments: AnimationMoment[] = review.animationPlan.moments.map((moment, index) => {
+    const animationMomentId = getAnimationMomentId(moment, index);
+    const overrideText = promptOverrides?.[animationMomentId];
+    const sourcePrompt = typeof overrideText === 'string' && overrideText.trim().length > 0
+      ? overrideText.trim()
+      : buildMomentPrompt(moment);
+    const originalPrompt = buildMomentPrompt(moment);
+    const palette = sanitizeColorPalette(moment.colorPalette, index, previousBg);
+    previousBg = palette.bg;
+    return {
+      ...moment,
+      animationMomentId,
+      subtitle: moment.subtitle || moment.content,
+      colorPalette: palette,
+      promptText: sourcePrompt,
+      animationPrompt: sourcePrompt,
+      promptEdited: sourcePrompt !== originalPrompt,
+    };
+  });
+
+  if (moments.length === 0) {
+    throw new Error('Animation plan has no usable moments');
+  }
+
+  ensureDir(remotionProjectDir);
+  resetDir(renderedProjectDir);
 
   const numMoments = moments.length;
-
   const OPENCODE_SERIAL_DELAY_MS = 3000;
 
   await new Promise((r) => setTimeout(r, OPENCODE_SERIAL_DELAY_MS));
@@ -902,19 +1368,20 @@ export async function generateAnimationPlanAndRender(params: {
   animationInfo('Generating clip code in serial', { projectId, momentCount: numMoments });
 
   const opencodeEnvironment = await inspectOpenCodeEnvironment(process.cwd());
-
   const clipCodeResults: Array<{ index: number; clipCode: string; usedExa: boolean; usedSkill: boolean }> = [];
+
   try {
     for (let i = 0; i < moments.length; i++) {
       if (i > 0) {
         await new Promise((r) => setTimeout(r, OPENCODE_SERIAL_DELAY_MS));
       }
       const moment = moments[i];
+      // OpenCode animation stack defaults to Gemini 3.1 Pro (`animationGemini`); same family as planning/direction.
       const clipCodeResult = await generateRemotionClipCodeWithSkill(
         {
           topic,
-          dialogueContext,
-          researchSummary: aiResearchSummary,
+          dialogueContext: review.dialogueContext,
+          researchSummary: review.researchSummary,
           moment: {
             index: i,
             totalMoments: numMoments,
@@ -949,10 +1416,6 @@ export async function generateAnimationPlanAndRender(params: {
   }
   console.log('[Animation] Step: clip-code – done,', clipCodeResults.length, 'generated');
 
-  let clipCodeGeneratedCount = clipCodeResults.length;
-  let clipCodeUsedExaCount = clipCodeResults.filter((r) => r.usedExa).length;
-  let clipCodeUsedSkillCount = clipCodeResults.filter((r) => r.usedSkill).length;
-
   for (const { index: i, clipCode } of clipCodeResults) {
     writeGeneratedClipSourceForIndex(clipCode, i);
     try {
@@ -967,7 +1430,6 @@ export async function generateAnimationPlanAndRender(params: {
   }
 
   writeRemotionRoot(numMoments);
-
   await ensureRemotionBrowser();
 
   console.log('[Animation] Step: render – rendering', numMoments, 'moments (serial)...');
@@ -1001,135 +1463,49 @@ export async function generateAnimationPlanAndRender(params: {
         throw new Error(`Rendered file not found: ${outputPath}`);
       }
       renderedMoments.push({ moment, outputPath });
-      animationInfo('Rendered moment successfully', {
-        projectId,
-        index: i,
-        outputPath,
-      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       renderFailures.push({ index: i, message });
       console.log('[Animation] Step: render – moment', i, 'failed:', message);
-      animationWarn('Failed rendering moment', {
-        projectId,
-        index: i,
-        message,
-      });
     }
   }
-
-  console.log('[Animation] Step: render – done,', renderedMoments.length, 'succeeded,', renderFailures.length, 'failed');
-  renderedMoments.sort((a, b) => {
-    const aIdx = parseInt(path.basename(a.outputPath).replace('moment_', '').replace('.mp4', ''), 10);
-    const bIdx = parseInt(path.basename(b.outputPath).replace('moment_', '').replace('.mp4', ''), 10);
-    return aIdx - bIdx;
-  });
 
   if (renderedMoments.length === 0) {
     throw new Error('No animation moments were rendered successfully');
   }
 
   const overlayClips: OverlayClip[] = renderedMoments.map(({ moment, outputPath }, index) => ({
-    id: `anim_${index}`,
-    kind: 'overlay',
-    start: moment.start,
-    duration: moment.duration,
-    assetId: `anim_${index}`,
-    label: clipLabel(moment, index),
-    x: DEFAULT_OVERLAY_X,
-    y: DEFAULT_OVERLAY_Y,
-    scale: DEFAULT_OVERLAY_SCALE,
-    displayMode: 'replace',
-    path: outputPath,
+    ...buildOverlayClipFromMoment(moment, index, {
+      status: 'approved',
+      outputPath,
+      dialogueContext: review.dialogueContext,
+      researchSummary: review.researchSummary,
+    }),
   }));
   const overlayTracks = assignMomentsToOverlayTracks(overlayClips);
 
   const finalPlan: AnimationPlan = {
-    videoDurationSeconds: normalizedPlan.videoDurationSeconds,
-    moments: renderedMoments.map((m) => m.moment),
+    videoDurationSeconds: review.animationPlan.videoDurationSeconds,
+    moments: renderedMoments.map((item) => item.moment),
   };
+
+  const approvedReview: AnimationPlanReviewPayload = {
+    ...review,
+    approvalState: 'approved',
+    approvedAt: new Date().toISOString(),
+    animationPlan: finalPlan,
+  };
+  saveAnimationPlanReview(projectId, approvedReview);
 
   const planPayload = {
     projectId,
     topic,
     generatedAt: new Date().toISOString(),
     animationPlan: finalPlan,
-    renderedFiles: renderedMoments.map((m) => m.outputPath),
+    renderedFiles: renderedMoments.map((item) => item.outputPath),
+    review: approvedReview,
   };
-  const planPath = path.join(remotionProjectDir, PLAN_FILENAME);
-  fs.writeFileSync(planPath, JSON.stringify(planPayload, null, 2), 'utf8');
-
-  const tracePayload = {
-    projectId,
-    topic,
-    generatedAt: new Date().toISOString(),
-    elapsedMs: Date.now() - startedAt,
-    input: {
-      subtitleClipCount: subtitleClips.length,
-      videoDurationSeconds,
-      targetMomentCount,
-    },
-    prompt: {
-      sourcePath: promptSourcePath,
-      promptSnapshotPath: null,
-      promptChars: null,
-      promptMentionsSkill: aiPromptMentionsSkill,
-      preview: 'Prompt is built by buildAnimationTimelineWithResearchPrompt (timeline+research combined) in animationTimelinePrompt.ts.',
-    },
-    ai: {
-      usedAgent: aiUsedAgent,
-      fallbackWithoutAgent: aiFallbackWithoutAgent,
-      promptMentionsSkill: aiPromptMentionsSkill,
-      usedExaResearch: aiUsedExaResearch,
-      usedExaDirection: aiUsedExaDirection,
-      usedRemotionSkill: aiUsedRemotionSkill,
-      researchSummaryPreview: summarizeForLog(aiResearchSummary || '', 320),
-      researchDiagnostics: aiResearchDiagnostics,
-      outputChars: aiOutput.length,
-      diagnostics: aiDiagnostics,
-      parsedMomentCount,
-      usedFallbackMoments,
-    },
-    clipCode: {
-      attempted: normalizedPlan.moments.length,
-      generated: clipCodeGeneratedCount,
-      usedExaCount: clipCodeUsedExaCount,
-      usedRemotionSkillCount: clipCodeUsedSkillCount,
-      strictMode: true,
-    },
-    render: {
-      attempted: normalizedPlan.moments.length,
-      succeeded: renderedMoments.length,
-      failed: renderFailures.length,
-      failures: renderFailures,
-    },
-    outputs: {
-      remotionProjectDir,
-      renderedProjectDir,
-      planPath,
-      renderedFiles: renderedMoments.map((m) => m.outputPath),
-    },
-  };
-
-  const tracePath = path.join(remotionProjectDir, DEBUG_TRACE_FILENAME);
-  try {
-    fs.writeFileSync(tracePath, JSON.stringify(tracePayload, null, 2), 'utf8');
-  } catch (error) {
-    animationWarn('Failed writing debug trace file', {
-      projectId,
-      tracePath,
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
-
-  animationInfo('Generation finished', {
-    projectId,
-    elapsedMs: Date.now() - startedAt,
-    renderedMoments: renderedMoments.length,
-    overlayTrackCount: overlayTracks.length,
-    planPath,
-    tracePath,
-  });
+  fs.writeFileSync(path.join(remotionProjectDir, PLAN_FILENAME), JSON.stringify(planPayload, null, 2), 'utf8');
 
   return {
     animationPlan: finalPlan,
@@ -1137,4 +1513,61 @@ export async function generateAnimationPlanAndRender(params: {
     remotionProjectDir,
     renderedProjectDir,
   };
+}
+
+export async function generateAnimationPlanDraft(params: {
+  projectId: string;
+  topic: string;
+  subtitleClips: SubtitleClip[];
+  videoDurationSeconds: number;
+}): Promise<AnimationPlanDraftResult> {
+  return prepareAnimationPlanReview(params);
+}
+
+export async function approveAnimationPlanRender(params: {
+  projectId: string;
+  topic: string;
+  promptOverrides?: Record<string, string>;
+}): Promise<{
+  animationPlan: AnimationPlan;
+  overlayTracks: Track[];
+  remotionProjectDir: string;
+  renderedProjectDir: string;
+}> {
+  const { projectId, topic, promptOverrides } = params;
+  const review = loadAnimationPlanReview(projectId);
+  if (!review) {
+    throw new Error('No pending animation plan review found. Create the animation plan first.');
+  }
+
+  const { remotionProjectDir, renderedProjectDir } = getAnimationProjectDirs(projectId);
+  return renderAnimationPlanFromReview({
+    projectId,
+    topic,
+    review,
+    promptOverrides,
+    remotionProjectDir,
+    renderedProjectDir,
+  });
+}
+
+export async function generateAnimationPlanAndRender(params: {
+  projectId: string;
+  topic: string;
+  subtitleClips: SubtitleClip[];
+  videoDurationSeconds: number;
+}): Promise<{
+  animationPlan: AnimationPlan;
+  overlayTracks: Track[];
+  remotionProjectDir: string;
+  renderedProjectDir: string;
+}> {
+  const draft = await prepareAnimationPlanReview(params);
+  return renderAnimationPlanFromReview({
+    projectId: params.projectId,
+    topic: params.topic,
+    review: draft.review,
+    remotionProjectDir: draft.remotionProjectDir,
+    renderedProjectDir: draft.renderedProjectDir,
+  });
 }

@@ -6,6 +6,7 @@ import { jsonResponse } from '../utils/http';
 const AUDIO_ASSETS_DIR = path.join(process.cwd(), 'storage', 'audio_assets');
 const MUSIC_DIR = path.join(AUDIO_ASSETS_DIR, 'music');
 const SFX_DIR = path.join(AUDIO_ASSETS_DIR, 'sfx');
+const REFERENCE_AUDIO_DIR = path.join(process.cwd(), 'storage', 'reference_audio');
 
 const AUDIO_EXTS = new Set(['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac']);
 
@@ -60,6 +61,37 @@ export async function listSfxAssets(_ctx: HttpContext): Promise<HandlerResult> {
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to list SFX assets',
+    });
+  }
+}
+
+export async function listReferenceAudioAssets(_ctx: HttpContext): Promise<HandlerResult> {
+  try {
+    if (!fs.existsSync(REFERENCE_AUDIO_DIR)) {
+      return jsonResponse(200, { success: true, assets: [], count: 0 });
+    }
+    const entries = fs.readdirSync(REFERENCE_AUDIO_DIR, { withFileTypes: true });
+    const assets: AudioAsset[] = [];
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const ext = path.extname(entry.name).toLowerCase();
+      if (!AUDIO_EXTS.has(ext)) continue;
+      const fullPath = path.join(REFERENCE_AUDIO_DIR, entry.name);
+      const stat = fs.statSync(fullPath);
+      assets.push({
+        filename: entry.name,
+        path: path.join('reference_audio', entry.name).replace(/\\/g, '/'),
+        size: stat.size,
+        updatedAt: stat.mtime.toISOString(),
+      });
+    }
+    assets.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    console.log('[Audio Assets] list reference_audio', { count: assets.length });
+    return jsonResponse(200, { success: true, assets, count: assets.length });
+  } catch (error) {
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to list reference audio assets',
     });
   }
 }

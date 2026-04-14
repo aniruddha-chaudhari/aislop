@@ -365,13 +365,26 @@ export default function AudioBrowser() {
     }
   };
 
-  const regenerateAudioFile = async (filename: string, sessionId: string, currentText: string) => {
+  const regenerateAudioFile = async (
+    filename: string,
+    sessionId: string,
+    currentText: string,
+    dialogueCharacter?: string
+  ) => {
     setRegeneratingIndex(filename);
     setError('');
 
+    const storedNarratorRef =
+      typeof window !== 'undefined'
+        ? (localStorage.getItem('narratorReferenceAudio') || '').trim()
+        : '';
+
     const requestBody = {
       ...regenerateParams,
-      text: regenerateParams.text.trim() !== '' ? regenerateParams.text.trim() : currentText
+      text: regenerateParams.text.trim() !== '' ? regenerateParams.text.trim() : currentText,
+      ...(dialogueCharacter === 'Narrator' && storedNarratorRef
+        ? { narratorReferenceAudio: storedNarratorRef }
+        : {}),
     };
 
     try {
@@ -768,7 +781,14 @@ export default function AudioBrowser() {
 
                               <div className="flex gap-2 mt-4">
                                 <button
-                                  onClick={() => regenerateAudioFile(dialogue.audioFile!.filename, session.sessionId, dialogue.text)}
+                                  onClick={() =>
+                                    regenerateAudioFile(
+                                      dialogue.audioFile!.filename,
+                                      session.sessionId,
+                                      dialogue.text,
+                                      dialogue.character
+                                    )
+                                  }
                                   className="flex-1 px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm rounded-lg transition"
                                   disabled={regeneratingIndex === dialogue.audioFile!.filename}
                                 >

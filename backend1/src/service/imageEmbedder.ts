@@ -691,7 +691,7 @@ Return a JSON object with this structure:
 
       // ═══════════════════════════════════════════════════════════════════════════
       // 🚀 OPENCODE-BASED IMAGE PLAN GENERATION (with Exa MCP web research)
-      // Uses Gemini 3 Pro for smarter analysis + real-time web research
+      // Uses OpenCode `pro` (GPT 5.3 Codex) + Exa MCP for web research
       // ═══════════════════════════════════════════════════════════════════════════
 
       // 🎯 10. PREPARE ENHANCED DIALOGUE SEQUENCE FOR AI
@@ -815,13 +815,12 @@ CRITICAL TIMING RULES:
 - Don't add an image for every dialogue line - be selective!
 - Mobile-optimized: keep diagrams simple (3-5 components max)`;
 
-      console.log('🚀 [ImagePlan] Using OpenCode with Gemini 3 Pro for image plan generation...');
+      console.log('🚀 [ImagePlan] Using OpenCode (GPT 5.3 Codex) for image plan generation...');
       console.log('🔍 [ImagePlan] OpenCode will use Exa MCP for web research on:', topic);
 
-      // Run OpenCode with Gemini 3 Pro model
       const opencodeOutput = await opencodeRun({
         prompt: opencodePrompt,
-        model: 'pro', // Use Gemini 3 Pro for better analysis
+        model: 'pro',
         format: 'json',
         quiet: true,
       });

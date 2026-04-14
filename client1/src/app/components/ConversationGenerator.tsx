@@ -121,6 +121,11 @@ export default function ConversationGenerator() {
   const [videoStyle, setVideoStyle] = useState<string>('standard');
   const [availableCharacters, setAvailableCharacters] = useState<string[]>(['Stewie', 'Peter', 'Narrator']);
   const [singleVoiceCharacter, setSingleVoiceCharacter] = useState<string>('Narrator');
+  const [narratorReferenceAudio, setNarratorReferenceAudio] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    return localStorage.getItem('narratorReferenceAudio') || '';
+  });
+  const [referenceAudioOptions, setReferenceAudioOptions] = useState<Array<{ filename: string; path: string }>>([]);
   const [selectedCharacter, setSelectedCharacter] = useState<string>('Stewie');
   const [ttsParameters, setTtsParameters] = useState({
     exaggeration: 0.7,
@@ -201,6 +206,24 @@ export default function ConversationGenerator() {
     };
 
     loadAudioConfig();
+  }, []);
+
+  useEffect(() => {
+    const loadReferenceAudio = async () => {
+      try {
+        const res = await fetch(API_ENDPOINTS.referenceAudio, { method: 'GET' });
+        if (!res.ok) return;
+        const data = await res.json();
+        const assets = Array.isArray(data?.assets) ? data.assets : [];
+        const normalized = assets
+          .map((a: any) => ({ filename: String(a?.filename || ''), path: String(a?.path || '') }))
+          .filter((a: any) => a.filename);
+        setReferenceAudioOptions(normalized);
+      } catch {
+        // ignore
+      }
+    };
+    loadReferenceAudio();
   }, []);
 
   useEffect(() => {
@@ -349,6 +372,7 @@ export default function ConversationGenerator() {
           videoStyle,
           characterSet: isSingleVoiceStyle ? 'single' : 'duo',
           character: isSingleVoiceStyle ? singleVoiceCharacter : undefined,
+          narratorReferenceAudio: isSingleVoiceStyle && singleVoiceCharacter === 'Narrator' ? narratorReferenceAudio : undefined,
           ...ttsParameters
         }),
         mode: 'cors',
@@ -810,6 +834,12 @@ export default function ConversationGenerator() {
     setError('');
 
     try {
+      const lineCharacter = conversation[index]?.character;
+      const narratorPayload =
+        lineCharacter === 'Narrator' && narratorReferenceAudio.trim() !== ''
+          ? { narratorReferenceAudio: narratorReferenceAudio.trim() }
+          : {};
+
       const response = await fetch(
         `${API_BASE_URL}/api/audio/regenerate/${sessionId}/${audioFiles[index].filename}`,
         {
@@ -817,7 +847,7 @@ export default function ConversationGenerator() {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify(regenerateParams),
+          body: JSON.stringify({ ...regenerateParams, ...narratorPayload }),
         }
       );
 
@@ -912,6 +942,37 @@ export default function ConversationGenerator() {
           </div>
         )}
       </div>
+
+      {isSingleVoiceStyle && singleVoiceCharacter === 'Narrator' && (
+        <div className="rounded-md border border-[var(--border)] bg-[var(--secondary)] p-3 sm:p-4">
+          <label htmlFor="narratorReferenceAudio" className="mb-2 block text-sm font-medium text-[var(--foreground)]">
+            Narrator reference audio
+          </label>
+          <select
+            id="narratorReferenceAudio"
+            value={narratorReferenceAudio}
+            onChange={(e) => {
+              const v = e.target.value;
+              setNarratorReferenceAudio(v);
+              try {
+                localStorage.setItem('narratorReferenceAudio', v);
+              } catch {}
+            }}
+            className="w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm text-[var(--foreground)] focus:border-transparent focus:ring-2 focus:ring-[var(--ring)]"
+            disabled={loading}
+          >
+            <option value="">Default (backend)</option>
+            {referenceAudioOptions.map((a) => (
+              <option key={a.filename} value={a.filename}>
+                {a.filename}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-[var(--editor-muted)]">
+            Files are loaded from `backend1/storage/reference_audio`.
+          </p>
+        </div>
+      )}
 
       <div>
         <label htmlFor="prompt" className="mb-2 block text-sm font-medium text-[var(--foreground)]">

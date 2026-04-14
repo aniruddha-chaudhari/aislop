@@ -6,10 +6,21 @@ import { PrismaClient } from '../generated/prisma';
 import type { Project, SubtitleClip, OverlayClip, CharacterClip, MusicClip, SfxClip } from '../schema/project';
 import { getCharacterImagePath } from '../utils/characterImages';
 import { computeOverlayPlacement } from './overlayTransform';
+import {
+  fixSubtitleClipsTimelineNonOverlap,
+  clampAssEventToClip,
+  getSubtitleWordText,
+} from './subtitleClipNormalize';
 
 const prisma = new PrismaClient();
 const TEMP_DIR = path.join(process.cwd(), 'storage', 'temp');
 const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
+
+/**
+ * Gap between karaoke tokens. Plain spaces can collapse next to {\\c...} in libass/ffmpeg.
+ * En space (U+2002) is narrower than em space but still a stable separator.
+ */
+const ASS_INTER_WORD_GAP = '\u2002';
 
 // Set ffmpeg path
 const customFfmpegPath = process.env.CUSTOM_FFMPEG_PATH;
@@ -27,6 +38,7 @@ const PREVIEW_WIDTH = 360;
 const PREVIEW_HEIGHT = 640;
 const SCALE = PREVIEW_HEIGHT / 1920; // Same proportion as timelineCompiler 1080x1920
 const PREVIEW_BITRATE = '500k'; // Low bitrate for fast generation
+const AUDIO_TAIL_BUFFER_SEC = 1.2;
 
 // Overlay base size (legacy default scale=0.5) and legacy top offset.
 const OVERLAY_BASE_W = Math.floor(960 * (PREVIEW_WIDTH / 1080)); // 320 at 360px width
@@ -64,18 +76,12 @@ function logPreviewServiceTelemetry(event: string, data: Record<string, unknown>
   });
 }
 
-function isImageOverlayTrackId(trackId: string): boolean {
-  return trackId === 't_imgs' || /^t_imgs_\d+$/.test(trackId);
-}
-
-function isAnimationOverlayTrackId(trackId: string): boolean {
-  return trackId === 't_anim' || /^t_anim_\d+$/.test(trackId);
-}
-
 function isPlanOverlayTrack(track: { type?: string; id?: string }): boolean {
   if (track.type !== 'overlay') return false;
   if (!track.id || track.id === 't_overlay_template') return false;
-  return isImageOverlayTrackId(track.id) || isAnimationOverlayTrackId(track.id);
+  // Include any non-template overlay track so manually imported media-library clips
+  // render in preview/export, not only AI image/animation plan tracks.
+  return true;
 }
 
 function resolveOverlayAssetPath(clip: OverlayClip, audioSessionId: string): string {
@@ -110,7 +116,7 @@ function addOverlayInput(
 type TimeRange = { start: number; end: number };
 
 function isReplaceOverlayClip(clip: OverlayClip): boolean {
-  return clip.displayMode === 'replace';
+  return clip.displayMode === 'replace' && clip.planStatus !== 'draft';
 }
 
 function buildReplaceOverlayRanges(clips: OverlayClip[]): TimeRange[] {
@@ -307,6 +313,23 @@ function formatAssTime(seconds: number): string {
   return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${centisecs.toString().padStart(2, '0')}`;
 }
 
+function probeMediaDurationSeconds(filePath: string): Promise<number> {
+  return new Promise<number>((resolve) => {
+    if (!filePath || !fs.existsSync(filePath)) {
+      resolve(0);
+      return;
+    }
+    ffmpeg.ffprobe(filePath, (err: Error | null, metadata: any) => {
+      if (err) {
+        resolve(0);
+        return;
+      }
+      const d = Number(metadata?.format?.duration || 0);
+      resolve(Number.isFinite(d) && d > 0 ? d : 0);
+    });
+  });
+}
+
 /**
  * Enrich subtitle clips with word-level timestamps (for karaoke) when missing.
  * Fetches WhisperX alignment per dialogue, matching backend videoGenerator behavior.
@@ -368,6 +391,8 @@ function generateAssFromTimeline(projectId: string, subtitleClips: SubtitleClip[
   const outputPath = path.join(TEMP_DIR, `preview_${projectId}_subs.ass`);
   if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
+  const clips = fixSubtitleClipsTimelineNonOverlap(subtitleClips);
+
   let assContent = `[Script Info]
 Title: Mobile-Optimized Dialogue with 3-Word Rolling Display
 ScriptType: v4.00+
@@ -386,14 +411,14 @@ Style: Highlight,Arial-Black,32,&H0000FFFF,&H000000FF,&H00000000,&H80000000,1,0,
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
 
-  for (const clip of subtitleClips.sort((a, b) => a.start - b.start)) {
+  for (const clip of clips.sort((a, b) => a.start - b.start)) {
     const { words } = clip;
     const speaker = clip.speaker || (clip as { character?: string }).character || 'Speaker';
 
     if (words && words.length > 0) {
       for (let i = 0; i < words.length; i += 3) {
         let wordGroup = words.slice(i, Math.min(i + 3, words.length));
-        const fullText = wordGroup.map(w => (w as { word: string }).word || w).join(' ');
+        const fullText = wordGroup.map((w) => getSubtitleWordText(w)).join(' ');
         const isTooLong = fullText.length > 25;
 
         if (isTooLong && wordGroup.length > 2) {
@@ -401,39 +426,51 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
           const thirdWord = wordGroup[2];
 
           firstTwoWords.forEach((word, groupIndex) => {
-            const wordStart = clip.start + (word as { start: number }).start;
-            const wordEnd = groupIndex === firstTwoWords.length - 1
+            let wordStart = clip.start + (word as { start: number }).start;
+            let wordEnd = groupIndex === firstTwoWords.length - 1
               ? clip.start + (thirdWord as { start: number }).start
               : clip.start + (firstTwoWords[groupIndex + 1] as { start: number }).start;
+            ({ start: wordStart, end: wordEnd } = clampAssEventToClip(
+              wordStart,
+              wordEnd,
+              clip.start,
+              clip.duration
+            ));
 
             let subtitleText = '';
             firstTwoWords.forEach((groupWord, wordIdx) => {
-              const wordText = (groupWord as { word: string }).word || groupWord;
+              const wordText = getSubtitleWordText(groupWord);
               if (wordIdx === groupIndex) {
                 subtitleText += `{\\c&H0000FFFF&}${wordText}{\\c&H00FFFFFF&}`;
               } else {
                 subtitleText += wordText;
               }
-              if (wordIdx < firstTwoWords.length - 1) subtitleText += ' ';
+              if (wordIdx < firstTwoWords.length - 1) subtitleText += ASS_INTER_WORD_GAP;
             });
-            subtitleText += `\\N${(thirdWord as { word: string }).word || thirdWord}`;
+            subtitleText += `\\N${getSubtitleWordText(thirdWord)}`;
 
             assContent += `Dialogue: 0,${formatAssTime(wordStart)},${formatAssTime(wordEnd)},Normal,${speaker},0,0,0,,${subtitleText}\n`;
           });
 
-          const thirdWordStart = clip.start + (thirdWord as { start: number }).start;
-          const thirdWordEnd = i + 2 === words.length - 1
+          let thirdWordStart = clip.start + (thirdWord as { start: number }).start;
+          let thirdWordEnd = i + 2 === words.length - 1
             ? clip.start + (thirdWord as { end: number }).end
             : words[i + 3] ? clip.start + (words[i + 3] as { start: number }).start
             : clip.start + (thirdWord as { end: number }).end;
+          ({ start: thirdWordStart, end: thirdWordEnd } = clampAssEventToClip(
+            thirdWordStart,
+            thirdWordEnd,
+            clip.start,
+            clip.duration
+          ));
 
           let subtitleText = '';
           firstTwoWords.forEach((groupWord, wordIdx) => {
-            const wordText = (groupWord as { word: string }).word || groupWord;
+            const wordText = getSubtitleWordText(groupWord);
             subtitleText += wordText;
-            if (wordIdx < firstTwoWords.length - 1) subtitleText += ' ';
+            if (wordIdx < firstTwoWords.length - 1) subtitleText += ASS_INTER_WORD_GAP;
           });
-          subtitleText += `\\N{\\c&H0000FFFF&}${(thirdWord as { word: string }).word || thirdWord}{\\c&H00FFFFFF&}`;
+          subtitleText += `\\N{\\c&H0000FFFF&}${getSubtitleWordText(thirdWord)}{\\c&H00FFFFFF&}`;
 
           assContent += `Dialogue: 0,${formatAssTime(thirdWordStart)},${formatAssTime(thirdWordEnd)},Normal,${speaker},0,0,0,,${subtitleText}\n`;
 
@@ -441,20 +478,26 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         }
 
         wordGroup.forEach((word, groupIndex) => {
-          const wordStart = clip.start + (word as { start: number }).start;
-          const wordEnd = groupIndex === wordGroup.length - 1
+          let wordStart = clip.start + (word as { start: number }).start;
+          let wordEnd = groupIndex === wordGroup.length - 1
             ? (i + groupIndex === words.length - 1 ? clip.start + (word as { end: number }).end : words[i + groupIndex + 1] ? clip.start + (words[i + groupIndex + 1] as { start: number }).start : clip.start + (word as { end: number }).end)
             : clip.start + (wordGroup[groupIndex + 1] as { start: number }).start;
+          ({ start: wordStart, end: wordEnd } = clampAssEventToClip(
+            wordStart,
+            wordEnd,
+            clip.start,
+            clip.duration
+          ));
 
           let subtitleText = '';
           wordGroup.forEach((groupWord, wordIdx) => {
-            const wordText = (groupWord as { word: string }).word || groupWord;
+            const wordText = getSubtitleWordText(groupWord);
             if (wordIdx === groupIndex) {
               subtitleText += `{\\c&H0000FFFF&}${wordText}{\\c&H00FFFFFF&}`;
             } else {
               subtitleText += wordText;
             }
-            if (wordIdx < wordGroup.length - 1) subtitleText += ' ';
+            if (wordIdx < wordGroup.length - 1) subtitleText += ASS_INTER_WORD_GAP;
           });
 
           assContent += `Dialogue: 0,${formatAssTime(wordStart)},${formatAssTime(wordEnd)},Normal,${speaker},0,0,0,,${subtitleText}\n`;
@@ -604,7 +647,7 @@ export async function generateTimelinePreview(
       return { success: false, error: 'No audio files in session' };
     }
 
-    const duration = timeline?.duration || session.totalDuration || 60;
+    let duration = timeline?.duration || session.totalDuration || 60;
     const templatePath = resolveTemplatePath(template.path);
 
     if (!fs.existsSync(templatePath)) {
@@ -637,6 +680,11 @@ export async function generateTimelinePreview(
       concatCmd.on('error', (err: Error) => reject(err));
       concatCmd.run();
     });
+    // Prevent tail clipping when stored timeline/session duration is slightly shorter than actual audio.
+    const concatenatedDuration = await probeMediaDurationSeconds(concatenatedAudioPath);
+    if (concatenatedDuration > 0) {
+      duration = Math.max(duration, concatenatedDuration + AUDIO_TAIL_BUFFER_SEC);
+    }
 
     const planOverlayTracks = (timeline?.tracks ?? []).filter((t: any) => isPlanOverlayTrack(t));
     const characterTrack = timeline?.tracks?.find((t: any) => t.type === 'character');
@@ -671,7 +719,8 @@ export async function generateTimelinePreview(
       const opts = videoStart > 0 ? ['-ss', videoStart.toString(), '-stream_loop', '-1'] : ['-stream_loop', '-1'];
       command.input(templatePath).inputOptions(opts);
     }
-    command.input(concatenatedAudioPath).inputOptions(['-t', duration.toString()]);
+    // Do not trim dialogue input at input level; keep full tail and trim only at output level.
+    command.input(concatenatedAudioPath);
 
     let nextInputIndex = 2;
     const musicInputs: AudioInputRef[] = [];
@@ -706,6 +755,7 @@ export async function generateTimelinePreview(
 
     const overlayInputs: { clip: OverlayClip; inputIndex: number; overlayPath: string }[] = [];
     overlayClips.forEach((clip: OverlayClip) => {
+      if (clip.planStatus === 'draft') return;
       const overlayPath = resolveOverlayAssetPath(clip, audioSessionId);
       if (fs.existsSync(overlayPath)) {
         addOverlayInput(command, overlayPath, clip, duration);
@@ -973,7 +1023,7 @@ export async function generateTimelinePreviewHls(
       return { success: false, error: 'No audio files in session' };
     }
 
-    const duration = timeline?.duration || session.totalDuration || 60;
+    let duration = timeline?.duration || session.totalDuration || 60;
     const templatePath = resolveTemplatePath(template.path);
 
     if (!fs.existsSync(templatePath)) {
@@ -1010,6 +1060,11 @@ export async function generateTimelinePreviewHls(
       concatCmd.on('error', (err: Error) => reject(err));
       concatCmd.run();
     });
+    // Prevent tail clipping when stored timeline/session duration is slightly shorter than actual audio.
+    const concatenatedDuration = await probeMediaDurationSeconds(concatenatedAudioPath);
+    if (concatenatedDuration > 0) {
+      duration = Math.max(duration, concatenatedDuration + AUDIO_TAIL_BUFFER_SEC);
+    }
 
     const planOverlayTracks = (timeline?.tracks ?? []).filter((t: any) => isPlanOverlayTrack(t));
     const characterTrack = timeline?.tracks?.find((t: any) => t.type === 'character');
@@ -1044,7 +1099,8 @@ export async function generateTimelinePreviewHls(
       const opts = videoStart > 0 ? ['-ss', videoStart.toString(), '-stream_loop', '-1'] : ['-stream_loop', '-1'];
       command.input(templatePath).inputOptions(opts);
     }
-    command.input(concatenatedAudioPath).inputOptions(['-t', duration.toString()]);
+    // Do not trim dialogue input at input level; keep full tail and trim only at output level.
+    command.input(concatenatedAudioPath);
 
     let nextInputIndex = 2;
     const musicInputs: AudioInputRef[] = [];
@@ -1079,6 +1135,7 @@ export async function generateTimelinePreviewHls(
 
     const overlayInputs: { clip: OverlayClip; inputIndex: number; overlayPath: string }[] = [];
     overlayClips.forEach((clip: OverlayClip) => {
+      if (clip.planStatus === 'draft') return;
       const overlayPath = resolveOverlayAssetPath(clip, audioSessionId);
       if (fs.existsSync(overlayPath)) {
         addOverlayInput(command, overlayPath, clip, duration);
@@ -1576,6 +1633,7 @@ export async function generateTimelineSegmentPreview(
 
     const overlayInputs: { clip: OverlayClip; inputIndex: number; overlayPath: string }[] = [];
     overlayClips.forEach((clip: OverlayClip) => {
+      if (clip.planStatus === 'draft') return;
       const overlayPath = resolveOverlayAssetPath(clip, audioSessionId);
       if (fs.existsSync(overlayPath)) {
         addOverlayInput(command, overlayPath, clip, segmentDuration);

@@ -19,12 +19,40 @@ import fs from 'fs';
 import path from 'path';
 import { generateSfxTrack } from '../service/sfxService';
 import {
+  approveAnimationPlanRender,
   cleanupAnimationCacheForProject,
-  generateAnimationPlanAndRender,
+  generateAnimationPlanDraft,
   isAnimationOverlayTrack,
+  loadAnimationPlanReview,
 } from '../service/animationPlanService';
 
 const ANIMATION_DEBUG_ENABLED = process.env.ANIMATION_DEBUG === '1';
+
+function hasDraftAnimationClip(track: Track): boolean {
+  if (!isAnimationOverlayTrack(track)) return false;
+  return track.clips.some(
+    (clip) =>
+      clip.kind === 'overlay' &&
+      typeof (clip as OverlayClip).animationMomentId === 'string' &&
+      ((clip as OverlayClip).planStatus ?? 'draft') === 'draft'
+  );
+}
+
+function collectPromptOverridesFromTimeline(tracks: Track[]): Record<string, string> {
+  const overrides: Record<string, string> = {};
+  for (const track of tracks) {
+    if (!isAnimationOverlayTrack(track)) continue;
+    for (const clip of track.clips) {
+      if (clip.kind !== 'overlay') continue;
+      const overlay = clip as OverlayClip;
+      const momentId = typeof overlay.animationMomentId === 'string' ? overlay.animationMomentId.trim() : '';
+      const promptText = typeof overlay.promptText === 'string' ? overlay.promptText.trim() : '';
+      if (!momentId || !promptText) continue;
+      overrides[momentId] = promptText;
+    }
+  }
+  return overrides;
+}
 
 function logPreviewTelemetry(event: string, data: Record<string, unknown> = {}): void {
   console.info('[PreviewTelemetry]', {
@@ -522,6 +550,21 @@ export async function generateAnimationPlanForProject(ctx: HttpContext): Promise
         : (await getSessionDuration(project.audioSessionId)) || 60;
 
     const topic = body.topic || project.name || 'Educational short video';
+    const existingTracks = (project.timeline?.tracks ?? []) as Track[];
+    const hasDraftPlanInTimeline = existingTracks.some((track) => hasDraftAnimationClip(track));
+    if (hasDraftPlanInTimeline) {
+      const existingReview = loadAnimationPlanReview(projectId);
+      return jsonResponse(200, {
+        success: true,
+        requiresApproval: true,
+        animationPlan: existingReview?.animationPlan,
+        review: existingReview,
+        project,
+        timeline: project.timeline,
+        message: 'Animation draft plan already exists. Review clips in the timeline and approve when ready.',
+      });
+    }
+
     if (ANIMATION_DEBUG_ENABLED) {
       console.info('[Animation Plan] request received', {
         projectId,
@@ -532,11 +575,103 @@ export async function generateAnimationPlanForProject(ctx: HttpContext): Promise
       });
     }
 
-    const result = await generateAnimationPlanAndRender({
+    const result = await generateAnimationPlanDraft({
       projectId,
       topic,
       subtitleClips,
       videoDurationSeconds: duration,
+    });
+
+    const firstAnimIndex = existingTracks.findIndex((t) => isAnimationOverlayTrack(t));
+    const isImageOverlayTrack = (t: Track) =>
+      t.type === 'overlay' && (t.id === 't_imgs' || /^t_imgs_\d+$/.test(t.id));
+
+    let tracks: Track[];
+    if (firstAnimIndex >= 0) {
+      const before = existingTracks.slice(0, firstAnimIndex).filter((t) => !isAnimationOverlayTrack(t));
+      const after = existingTracks.slice(firstAnimIndex).filter((t) => !isAnimationOverlayTrack(t));
+      tracks = [...before, ...result.overlayTracks, ...after];
+    } else {
+      const withoutAnim = existingTracks.filter((t) => !isAnimationOverlayTrack(t));
+      const lastImageIndex = withoutAnim.reduce(
+        (idx, track, i) => (isImageOverlayTrack(track) ? i : idx),
+        -1
+      );
+      if (lastImageIndex >= 0) {
+        tracks = [
+          ...withoutAnim.slice(0, lastImageIndex + 1),
+          ...result.overlayTracks,
+          ...withoutAnim.slice(lastImageIndex + 1),
+        ];
+      } else {
+        tracks = [...withoutAnim, ...result.overlayTracks];
+      }
+    }
+    const timeline = { duration, tracks };
+    const updatedProject = await projectService.updateTimeline(projectId, timeline);
+
+    if (ANIMATION_DEBUG_ENABLED) {
+      console.info('[Animation Plan] request completed', {
+        projectId,
+        generatedMoments: result.animationPlan.moments.length,
+        remotionProjectDir: result.remotionProjectDir,
+        renderedProjectDir: result.renderedProjectDir,
+        reviewOnly: true,
+      });
+    }
+
+    return jsonResponse(200, {
+      success: true,
+      requiresApproval: true,
+      animationPlan: result.animationPlan,
+      review: result.review,
+      project: updatedProject,
+      timeline,
+      message: 'Animation plan created. Review and approve to render.',
+    });
+  } catch (error) {
+    console.error('[Animation Plan] request failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to generate animation plan',
+    });
+  }
+}
+
+export async function approveAnimationPlanForProject(ctx: HttpContext): Promise<HandlerResult> {
+  try {
+    const projectId = ctx.params?.id;
+    const body = (ctx.body as any) || {};
+
+    if (!projectId) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Project ID is required',
+      });
+    }
+
+    const project = await projectService.getProject(projectId);
+    if (!project) {
+      return jsonResponse(404, {
+        success: false,
+        error: 'Project not found',
+      });
+    }
+
+    const existingDuration = project.timeline?.duration;
+    const duration =
+      typeof existingDuration === 'number' && existingDuration > 0
+        ? existingDuration
+        : (await getSessionDuration(project.audioSessionId)) || 60;
+
+    const topic = body.topic || project.name || 'Educational short video';
+    const promptOverrides = collectPromptOverridesFromTimeline((project.timeline?.tracks ?? []) as Track[]);
+    const result = await approveAnimationPlanRender({
+      projectId,
+      topic,
+      promptOverrides,
     });
 
     const existingTracks = (project.timeline?.tracks ?? []) as Track[];
@@ -569,30 +704,20 @@ export async function generateAnimationPlanForProject(ctx: HttpContext): Promise
     const timeline = { duration, tracks };
     const updatedProject = await projectService.updateTimeline(projectId, timeline);
 
-    if (ANIMATION_DEBUG_ENABLED) {
-      console.info('[Animation Plan] request completed', {
-        projectId,
-        generatedMoments: result.animationPlan.moments.length,
-        overlayTrackCount: result.overlayTracks.length,
-        remotionProjectDir: result.remotionProjectDir,
-        renderedProjectDir: result.renderedProjectDir,
-      });
-    }
-
     return jsonResponse(200, {
       success: true,
       animationPlan: result.animationPlan,
       project: updatedProject,
       timeline,
-      message: 'Animation plan generated successfully',
+      message: 'Animation plan approved and rendered successfully',
     });
   } catch (error) {
-    console.error('[Animation Plan] request failed', {
+    console.error('[Animation Plan Approval] request failed', {
       error: error instanceof Error ? error.message : String(error),
     });
     return jsonResponse(500, {
       success: false,
-      error: error instanceof Error ? error.message : 'Failed to generate animation plan',
+      error: error instanceof Error ? error.message : 'Failed to approve animation plan',
     });
   }
 }

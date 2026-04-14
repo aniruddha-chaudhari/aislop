@@ -48,6 +48,12 @@ const prisma = new PrismaClient();
 // WhisperX API configuration
 const WHISPERX_API_URL = 'http://127.0.0.1:6000'; // Adjust this URL as needed
 
+/**
+ * Gap between karaoke tokens. Plain spaces can collapse next to {\\c...} in libass/ffmpeg.
+ * En space (U+2002) is narrower than em space but still a stable separator.
+ */
+const ASS_INTER_WORD_GAP = '\u2002';
+
 // Set ffmpeg path - Use custom path if available, otherwise use installer
 // To use a custom FFmpeg: set CUSTOM_FFMPEG_PATH environment variable in .env file
 // Example: CUSTOM_FFMPEG_PATH=C:\ffmpeg\bin\ffmpeg.exe
@@ -628,7 +634,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             }
 
             if (wordIdx < firstTwoWords.length - 1) {
-              subtitleText += ' ';
+              subtitleText += ASS_INTER_WORD_GAP;
             }
           });
 
@@ -651,7 +657,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
           const wordText = groupWord.word || groupWord;
           subtitleText += wordText;
           if (wordIdx < firstTwoWords.length - 1) {
-            subtitleText += ' ';
+            subtitleText += ASS_INTER_WORD_GAP;
           }
         });
 
@@ -690,7 +696,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
           // Add space between words (except for last word)
           if (wordIdx < wordGroup.length - 1) {
-            subtitleText += ' ';
+            subtitleText += ASS_INTER_WORD_GAP;
           }
         });
 

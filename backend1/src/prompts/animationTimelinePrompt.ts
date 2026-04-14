@@ -51,7 +51,7 @@ TASK (follow in order)
    - Prefer segments that introduce a key concept, define a term, compare things, or state a punchy conclusion.
    - Skip filler, greetings, or very short lines unless they are the only content.
    - Use at most TARGET_MOMENTS (${targetMomentCount}) and never exceed HARD_MOMENT_CAP (${hardMomentCap}).
-   - For videos ≤ 12s, use 2 moments with one clear rest gap in between.
+   - For videos ≤ 12s, use at most TARGET_MOMENTS (${targetMomentCount}) with clear rest gaps between beats (do not animate the whole clip wall-to-wall).
 
 3. FOR EACH CHOSEN MOMENT:
    - start: Set to the EXACT start time (in seconds) of the dialogue segment you picked. Copy the number from the segment's "[X.XXs-..." (e.g. if the line is [5.20s-9.00s], use start: 5.2 or 5.20). Do not invent round numbers like 5.0 or 10.0 unless they appear in the sequence.

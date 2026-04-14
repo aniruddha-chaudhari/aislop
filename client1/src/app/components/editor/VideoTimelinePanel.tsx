@@ -36,16 +36,20 @@ type Props = {
   onGenerateSubtitlesAndChars?: () => void;
   onGenerateImagePlan?: () => void;
   onGenerateAnimationPlan?: () => void;
+  onApproveAnimationPlan?: () => void;
   onGenerateSfxPlan?: () => void;
   isGeneratingDraft?: boolean;
   isGeneratingImagePlan?: boolean;
   isGeneratingAnimationPlan?: boolean;
+  isApprovingAnimationPlan?: boolean;
   isGeneratingSfxPlan?: boolean;
   isExporting?: boolean;
   exportProgress?: number;
   hasSubtitlesAndChars?: boolean;
   hasImagePlan?: boolean;
   hasAnimationPlan?: boolean;
+  hasDraftAnimationPlan?: boolean;
+  hasApprovedAnimationPlan?: boolean;
   message?: { type: 'info' | 'error' | 'success'; text: string } | null;
   exportedVideoFilename?: string | null;
   onDownloadExported?: () => void;
@@ -194,16 +198,20 @@ export default function VideoTimelinePanel({
   onGenerateSubtitlesAndChars,
   onGenerateImagePlan,
   onGenerateAnimationPlan,
+  onApproveAnimationPlan,
   onGenerateSfxPlan,
   isGeneratingDraft,
   isGeneratingImagePlan,
   isGeneratingAnimationPlan,
+  isApprovingAnimationPlan,
   isGeneratingSfxPlan,
   isExporting,
   exportProgress,
   hasSubtitlesAndChars,
   hasImagePlan,
   hasAnimationPlan,
+  hasDraftAnimationPlan,
+  hasApprovedAnimationPlan,
   message,
   exportedVideoFilename,
   onDownloadExported,
@@ -566,6 +574,21 @@ export default function VideoTimelinePanel({
             >
               {isGeneratingAnimationPlan ? 'Generating...' : ' Animation Plan'}
             </button>
+          )}
+          {hasDraftAnimationPlan && onApproveAnimationPlan && (
+            <button
+              type="button"
+              onClick={onApproveAnimationPlan}
+              disabled={isApprovingAnimationPlan}
+              className="px-3 py-1.5 text-xs font-semibold bg-gradient-to-r from-lime-600 to-emerald-600 hover:from-lime-500 hover:to-emerald-500 text-white rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed shadow"
+            >
+              {isApprovingAnimationPlan ? 'Approving...' : ' Approve Animation Plan'}
+            </button>
+          )}
+          {hasApprovedAnimationPlan && (
+            <span className="px-2.5 py-1 text-[11px] rounded-md bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+              Animation Plan Approved
+            </span>
           )}
         </div>
 

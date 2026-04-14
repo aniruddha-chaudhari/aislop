@@ -1,11 +1,11 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { FolderOpen, Music, ImageIcon, Users, ChevronRight, Upload, Mic, Film, Volume2, Trash2 } from 'lucide-react';
+import { FolderOpen, Music, ImageIcon, Users, ChevronRight, Upload, Mic, Film, Volume2, Trash2, Video } from 'lucide-react';
 import type { EditorProject } from '../../../features/editor/types';
 import { API_ENDPOINTS } from '../../../config/api';
 
-export type SidebarTab = 'audioSession' | 'template' | 'assets' | 'audio' | 'sfx' | 'images' | 'chars';
+export type SidebarTab = 'audioSession' | 'template' | 'assets' | 'audio' | 'sfx' | 'images' | 'video' | 'chars';
 
 type TemplateVideo = {
   filename: string;
@@ -31,6 +31,14 @@ type AudioAsset = {
   updatedAt: string;
 };
 
+type ProjectImageAsset = {
+  assetId: string;
+  filename: string;
+  path: string;
+  size: number;
+  createdAt: string;
+};
+
 type Props = {
   project: EditorProject;
   width: number;
@@ -48,6 +56,10 @@ type Props = {
   onAddBackgroundMusic?: (asset: AudioAsset) => void;
   /** Add selected SFX to timeline */
   onAddSfx?: (asset: AudioAsset) => void;
+  /** Add a project image from library directly to timeline */
+  onAddProjectImage?: (asset: ProjectImageAsset) => void;
+  /** Add a video from library directly to timeline */
+  onAddProjectVideo?: (asset: TemplateVideo) => void;
   /** Delete generated animation plan + cache */
   onDeleteAnimationPlan?: () => void;
   /** True when project currently has generated animation clips */
@@ -67,6 +79,7 @@ const assetTabs: { id: SidebarTab; icon: React.ReactNode; label: string }[] = [
   { id: 'audio', icon: <Music size={16} />, label: 'Audio' },
   { id: 'sfx', icon: <Volume2 size={16} />, label: 'SFX' },
   { id: 'images', icon: <ImageIcon size={16} />, label: 'Images' },
+  { id: 'video', icon: <Video size={16} />, label: 'Video' },
   { id: 'chars', icon: <Users size={16} />, label: 'Chars' },
 ];
 
@@ -83,6 +96,8 @@ export default function EditorSidebar({
   onTabFocus,
   onAddBackgroundMusic,
   onAddSfx,
+  onAddProjectImage,
+  onAddProjectVideo,
   onDeleteAnimationPlan,
   hasAnimationPlan,
   deletingAnimationPlan,
@@ -99,6 +114,10 @@ export default function EditorSidebar({
   const [loadingMusic, setLoadingMusic] = useState(false);
   const [sfxAssets, setSfxAssets] = useState<AudioAsset[]>([]);
   const [loadingSfx, setLoadingSfx] = useState(false);
+  const [projectImages, setProjectImages] = useState<ProjectImageAsset[]>([]);
+  const [loadingProjectImages, setLoadingProjectImages] = useState(false);
+  const [uploadingProjectImage, setUploadingProjectImage] = useState(false);
+  const [uploadingLibraryVideo, setUploadingLibraryVideo] = useState(false);
 
   // Use parent's lists when provided so UI updates without reload after add/upload
   const audioSessions = audioSessionsProp ?? audioSessionsLocal;
@@ -116,6 +135,8 @@ export default function EditorSidebar({
     if (activeTab === 'template' || activeTab === 'audioSession') fetchData();
     if (activeTab === 'audio') fetchMusicAssets();
     if (activeTab === 'sfx') fetchSfxAssets();
+    if (activeTab === 'images') fetchProjectImages();
+    if (activeTab === 'video') fetchTemplatesOnly();
   }, [activeTab]);
 
   const fetchData = async () => {
@@ -137,6 +158,17 @@ export default function EditorSidebar({
       setLoading(false);
     } catch (error) {
       setLoading(false);
+    }
+  };
+
+  const fetchTemplatesOnly = async () => {
+    try {
+      const templateResponse = await fetch(API_ENDPOINTS.templateVideos);
+      const templateData = await templateResponse.json();
+      const temps = templateData.templates || templateData.videos || [];
+      setTemplatesLocal(temps);
+    } catch (_error) {
+      setTemplatesLocal([]);
     }
   };
 
@@ -166,6 +198,19 @@ export default function EditorSidebar({
     }
   };
 
+  const fetchProjectImages = async () => {
+    try {
+      setLoadingProjectImages(true);
+      const response = await fetch(API_ENDPOINTS.projectImages(project.id));
+      const data = await response.json();
+      setProjectImages(data.images || []);
+    } catch (_error) {
+      setProjectImages([]);
+    } finally {
+      setLoadingProjectImages(false);
+    }
+  };
+
   useEffect(() => {
     if (!isResizing) return;
 
@@ -190,6 +235,50 @@ export default function EditorSidebar({
     const file = e.target.files?.[0];
     if (file && onUploadTemplate) {
       onUploadTemplate(file);
+    }
+  };
+
+  const handleProjectImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setUploadingProjectImage(true);
+      const formData = new FormData();
+      formData.append('image', file);
+      formData.append('assetId', `lib_${Date.now()}`);
+      const response = await fetch(API_ENDPOINTS.uploadProjectImage(project.id), {
+        method: 'POST',
+        body: formData,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await fetchProjectImages();
+    } catch (_error) {
+      // no-op for now; keep sidebar resilient
+    } finally {
+      setUploadingProjectImage(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleLibraryVideoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setUploadingLibraryVideo(true);
+      const formData = new FormData();
+      formData.append('video', file);
+      const response = await fetch(API_ENDPOINTS.uploadTemplate, {
+        method: 'POST',
+        body: formData,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await fetchTemplatesOnly();
+      onTabFocus?.('template');
+    } catch (_error) {
+      // no-op for now; keep sidebar resilient
+    } finally {
+      setUploadingLibraryVideo(false);
+      e.target.value = '';
     }
   };
 
@@ -379,7 +468,7 @@ export default function EditorSidebar({
           )}
 
           {/* Assets / Audio / SFX / Images / Chars – kept separate */}
-          {(activeTab === 'assets' || activeTab === 'audio' || activeTab === 'sfx' || activeTab === 'images' || activeTab === 'chars') && (
+          {(activeTab === 'assets' || activeTab === 'audio' || activeTab === 'sfx' || activeTab === 'images' || activeTab === 'video' || activeTab === 'chars') && (
             <div className="space-y-3 text-muted-foreground text-xs">
               {activeTab === 'assets' && <p>Project assets and uploaded files. (WIP)</p>}
               {activeTab === 'audio' && (
@@ -467,7 +556,110 @@ export default function EditorSidebar({
                   )}
                 </div>
               )}
-              {activeTab === 'images' && <p>Images for overlays and thumbnails. (WIP)</p>}
+              {activeTab === 'images' && (
+                <div className="space-y-3">
+                  <div className="p-2 border border-border rounded-md bg-accent/5">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleProjectImageFileChange}
+                      className="hidden"
+                      id="project-image-upload"
+                    />
+                    <label
+                      htmlFor={uploadingProjectImage ? undefined : 'project-image-upload'}
+                      className={`flex items-center justify-center gap-2 w-full px-3 py-2 text-xs font-medium rounded-md transition ${
+                        uploadingProjectImage
+                          ? 'bg-muted text-muted-foreground cursor-not-allowed pointer-events-none'
+                          : 'bg-accent hover:bg-accent/90 text-white cursor-pointer'
+                      }`}
+                    >
+                      <Upload size={12} />
+                      {uploadingProjectImage ? 'Uploading...' : 'Import Image'}
+                    </label>
+                  </div>
+                  {loadingProjectImages ? (
+                    <div className="text-xs text-muted-foreground text-center py-6">Loading...</div>
+                  ) : projectImages.length === 0 ? (
+                    <div className="text-xs text-muted-foreground text-center py-6">
+                      No images in library. Import one above.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-[calc(100vh-18rem)] overflow-y-auto">
+                      {projectImages.map((asset) => (
+                        <div
+                          key={asset.assetId}
+                          className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2"
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate text-xs font-semibold text-foreground">{asset.filename}</div>
+                            <div className="text-[10px] text-muted-foreground truncate">{asset.assetId}</div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => onAddProjectImage?.(asset)}
+                            className="shrink-0 rounded-md bg-accent px-2.5 py-1.5 text-[10px] font-semibold text-white hover:bg-accent/90 transition"
+                          >
+                            Add
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {activeTab === 'video' && (
+                <div className="space-y-3">
+                  <div className="p-2 border border-border rounded-md bg-accent/5">
+                    <input
+                      type="file"
+                      accept="video/*"
+                      onChange={handleLibraryVideoFileChange}
+                      className="hidden"
+                      id="library-video-upload"
+                    />
+                    <label
+                      htmlFor={uploadingLibraryVideo ? undefined : 'library-video-upload'}
+                      className={`flex items-center justify-center gap-2 w-full px-3 py-2 text-xs font-medium rounded-md transition ${
+                        uploadingLibraryVideo
+                          ? 'bg-muted text-muted-foreground cursor-not-allowed pointer-events-none'
+                          : 'bg-accent hover:bg-accent/90 text-white cursor-pointer'
+                      }`}
+                    >
+                      <Upload size={12} />
+                      {uploadingLibraryVideo ? 'Uploading...' : 'Import Video'}
+                    </label>
+                  </div>
+                  {templates.length === 0 ? (
+                    <div className="text-xs text-muted-foreground text-center py-6">
+                      No videos in library. Import one above.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-[calc(100vh-18rem)] overflow-y-auto">
+                      {templates.map((videoAsset) => (
+                        <div
+                          key={videoAsset.path}
+                          className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2"
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate text-xs font-semibold text-foreground">{videoAsset.filename}</div>
+                            <div className="text-[10px] text-muted-foreground truncate">
+                              {(videoAsset.fileSize / 1024 / 1024).toFixed(2)} MB
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => onAddProjectVideo?.(videoAsset)}
+                            className="shrink-0 rounded-md bg-accent px-2.5 py-1.5 text-[10px] font-semibold text-white hover:bg-accent/90 transition"
+                          >
+                            Add
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {activeTab === 'chars' && <p>Characters / avatars. (WIP)</p>}
             </div>
           )}

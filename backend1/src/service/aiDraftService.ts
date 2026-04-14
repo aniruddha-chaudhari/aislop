@@ -1,5 +1,6 @@
 import { Timeline, Track, Clip } from '../schema/project';
 import { ImageEmbeddingService } from './imageEmbedder';
+import { MIN_SUBTITLE_CLIP_DURATION } from './subtitleClipNormalize';
 
 export type SubtitlesAndCharactersResult = {
   duration: number;
@@ -252,10 +253,11 @@ async function getAudioFileDuration(dialogue: { audioFile?: { filePath: string; 
 }
 
 /**
- * Generate subtitle clips with WhisperX timings (word-level for karaoke)
+ * Generate subtitle clips from clean sentence alignment.
+ * Keep draft clips simple/stable (backend behavior), and add karaoke words later in preview/export.
  */
 async function generateSubtitleClips(session: any, _audioSessionId: string): Promise<Clip[]> {
-  const { getWhisperXAlignment, getWhisperXCleanAlignment } = await import('./videoGenerator');
+  const { getWhisperXCleanAlignment } = await import('./videoGenerator');
   const clips: Clip[] = [];
 
   let cumulativeTime = 0;
@@ -263,13 +265,7 @@ async function generateSubtitleClips(session: any, _audioSessionId: string): Pro
   for (const dialogue of session.dialogues) {
     if (!dialogue.audioFile?.filePath) continue;
 
-    // Get word-level timestamps for karaoke effect
-    const words = await getWhisperXAlignment(
-      dialogue.audioFile.filePath,
-      dialogue.text
-    );
-
-    // Get sentence-level for grouping (fallback to clean alignment)
+    // Use clean sentence-level alignment (same strategy as backend)
     const alignment = await getWhisperXCleanAlignment(
       dialogue.audioFile.filePath,
       dialogue.text
@@ -277,19 +273,14 @@ async function generateSubtitleClips(session: any, _audioSessionId: string): Pro
 
     if (alignment.success && alignment.sentences && alignment.sentences.length > 0) {
       const dialogueDuration = await getAudioFileDuration(dialogue);
+      let sentenceAcc = cumulativeTime;
       for (let i = 0; i < alignment.sentences.length; i++) {
         const sentence = alignment.sentences[i];
-        const clipStart = cumulativeTime + sentence.start;
-        const clipDuration = sentence.end - sentence.start;
-
-        // Extract words that fall within this sentence (relative to dialogue start)
-        const sentenceWords = (words || []).filter(
-          (w) => w.end > sentence.start && w.start < sentence.end
-        ).map((w) => ({
-          word: w.word,
-          start: w.start - sentence.start,
-          end: w.end - sentence.start,
-        }));
+        const rawStart = cumulativeTime + sentence.start;
+        const rawEnd = cumulativeTime + sentence.end;
+        const clipStart = Math.max(rawStart, sentenceAcc);
+        const clipEnd = Math.max(rawEnd, clipStart + MIN_SUBTITLE_CLIP_DURATION);
+        const clipDuration = clipEnd - clipStart;
 
         clips.push({
           id: `sub_${dialogue.id}_${i}`,
@@ -298,12 +289,12 @@ async function generateSubtitleClips(session: any, _audioSessionId: string): Pro
           duration: clipDuration,
           speaker: dialogue.character,
           text: sentence.text,
-          ...(sentenceWords.length > 0 && { words: sentenceWords }),
         });
+        sentenceAcc = clipStart + clipDuration;
       }
       cumulativeTime += dialogueDuration;
     } else {
-      // Fallback: entire dialogue as one clip, with words if available
+      // Fallback: entire dialogue as one subtitle clip
       const ffmpeg = require('fluent-ffmpeg');
       const duration = await new Promise<number>((resolve) => {
         ffmpeg.ffprobe(dialogue.audioFile!.filePath, (err: any, metadata: any) => {
@@ -312,8 +303,6 @@ async function generateSubtitleClips(session: any, _audioSessionId: string): Pro
         });
       });
 
-      const sentenceWords = (words || []).map((w) => ({ word: w.word, start: w.start, end: w.end }));
-
       clips.push({
         id: `sub_${dialogue.id}`,
         kind: 'subtitle',
@@ -321,7 +310,6 @@ async function generateSubtitleClips(session: any, _audioSessionId: string): Pro
         duration,
         speaker: dialogue.character,
         text: dialogue.text,
-        ...(sentenceWords.length > 0 && { words: sentenceWords }),
       });
       cumulativeTime += duration;
     }

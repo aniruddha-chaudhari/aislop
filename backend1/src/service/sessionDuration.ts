@@ -1,5 +1,6 @@
 import { PrismaClient } from '../../src/generated/prisma';
 import fs from 'fs';
+const ffmpeg = require('fluent-ffmpeg');
 
 const prisma = new PrismaClient();
 
@@ -46,6 +47,23 @@ function getWavDurationSeconds(filePath: string): number {
   }
 }
 
+function getAudioDurationSeconds(filePath: string): Promise<number> {
+  return new Promise<number>((resolve) => {
+    if (!filePath || !fs.existsSync(filePath)) {
+      resolve(0);
+      return;
+    }
+    ffmpeg.ffprobe(filePath, (err: any, metadata: any) => {
+      if (!err && typeof metadata?.format?.duration === 'number' && isFinite(metadata.format.duration) && metadata.format.duration > 0) {
+        resolve(metadata.format.duration);
+        return;
+      }
+      // Fallback for plain PCM wavs if ffprobe fails.
+      resolve(getWavDurationSeconds(filePath));
+    });
+  });
+}
+
 /**
  * Calculate and update total duration for an audio session
  * This sums up all audio file durations in the session
@@ -84,17 +102,17 @@ export async function updateSessionDuration(sessionId: string): Promise<number> 
       const audioFile = dialogue.audioFile;
       let duration = 0;
 
-      // Use stored duration if available and valid
-      if (typeof audioFile.duration === 'number' && isFinite(audioFile.duration) && audioFile.duration > 0) {
+      if (fs.existsSync(audioFile.filePath)) {
+        // Always re-probe from file metadata to avoid stale/short stored durations.
+        duration = await getAudioDurationSeconds(audioFile.filePath);
+      }
+      // Fallback to stored value only if probing failed.
+      if (duration <= 0 && typeof audioFile.duration === 'number' && isFinite(audioFile.duration) && audioFile.duration > 0) {
         duration = audioFile.duration;
-      } else if (fs.existsSync(audioFile.filePath)) {
-        // Calculate duration from file
-        duration = getWavDurationSeconds(audioFile.filePath);
-        
-        // Store duration in database for future use
-        if (duration > 0) {
-          durationUpdates.push({ id: audioFile.id, duration });
-        }
+      }
+      // Store probed duration for future reads.
+      if (duration > 0) {
+        durationUpdates.push({ id: audioFile.id, duration });
       }
 
       totalDuration += duration;

@@ -44,6 +44,16 @@ export type OverlayClip = BaseClip & {
   displayMode?: 'overlay' | 'replace';
   /** When set, export uses this path instead of storage/images/{sessionId}/{assetId}.png */
   path?: string;
+  planStatus?: 'draft' | 'approved';
+  promptText?: string;
+  promptEdited?: boolean;
+  animationMomentId?: string;
+  animationType?: string;
+  animationContent?: string;
+  animationSubtitle?: string;
+  animationContextSummary?: string;
+  fullDialogueContext?: string;
+  researchContext?: string;
 };
 
 export type CharacterClip = BaseClip & {

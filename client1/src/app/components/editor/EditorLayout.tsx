@@ -28,6 +28,21 @@ function sortTracks(tracks: Track[]): Track[] {
   return [...overlayTracks, ...audioTracks, ...musicTracks, ...sfxTracks, ...otherTracks];
 }
 
+function findFirstDraftAnimationClip(project: EditorProject): ClipRef | null {
+  for (const track of project.tracks) {
+    for (const clip of track.clips) {
+      if (
+        clip.kind === 'overlay' &&
+        (clip as any).animationMomentId &&
+        (((clip as any).planStatus as string | undefined) ?? 'draft') === 'draft'
+      ) {
+        return { trackId: track.id, clipId: clip.id };
+      }
+    }
+  }
+  return null;
+}
+
 type Props = {
   project: EditorProject;
   /** Refetch project; if it returns the updated project, we sync draftProject so template/audio/timeline show without reload */
@@ -51,11 +66,29 @@ type AudioSession = {
   };
 };
 
+type ProjectImageAsset = {
+  assetId: string;
+  filename: string;
+  size: number;
+};
+
+type VideoLibraryAsset = {
+  filename: string;
+  path: string;
+  fileSize: number;
+};
+
+// Match image-plan overlay defaults used by backend placement logic.
+const IMAGE_PLAN_DEFAULT_X = 0.5;
+const IMAGE_PLAN_DEFAULT_Y = 0.65;
+const IMAGE_PLAN_DEFAULT_SCALE = 0.5;
+
 export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const router = useRouter();
   const [isGeneratingDraft, setIsGeneratingDraft] = useState(false);
   const [isGeneratingImagePlan, setIsGeneratingImagePlan] = useState(false);
   const [isGeneratingAnimationPlan, setIsGeneratingAnimationPlan] = useState(false);
+  const [isApprovingAnimationPlan, setIsApprovingAnimationPlan] = useState(false);
   const [isDeletingAnimationPlan, setIsDeletingAnimationPlan] = useState(false);
   const [isGeneratingSfxPlan, setIsGeneratingSfxPlan] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -947,6 +980,105 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     }
   };
 
+  const addImageAssetToTimeline = (asset: ProjectImageAsset) => {
+    const start = Math.max(0, Number(playheadTime.toFixed(3)));
+    const defaultDuration = 3;
+    let selectedRef: ClipRef | null = null;
+    setDraftProject((p) => {
+      const duration = Math.max(1, p.duration || 1);
+      const clipDuration = Math.max(0.2, Math.min(defaultDuration, duration - start || defaultDuration));
+      const clipId = `overlay_media_img_${Date.now()}`;
+      const clip: Clip = {
+        id: clipId,
+        kind: 'overlay',
+        start,
+        duration: clipDuration,
+        assetId: asset.assetId,
+        label: asset.filename,
+        x: IMAGE_PLAN_DEFAULT_X,
+        y: IMAGE_PLAN_DEFAULT_Y,
+        scale: IMAGE_PLAN_DEFAULT_SCALE,
+        displayMode: 'overlay',
+      };
+
+      const editableOverlayTrack = p.tracks.find((t) => t.type === 'overlay' && !t.locked && t.id !== 't_overlay_template');
+      let tracks = p.tracks.map((t) => ({ ...t, clips: [...t.clips] }));
+      if (editableOverlayTrack) {
+        tracks = tracks.map((t) => {
+          if (t.id !== editableOverlayTrack.id) return t;
+          selectedRef = { trackId: t.id, clipId };
+          return { ...t, clips: [...t.clips, clip] };
+        });
+      } else {
+        const newTrackId = `t_media_overlay_${Date.now()}`;
+        const mediaTrack: Track = {
+          id: newTrackId,
+          type: 'overlay',
+          name: 'Media Overlay',
+          clips: [clip],
+        };
+        selectedRef = { trackId: newTrackId, clipId };
+        tracks = [...tracks, mediaTrack];
+      }
+      return { ...p, tracks: sortTracks(tracks) };
+    });
+
+    setIsDirty(true);
+    setMessage({ type: 'success', text: `Added image clip: ${asset.filename}` });
+    setTimeout(() => setMessage(null), 2000);
+    if (selectedRef) queueMicrotask(() => setSelected(selectedRef));
+  };
+
+  const addVideoAssetToTimeline = (asset: VideoLibraryAsset) => {
+    const start = Math.max(0, Number(playheadTime.toFixed(3)));
+    const defaultDuration = 4;
+    let selectedRef: ClipRef | null = null;
+    setDraftProject((p) => {
+      const duration = Math.max(1, p.duration || 1);
+      const clipDuration = Math.max(0.5, Math.min(defaultDuration, duration - start || defaultDuration));
+      const clipId = `overlay_media_vid_${Date.now()}`;
+      const clip: Clip = {
+        id: clipId,
+        kind: 'overlay',
+        start,
+        duration: clipDuration,
+        assetId: `media_video_${Date.now()}`,
+        label: asset.filename,
+        path: asset.path,
+        x: 0.5,
+        y: 0.5,
+        scale: 1,
+        displayMode: 'replace',
+      };
+
+      const editableOverlayTrack = p.tracks.find((t) => t.type === 'overlay' && !t.locked && t.id !== 't_overlay_template');
+      let tracks = p.tracks.map((t) => ({ ...t, clips: [...t.clips] }));
+      if (editableOverlayTrack) {
+        tracks = tracks.map((t) => {
+          if (t.id !== editableOverlayTrack.id) return t;
+          selectedRef = { trackId: t.id, clipId };
+          return { ...t, clips: [...t.clips, clip] };
+        });
+      } else {
+        const newTrackId = `t_media_overlay_${Date.now()}`;
+        const mediaTrack: Track = {
+          id: newTrackId,
+          type: 'overlay',
+          name: 'Media Overlay',
+          clips: [clip],
+        };
+        selectedRef = { trackId: newTrackId, clipId };
+        tracks = [...tracks, mediaTrack];
+      }
+      return { ...p, tracks: sortTracks(tracks) };
+    });
+
+    setIsDirty(true);
+    setMessage({ type: 'success', text: `Added video clip: ${asset.filename}` });
+    setTimeout(() => setMessage(null), 2000);
+    if (selectedRef) queueMicrotask(() => setSelected(selectedRef));
+  };
+
   const selectedClip: Clip | null = useMemo(() => {
     if (!selected) return null;
     const t = draftProject.tracks.find((x) => x.id === selected.trackId);
@@ -1152,9 +1284,25 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const hasImagePlan = draftProject.tracks.some(t =>
     t.type === 'overlay' && (t.id === 't_imgs' || /^t_imgs_\d+$/.test(t.id)) && t.clips.length > 0
   );
-  // Animation plan generated (any animation overlay track t_anim / t_anim_N has clips)
-  const hasAnimationPlan = draftProject.tracks.some(t =>
-    t.type === 'overlay' && (t.id === 't_anim' || /^t_anim_\d+$/.test(t.id)) && t.clips.length > 0
+  const animationTracks = draftProject.tracks.filter(
+    (t) => t.type === 'overlay' && (t.id === 't_anim' || /^t_anim_\d+$/.test(t.id))
+  );
+  const hasAnimationPlan = animationTracks.some((t) => t.clips.length > 0);
+  const hasDraftAnimationPlan = animationTracks.some((t) =>
+    t.clips.some(
+      (clip) =>
+        clip.kind === 'overlay' &&
+        (clip as any).animationMomentId &&
+        (((clip as any).planStatus as string | undefined) ?? 'draft') === 'draft'
+    )
+  );
+  const hasApprovedAnimationPlan = animationTracks.some((t) =>
+    t.clips.some(
+      (clip) =>
+        clip.kind === 'overlay' &&
+        (clip as any).animationMomentId &&
+        (clip as any).planStatus === 'approved'
+    )
   );
 
   const handleGenerateSubtitlesAndChars = async () => {
@@ -1239,7 +1387,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
 
   const handleGenerateAnimationPlan = async () => {
     setIsGeneratingAnimationPlan(true);
-    setMessage({ type: 'info', text: 'Generating animation plan...' });
+    setMessage({ type: 'info', text: 'Creating animation draft clips in timeline...' });
 
     try {
       const response = await fetch(`${API_ENDPOINTS.generateAnimationPlan(project.id)}?t=${Date.now()}`, {
@@ -1255,10 +1403,15 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
 
       const data = await response.json();
 
-      if (data.success && data.project) {
-        setMessage({ type: 'success', text: 'Animation plan generated!' });
+      if (data.success) {
         const updated = await onProjectUpdate?.();
+        const nextProject = updated ?? data.project ?? draftProject;
         if (updated) setDraftProject(updated);
+        const firstDraftClip = findFirstDraftAnimationClip(nextProject);
+        if (firstDraftClip) {
+          setSelected(firstDraftClip);
+        }
+        setMessage({ type: 'success', text: 'Animation draft plan ready. Click draft clips to review prompt text.' });
         setTimeout(() => setMessage(null), 3000);
       } else {
         throw new Error(data.error || 'Failed to generate animation plan');
@@ -1270,6 +1423,64 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       });
     } finally {
       setIsGeneratingAnimationPlan(false);
+    }
+  };
+
+  const handleApproveAnimationPlan = async () => {
+    if (isDirty) {
+      const saveResponse = await fetch(API_ENDPOINTS.saveTimeline(project.id), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          timeline: {
+            duration: draftProject.duration,
+            tracks: draftProject.tracks,
+          },
+        }),
+      });
+      if (!saveResponse.ok) {
+        setMessage({ type: 'error', text: 'Please save timeline changes before approval.' });
+        return;
+      }
+      const saveData = await saveResponse.json();
+      if (!saveData?.success) {
+        setMessage({ type: 'error', text: saveData?.error || 'Please save timeline changes before approval.' });
+        return;
+      }
+      setIsDirty(false);
+    }
+    setIsApprovingAnimationPlan(true);
+    setMessage({ type: 'info', text: 'Generating approved animation clips...' });
+
+    try {
+      const response = await fetch(`${API_ENDPOINTS.approveAnimationPlan(project.id)}?t=${Date.now()}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: project.name }),
+        cache: 'no-store',
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data.success && data.project) {
+        setMessage({ type: 'success', text: 'Animation plan approved and rendered!' });
+        const updated = await onProjectUpdate?.();
+        if (updated) setDraftProject(updated);
+        setTimeout(() => setMessage(null), 3000);
+      } else {
+        throw new Error(data.error || 'Failed to approve animation plan');
+      }
+    } catch (error) {
+      setMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : 'Failed to approve animation plan',
+      });
+    } finally {
+      setIsApprovingAnimationPlan(false);
     }
   };
 
@@ -1494,6 +1705,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             }}
             onAddBackgroundMusic={addBackgroundMusic}
             onAddSfx={addSfxToTimeline}
+            onAddProjectImage={addImageAssetToTimeline}
+            onAddProjectVideo={addVideoAssetToTimeline}
             onDeleteAnimationPlan={handleDeleteAnimationPlan}
             hasAnimationPlan={hasAnimationPlan}
             deletingAnimationPlan={isDeletingAnimationPlan}
@@ -1562,16 +1775,20 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             onGenerateSubtitlesAndChars={handleGenerateSubtitlesAndChars}
             onGenerateImagePlan={handleGenerateImagePlan}
             onGenerateAnimationPlan={handleGenerateAnimationPlan}
+            onApproveAnimationPlan={handleApproveAnimationPlan}
             onGenerateSfxPlan={handleGenerateSfxPlan}
             isGeneratingDraft={isGeneratingDraft}
             isGeneratingImagePlan={isGeneratingImagePlan}
             isGeneratingAnimationPlan={isGeneratingAnimationPlan}
+            isApprovingAnimationPlan={isApprovingAnimationPlan}
             isGeneratingSfxPlan={isGeneratingSfxPlan}
           isExporting={isExporting}
           exportProgress={exportProgress}
           hasSubtitlesAndChars={hasSubtitlesAndChars}
           hasImagePlan={hasImagePlan}
           hasAnimationPlan={hasAnimationPlan}
+          hasDraftAnimationPlan={hasDraftAnimationPlan}
+          hasApprovedAnimationPlan={hasApprovedAnimationPlan}
           message={message}
           exportedVideoFilename={exportedVideoFilename}
           onDownloadExported={exportedVideoFilename ? () => {

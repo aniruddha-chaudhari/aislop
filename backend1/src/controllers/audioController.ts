@@ -58,6 +58,30 @@ const REFERENCE_AUDIO_PATHS = Object.fromEntries(
   AVAILABLE_CHARACTERS.map((character) => [character, TTS_CONFIG.characters[character].referenceAudio])
 ) as Record<CharacterName, string>;
 
+const REFERENCE_AUDIO_DIR = path.join(process.cwd(), 'storage', 'reference_audio');
+const REFERENCE_AUDIO_EXTS = new Set(['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac']);
+
+function resolveNarratorReferenceAudioPath(rawFilename: unknown): string | null {
+  if (typeof rawFilename !== 'string') return null;
+  const filename = rawFilename.trim();
+  if (!filename) return null;
+  // Basic traversal protection: only allow simple filenames.
+  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) return null;
+  const ext = path.extname(filename).toLowerCase();
+  if (!REFERENCE_AUDIO_EXTS.has(ext)) return null;
+  const fullPath = path.join(REFERENCE_AUDIO_DIR, filename);
+  if (!fs.existsSync(fullPath)) return null;
+  return fullPath;
+}
+
+function getReferenceAudioPathForCharacter(character: CharacterName, overrides?: { narratorReferenceAudio?: unknown }): string {
+  if (character === 'Narrator') {
+    const override = resolveNarratorReferenceAudioPath(overrides?.narratorReferenceAudio);
+    if (override) return override;
+  }
+  return REFERENCE_AUDIO_PATHS[character];
+}
+
 type NormalizedDialogue = {
   character: CharacterName;
   dialogue: string;
@@ -125,6 +149,7 @@ function readSessionConversationMetadata(sessionId: string): {
   videoStyle?: string;
   characterSet?: CharacterSetId;
   selectedCharacter?: string;
+  narratorReferenceAudio?: string;
 } {
   try {
     const conversationPath = path.join(AUDIO_OUTPUT_DIR, sessionId, 'conversation.json');
@@ -134,16 +159,32 @@ function readSessionConversationMetadata(sessionId: string): {
       videoStyle?: string;
       characterSet?: CharacterSetId;
       selectedCharacter?: string;
+      narratorReferenceAudio?: string;
     };
 
     return {
       videoStyle: raw.videoStyle,
       characterSet: raw.characterSet,
       selectedCharacter: raw.selectedCharacter,
+      narratorReferenceAudio:
+        typeof raw.narratorReferenceAudio === 'string' ? raw.narratorReferenceAudio : undefined,
     };
   } catch {
     return {};
   }
+}
+
+/** Prefer explicit body override when it resolves; otherwise use value stored with the session. */
+function resolveNarratorReferenceForRegeneration(
+  bodyRaw: unknown,
+  sessionId: string
+): unknown {
+  const fromBody = typeof bodyRaw === 'string' && bodyRaw.trim() !== '' ? bodyRaw.trim() : undefined;
+  if (fromBody && resolveNarratorReferenceAudioPath(fromBody)) return fromBody;
+  const stored = readSessionConversationMetadata(sessionId).narratorReferenceAudio;
+  const fromSession = typeof stored === 'string' && stored.trim() !== '' ? stored.trim() : undefined;
+  if (fromSession && resolveNarratorReferenceAudioPath(fromSession)) return fromSession;
+  return undefined;
 }
 
 // Chatterbox TTS API configuration
@@ -351,6 +392,7 @@ async function generateAudioWithChatterbox(
   text: string,
   character: CharacterName,
   outputPath: string,
+  referenceAudioPath: string,
   params: {
     exaggeration: number;
     temperature: number;
@@ -362,8 +404,6 @@ async function generateAudioWithChatterbox(
   }
 ): Promise<void> {
   try {
-    const referenceAudioPath = REFERENCE_AUDIO_PATHS[character];
-
     if (!fs.existsSync(referenceAudioPath)) {
       throw new Error(`Reference audio file not found for ${character}: ${referenceAudioPath}`);
     }
@@ -556,6 +596,7 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
     const minP = (b?.minP as number) ?? 0.05;
     const topP = (b?.topP as number) ?? 1.0;
     const repetitionPenalty = (b?.repetitionPenalty as number) ?? 1.2;
+    const narratorReferenceAudio = (b as any)?.narratorReferenceAudio;
 
 
     if (!conversation?.conversation || !Array.isArray(conversation.conversation) || conversation.conversation.length === 0) {
@@ -586,11 +627,18 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
 
     const requiredCharacters = new Set<CharacterName>(lines.map((line) => line.character));
     for (const char of requiredCharacters) {
-      const audioPath = REFERENCE_AUDIO_PATHS[char];
+      const audioPath = getReferenceAudioPathForCharacter(char, { narratorReferenceAudio });
       if (!fs.existsSync(audioPath)) {
         return jsonResponse(500, { success: false, error: `Reference audio file missing for ${char}: ${audioPath}` });
       }
     }
+
+    const narratorRefForStorage =
+      typeof narratorReferenceAudio === 'string' &&
+      narratorReferenceAudio.trim() !== '' &&
+      resolveNarratorReferenceAudioPath(narratorReferenceAudio.trim())
+        ? narratorReferenceAudio.trim()
+        : undefined;
 
     const normalizedConversationForStorage = {
       topic: conversation.topic,
@@ -598,6 +646,7 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
       videoStyle,
       characterSet,
       selectedCharacter: characterSet === 'single' ? selectedCharacter : undefined,
+      ...(narratorRefForStorage ? { narratorReferenceAudio: narratorRefForStorage } : {}),
     };
     const sessionName = generateSessionName(normalizedConversationForStorage);
     const session = await prisma.session.create({
@@ -700,7 +749,8 @@ export async function generateAudioFromScript(ctx: HttpContext): Promise<Handler
         // Acquire semaphore to limit concurrent TTS requests
         await ttsLimiter.acquire();
         try {
-          await generateAudioWithChatterbox(dialogue, convCharacter as CharacterName, outputPath, {
+          const referenceAudioPath = getReferenceAudioPathForCharacter(convCharacter as CharacterName, { narratorReferenceAudio });
+          await generateAudioWithChatterbox(dialogue, convCharacter as CharacterName, outputPath, referenceAudioPath, {
             exaggeration,
             temperature,
             seedNum,
@@ -876,8 +926,6 @@ export async function regenerateAudioFile(ctx: HttpContext): Promise<HandlerResu
     const minP = (b?.minP as number) ?? 0.05;
     const topP = (b?.topP as number) ?? 1.0;
     const repetitionPenalty = (b?.repetitionPenalty as number) ?? 1.2;
-
-
     if (exaggeration < 0.25 || exaggeration > 2.0) return jsonResponse(400, { error: 'Exaggeration must be between 0.25 and 2.0' });
     if (temperature < 0.05 || temperature > 5.0) return jsonResponse(400, { error: 'Temperature must be between 0.05 and 5.0' });
     if (cfgWeight < 0.0 || cfgWeight > 1.0) return jsonResponse(400, { error: 'CFG weight must be between 0.0 and 1.0' });
@@ -891,6 +939,7 @@ export async function regenerateAudioFile(ctx: HttpContext): Promise<HandlerResu
     const order = parseInt(filenameParts[1], 10);
     if (isNaN(order)) return jsonResponse(400, { error: 'Invalid order in filename' });
 
+    const narratorReferenceAudio = resolveNarratorReferenceForRegeneration(b?.narratorReferenceAudio, actualSessionId);
 
     const dialogueRecord = await prisma.dialogue.findFirst({
       where: {
@@ -928,7 +977,7 @@ export async function regenerateAudioFile(ctx: HttpContext): Promise<HandlerResu
     if (!isSupportedCharacter(dialogueRecord.character)) {
       return jsonResponse(400, { error: `Unsupported character: ${dialogueRecord.character}` });
     }
-    const referenceAudioPath = REFERENCE_AUDIO_PATHS[dialogueRecord.character];
+    const referenceAudioPath = getReferenceAudioPathForCharacter(dialogueRecord.character, { narratorReferenceAudio });
     if (!referenceAudioPath || !fs.existsSync(referenceAudioPath)) {
       return jsonResponse(500, { error: `Reference audio file missing for ${dialogueRecord.character}: ${referenceAudioPath}` });
     }
@@ -938,6 +987,7 @@ export async function regenerateAudioFile(ctx: HttpContext): Promise<HandlerResu
       finalText,
       dialogueRecord.character,
       outputPath,
+      referenceAudioPath,
       {
         exaggeration,
         temperature,
@@ -1011,7 +1061,7 @@ export async function getSessionDetails(ctx: HttpContext): Promise<HandlerResult
       return jsonResponse(400, { error: 'Session ID is required' });
     }
 
-    const session = await prisma.session.findUnique({
+    let session = await prisma.session.findUnique({
       where: { id: sessionId },
       include: {
         dialogues: {
@@ -1030,6 +1080,30 @@ export async function getSessionDetails(ctx: HttpContext): Promise<HandlerResult
       }
     });
 
+    if (!session) {
+      return jsonResponse(404, { error: 'Session not found' });
+    }
+
+    // Always refresh durations from source files so editor timeline length is accurate.
+    await updateSessionDuration(sessionId);
+    session = await prisma.session.findUnique({
+      where: { id: sessionId },
+      include: {
+        dialogues: {
+          include: {
+            audioFile: true
+          },
+          orderBy: {
+            order: 'asc'
+          }
+        },
+        audioFiles: {
+          orderBy: {
+            generatedAt: 'asc'
+          }
+        }
+      }
+    });
     if (!session) {
       return jsonResponse(404, { error: 'Session not found' });
     }
