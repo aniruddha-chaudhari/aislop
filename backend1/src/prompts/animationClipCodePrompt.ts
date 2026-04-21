@@ -100,12 +100,17 @@ ${researchContext || 'No research summary provided'}
 ENGINEERING RULES:
 - Return TSX code for exactly: export const GeneratedClip
 - Use only imports from "react" and "remotion".
-- Include: useCurrentFrame, useVideoConfig, interpolate, spring, Easing from remotion. Use Easing (capital E) for easing curves: Easing.bezier(), Easing.inOut(), Easing.out(), Easing.linear() â€” never "easing" (lowercase) which is not a function.
+- Include: useCurrentFrame, useVideoConfig, interpolate, spring, Easing from remotion. Use Easing (capital E) for easing curves: Easing.bezier(), Easing.inOut(), Easing.out(), Easing.linear() — never "easing" (lowercase) which is not a function.
+- Never pass \`spring(...)\` into \`interpolate(..., { easing })\`. \`spring\` returns an animated scalar, not an easing function. Use \`Easing.*\` inside \`easing\`, or use \`spring(...)\` directly as a value.
 - Keep code deterministic and render-safe (no timers, no async effects, no DOM measurements, no external fetches).
 - Motion cadence: 1-2 active beats + at least one calmer hold/readability window.
 - Mobile-first composition, high contrast, avoid tiny text.
-- Treat props.subtitle as context only. Do NOT render it. No JSX that displays subtitle or props.subtitle â€” no bottom caption strip, no full-sentence text. If you need on-screen text, use content/emphasis only (short 1â€“4 words).
+- Treat props.subtitle as context only. Do NOT render it. No JSX that displays subtitle or props.subtitle — no bottom caption strip, no full-sentence text. If you need on-screen text, use content/emphasis only (short 1–4 words).
 - Avoid generic full-screen text card. Use layered motion and visual metaphor tied to MOMENT_JSON.
+
+VISUAL ENGAGEMENT (type-led, still 2D):
+- Implement at least two independently animated layers (e.g. background gradient or bloom + hero type; SVG shape or divider + type; parallax planes + kinetic type). A single text block whose only motion is opacity fade is not enough.
+- If animationPrompt or emphasis describes a delayed hero lock, stagger so the punch phrase is not at full opacity from frame 0 unless the prompt explicitly says so — avoid "orphan" keywords before the idea lands in audio.
 
 ${overlapBlock}
 
@@ -123,7 +128,7 @@ export type GeneratedClipProps = {
 
 BEFORE FINALIZING OUTPUT:
 - Review the generated TSX for errors: wrong or missing imports, invalid React/Remotion API usage, syntax errors, undefined variables, or use of packages not available in the project (only "react" and "remotion" are allowed).
-- Remotion easing: import Easing (capital E) from "remotion" and use Easing.bezier(), Easing.inOut(), Easing.out(), etc. Do not use "easing" (lowercase) â€” it is not a function and will throw "easing is not a function".
+- Remotion easing: import Easing (capital E) from "remotion" and use Easing.bezier(), Easing.inOut(), Easing.out(), etc. Do not use "easing" (lowercase) — it is not a function and will throw "easing is not a function".
 - Ensure the component does NOT render subtitle or props.subtitle anywhere (no bottom bar, no caption). Remove any such JSX before returning.
 - Ensure generated layout obeys safe-zone and non-overlap rules at entry, hold, and exit keyframes.
 - Fix any such errors before returning the componentCode. The code must compile and run in a Remotion project with no node_module or runtime errors.

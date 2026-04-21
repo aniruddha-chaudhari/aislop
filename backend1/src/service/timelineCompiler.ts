@@ -2,7 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { Project, Timeline, Track, SubtitleClip, OverlayClip, CharacterClip, MusicClip, SfxClip } from '../schema/project';
 import { publishFileUpdate } from './eventEmitter';
-import { getCharacterImagePath } from '../utils/characterImages';
+import { getCharacterClipImagePath } from '../utils/characterImages';
+import { appendCharacterClipsToFilterComplex, expandCharacterClipsExcludingReplaceRanges } from './characterOverlayFilters';
 import { enrichSubtitleClipsWithWords } from './previewGenerator';
 import {
   fixSubtitleClipsTimelineNonOverlap,
@@ -11,6 +12,7 @@ import {
 } from './subtitleClipNormalize';
 import { getSessionDuration } from './sessionDuration';
 import { computeOverlayPlacement } from './overlayTransform';
+import { resolveSessionOverlayPath } from '../utils/overlayAssets';
 
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
@@ -69,7 +71,8 @@ function isStillImageAsset(filePath: string): boolean {
 /**
  * Add an overlay as an input. For still images: loop for full timeline.
  * For video (e.g. animation moment): trim to clip.duration only so overlay plays 0→duration in order;
- * the filter chain must apply setpts=PTS+clip.start/TB so it lines up with timeline.
+ * the filter chain must apply setpts=PTS-STARTPTS+clip.start/TB so it lines up with timeline
+ * without carrying source timestamps that can push the visual later.
  */
 function addOverlayInput(
   command: any,
@@ -91,6 +94,11 @@ function isReplaceOverlayClip(clip: OverlayClip): boolean {
   return clip.displayMode === 'replace' && clip.planStatus !== 'draft';
 }
 
+function getTopRegionHeight(frameHeight: number): number {
+  const subtitleSafeBottomMargin = Math.floor((700 / 1920) * frameHeight);
+  return Math.max(1, frameHeight - subtitleSafeBottomMargin);
+}
+
 function buildReplaceOverlayRanges(clips: OverlayClip[]): TimeRange[] {
   return clips
     .filter(isReplaceOverlayClip)
@@ -100,13 +108,10 @@ function buildReplaceOverlayRanges(clips: OverlayClip[]): TimeRange[] {
     }));
 }
 
-function excludeSubtitlesInRanges(subtitleClips: SubtitleClip[], excludedRanges: TimeRange[]): SubtitleClip[] {
-  if (excludedRanges.length === 0) return subtitleClips;
-  return subtitleClips.filter((clip) => {
-    const clipStart = clip.start;
-    const clipEnd = clip.start + clip.duration;
-    return !excludedRanges.some((range) => clipStart < range.end && range.start < clipEnd);
-  });
+function excludeSubtitlesInRanges(subtitleClips: SubtitleClip[], _excludedRanges: TimeRange[]): SubtitleClip[] {
+  // Keep subtitle timeline untouched even during replace overlays.
+  // Dropping subtitle clips before enrichment can shift later word timings.
+  return subtitleClips;
 }
 
 type AudioInputRef = { clip: MusicClip | SfxClip; inputIndex: number; kind: 'music' | 'sfx' };
@@ -223,6 +228,12 @@ export async function compileTimeline(
       });
     }
 
+    const replaceRangesForCharacterHide = buildReplaceOverlayRanges(overlayClips);
+    const characterClipsForExport = expandCharacterClipsExcludingReplaceRanges(
+      characterClips,
+      replaceRangesForCharacterHide
+    );
+
     let assPath: string | null = null;
     const subtitleTrack = project.timeline?.tracks.find(t => t.type === 'subtitle');
     let subtitleClips = (subtitleTrack?.clips.filter(c => c.kind === 'subtitle') as SubtitleClip[] || []).map(c => ({ ...c }));
@@ -301,7 +312,7 @@ export async function compileTimeline(
     if (exportStep >= 3) {
       overlayClips.forEach((clip) => {
         if (clip.planStatus === 'draft') return;
-        const overlayPath = clip.path ?? path.join(IMAGE_UPLOAD_DIR, project.audioSessionId, `${clip.assetId}.png`);
+        const overlayPath = resolveSessionOverlayPath(IMAGE_UPLOAD_DIR, project.audioSessionId, clip.path, clip.assetId);
         if (fs.existsSync(overlayPath)) {
           addOverlayInput(command, overlayPath, clip, duration);
           overlayInputs.push({ clip, inputIndex: nextInputIndex++, overlayPath });
@@ -310,15 +321,10 @@ export async function compileTimeline(
     }
 
     // Character images (step 4): -loop 1 so overlay filter gets frames at any timestamp
-    // For narrator-only audio, we intentionally skip adding any character image overlays.
     const characterInputs: { clip: CharacterClip; inputIndex: number }[] = [];
     if (exportStep >= 4) {
-      for (const clip of characterClips) {
-        if (clip.character === 'Narrator') {
-          // Do not add a character image for Narrator audio; keep visuals template/overlays only.
-          continue;
-        }
-        const charPath = getCharacterImagePath(clip.character);
+      for (const clip of characterClipsForExport) {
+        const charPath = getCharacterClipImagePath(clip);
         if (charPath) {
           command.input(charPath).inputOptions(['-loop', '1']);
           characterInputs.push({ clip, inputIndex: nextInputIndex++ });
@@ -355,13 +361,21 @@ export async function compileTimeline(
       overlayInputs.forEach(({ clip, inputIndex, overlayPath }, index) => {
         const isReplace = isReplaceOverlayClip(clip);
         const isVideoOverlay = !isStillImageAsset(overlayPath);
-        const setpts = isVideoOverlay ? `setpts=PTS+${clip.start}/TB,` : '';
+        const setpts = isVideoOverlay ? `setpts=PTS-STARTPTS+${clip.start}/TB,` : '';
         const scaledLabel = isReplace ? `replace_scaled_${index}` : `scaled_${index}`;
         const overlayLabel = isReplace ? `with_replace_${index}` : `with_overlay_${index}`;
 
         if (isReplace) {
           // Preserve full overlay frame (no destructive crop) and letterbox/pillarbox into 9:16.
           filterComplex += `;[${inputIndex}:v]${setpts}scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:0x101014[${scaledLabel}]`;
+          filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
+          lastLabel = overlayLabel;
+          return;
+        }
+
+        if (isVideoOverlay) {
+          const topRegionH = getTopRegionHeight(1920);
+          filterComplex += `;[${inputIndex}:v]${setpts}scale=1080:${topRegionH}:force_original_aspect_ratio=decrease,pad=1080:${topRegionH}:(1080-iw)/2:0:0x00000000[${scaledLabel}]`;
           filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
           lastLabel = overlayLabel;
           return;
@@ -381,29 +395,7 @@ export async function compileTimeline(
       });
     }
 
-    // Character overlays (step 4)
     if (exportStep >= 4 && characterInputs.length > 0) {
-      const stewieClips = characterInputs.filter(c => c.clip.character === 'Stewie');
-      const peterClips = characterInputs.filter(c => c.clip.character === 'Peter');
-      const otherClips = characterInputs.filter(c => c.clip.character !== 'Stewie' && c.clip.character !== 'Peter');
-
-      const stewieRanges: string[] = [];
-      const peterRanges: string[] = [];
-      const otherRanges: string[] = [];
-      stewieClips.forEach(({ clip }) => {
-        stewieRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
-      });
-      peterClips.forEach(({ clip }) => {
-        peterRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
-      });
-      otherClips.forEach(({ clip }) => {
-        otherRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
-      });
-
-      const stewieEnable = stewieRanges.length > 0 ? stewieRanges.join('+') : '0';
-      const peterEnable = peterRanges.length > 0 ? peterRanges.join('+') : '0';
-      const otherEnable = otherRanges.length > 0 ? otherRanges.join('+') : '0';
-
       const stewieScaleW = 500;
       const stewieScaleH = 600;
       const peterScaleW = 580;
@@ -416,27 +408,18 @@ export async function compileTimeline(
       const peterY = 1250;
       const otherX = 260;
       const otherY = 1160;
-      const stewieInputIndex = stewieClips[0]?.inputIndex;
-      const peterInputIndex = peterClips[0]?.inputIndex;
-      const otherInputIndex = otherClips[0]?.inputIndex;
-
-      if (stewieInputIndex !== undefined) {
-        filterComplex += `;[${stewieInputIndex}:v]scale=${stewieScaleW}:${stewieScaleH}:force_original_aspect_ratio=decrease[stewie_scaled]`;
-        filterComplex += `;[${lastLabel}][stewie_scaled]overlay=${stewieX}:${stewieY}:enable='${stewieEnable}'[stewie_overlay]`;
-        lastLabel = 'stewie_overlay';
-      }
-
-      if (peterInputIndex !== undefined) {
-        filterComplex += `;[${peterInputIndex}:v]scale=${peterScaleW}:${peterScaleH}:force_original_aspect_ratio=decrease[peter_scaled]`;
-        filterComplex += `;[${lastLabel}][peter_scaled]overlay=${peterX}:${peterY}:enable='${peterEnable}'[with_characters]`;
-        lastLabel = 'with_characters';
-      }
-
-      if (otherInputIndex !== undefined) {
-        filterComplex += `;[${otherInputIndex}:v]scale=${otherScaleW}:${otherScaleH}:force_original_aspect_ratio=decrease[other_scaled]`;
-        filterComplex += `;[${lastLabel}][other_scaled]overlay=${otherX}:${otherY}:enable='${otherEnable}'[with_other_characters]`;
-        lastLabel = 'with_other_characters';
-      }
+      const { extraFilter, lastLabel: afterChars } = appendCharacterClipsToFilterComplex({
+        charInputs: characterInputs,
+        lastLabel,
+        labelPrefix: 'export',
+        geom: {
+          stewie: { x: stewieX, y: stewieY, w: stewieScaleW, h: stewieScaleH },
+          peter: { x: peterX, y: peterY, w: peterScaleW, h: peterScaleH },
+          other: { x: otherX, y: otherY, w: otherScaleW, h: otherScaleH },
+        },
+      });
+      filterComplex += extraFilter;
+      lastLabel = afterChars;
     }
 
     filterComplex += `;[${lastLabel}]format=yuv420p,setsar=1[final]`;
@@ -481,11 +464,11 @@ export async function compileTimeline(
         exists: !!resolveAudioClipPath(clip.path),
       })),
       ...overlayInputs.map(({ clip, inputIndex }) => {
-        const p = clip.path ?? path.join(IMAGE_UPLOAD_DIR, project.audioSessionId, `${clip.assetId}.png`);
+        const p = resolveSessionOverlayPath(IMAGE_UPLOAD_DIR, project.audioSessionId, clip.path, clip.assetId);
         return { index: inputIndex, type: 'overlay', path: p, exists: fs.existsSync(p) };
       }),
       ...characterInputs.map(({ clip, inputIndex }) => {
-        const p = getCharacterImagePath(clip.character);
+        const p = getCharacterClipImagePath(clip);
         return { index: inputIndex, type: 'character', path: p ?? '(none)', exists: !!p && fs.existsSync(p) };
       })
     ];

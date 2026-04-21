@@ -195,6 +195,11 @@ function getAnimationPlanReviewPath(projectId: string): string {
   return path.join(remotionProjectDir, REVIEW_FILENAME);
 }
 
+function sanitizeMomentFileToken(value: string): string {
+  const token = value.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+  return token.length > 0 ? token : 'moment';
+}
+
 export function loadAnimationPlanReview(projectId: string): AnimationPlanReviewPayload | null {
   const reviewPath = getAnimationPlanReviewPath(projectId);
   if (!fs.existsSync(reviewPath)) return null;
@@ -355,10 +360,34 @@ function clipLabel(moment: AnimationMoment, index: number): string {
   return snippet.length >= 30 ? `${snippet}...` : snippet;
 }
 
-function getAnimationMomentId(moment: AnimationMoment, index: number): string {
+export function getAnimationMomentId(moment: AnimationMoment, index: number): string {
   const raw = typeof moment.animationMomentId === 'string' ? moment.animationMomentId.trim() : '';
   if (raw) return raw;
   return `anim_moment_${index + 1}`;
+}
+
+/** Keep only moments whose id still exists on the timeline (same ids as draft overlay clips). */
+export function filterAnimationPlanReviewByAllowedMomentIds(
+  review: AnimationPlanReviewPayload,
+  allowedIds: Set<string>
+): AnimationPlanReviewPayload {
+  const moments = review.animationPlan.moments;
+  const filtered = moments.filter((moment, index) => {
+    const id = getAnimationMomentId(moment, index);
+    return allowedIds.has(id);
+  });
+  if (filtered.length === 0) {
+    throw new Error(
+      'No animation clips remain in the timeline to approve. Restore clips or regenerate the animation plan.'
+    );
+  }
+  return {
+    ...review,
+    animationPlan: {
+      ...review.animationPlan,
+      moments: filtered,
+    },
+  };
 }
 
 function buildMomentPrompt(moment: AnimationMoment): string {
@@ -864,7 +893,10 @@ function cleanGeneratedCode(raw: string): string {
     .replace(/\bEasing\.out\(\s*Easing\.ease\s*\)/g, 'Easing.out(Easing.quad)')
     .replace(/\bEasing\.in\(\s*Easing\.ease\s*\)/g, 'Easing.in(Easing.quad)')
     .replace(/\bEasing\.expo\b/g, 'Easing.exp')
-    .replace(/\bEasing\.ease\b/g, 'Easing.sin');
+    .replace(/\bEasing\.ease\b/g, 'Easing.sin')
+    // `interpolate(..., { easing })` requires an easing function. Model output
+    // sometimes passes `spring(...)` (a number), which crashes at runtime.
+    .replace(/easing\s*:\s*spring\s*\([\s\S]*?\)(?=\s*[},])/g, 'easing: Easing.out(Easing.cubic)');
   return stripSubtitleRenderingFromClipCode(sanitized);
 }
 
@@ -1324,13 +1356,24 @@ async function renderAnimationPlanFromReview(params: {
   promptOverrides?: Record<string, string>;
   remotionProjectDir: string;
   renderedProjectDir: string;
+  persistApproval?: boolean;
+  resetRenderedDir?: boolean;
 }): Promise<{
   animationPlan: AnimationPlan;
   overlayTracks: Track[];
   remotionProjectDir: string;
   renderedProjectDir: string;
 }> {
-  const { projectId, topic, review, promptOverrides, remotionProjectDir, renderedProjectDir } = params;
+  const {
+    projectId,
+    topic,
+    review,
+    promptOverrides,
+    remotionProjectDir,
+    renderedProjectDir,
+    persistApproval = true,
+    resetRenderedDir = true,
+  } = params;
   let previousBg: string | null = null;
   const moments: AnimationMoment[] = review.animationPlan.moments.map((moment, index) => {
     const animationMomentId = getAnimationMomentId(moment, index);
@@ -1357,7 +1400,11 @@ async function renderAnimationPlanFromReview(params: {
   }
 
   ensureDir(remotionProjectDir);
-  resetDir(renderedProjectDir);
+  if (resetRenderedDir) {
+    resetDir(renderedProjectDir);
+  } else {
+    ensureDir(renderedProjectDir);
+  }
 
   const numMoments = moments.length;
   const OPENCODE_SERIAL_DELAY_MS = 3000;
@@ -1435,12 +1482,13 @@ async function renderAnimationPlanFromReview(params: {
   console.log('[Animation] Step: render – rendering', numMoments, 'moments (serial)...');
   animationInfo('Rendering moments in serial', { projectId, momentCount: numMoments });
 
-  const renderedMoments: Array<{ moment: AnimationMoment; outputPath: string }> = [];
+  const renderedMoments: Array<{ sourceIndex: number; moment: AnimationMoment; outputPath: string }> = [];
   const renderFailures: Array<{ index: number; message: string }> = [];
 
   for (let i = 0; i < moments.length; i++) {
     const moment = moments[i];
-    const outputPath = path.join(renderedProjectDir, `moment_${i}.mp4`);
+    const momentToken = sanitizeMomentFileToken(getAnimationMomentId(moment, i));
+    const outputPath = path.join(renderedProjectDir, `moment_${i}_${momentToken}.mp4`);
     animationInfo('Rendering moment', {
       projectId,
       index: i,
@@ -1462,7 +1510,7 @@ async function renderAnimationPlanFromReview(params: {
       if (!fs.existsSync(outputPath)) {
         throw new Error(`Rendered file not found: ${outputPath}`);
       }
-      renderedMoments.push({ moment, outputPath });
+      renderedMoments.push({ sourceIndex: i, moment, outputPath });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       renderFailures.push({ index: i, message });
@@ -1474,8 +1522,8 @@ async function renderAnimationPlanFromReview(params: {
     throw new Error('No animation moments were rendered successfully');
   }
 
-  const overlayClips: OverlayClip[] = renderedMoments.map(({ moment, outputPath }, index) => ({
-    ...buildOverlayClipFromMoment(moment, index, {
+  const overlayClips: OverlayClip[] = renderedMoments.map(({ sourceIndex, moment, outputPath }) => ({
+    ...buildOverlayClipFromMoment(moment, sourceIndex, {
       status: 'approved',
       outputPath,
       dialogueContext: review.dialogueContext,
@@ -1489,23 +1537,25 @@ async function renderAnimationPlanFromReview(params: {
     moments: renderedMoments.map((item) => item.moment),
   };
 
-  const approvedReview: AnimationPlanReviewPayload = {
-    ...review,
-    approvalState: 'approved',
-    approvedAt: new Date().toISOString(),
-    animationPlan: finalPlan,
-  };
-  saveAnimationPlanReview(projectId, approvedReview);
+  if (persistApproval) {
+    const approvedReview: AnimationPlanReviewPayload = {
+      ...review,
+      approvalState: 'approved',
+      approvedAt: new Date().toISOString(),
+      animationPlan: finalPlan,
+    };
+    saveAnimationPlanReview(projectId, approvedReview);
 
-  const planPayload = {
-    projectId,
-    topic,
-    generatedAt: new Date().toISOString(),
-    animationPlan: finalPlan,
-    renderedFiles: renderedMoments.map((item) => item.outputPath),
-    review: approvedReview,
-  };
-  fs.writeFileSync(path.join(remotionProjectDir, PLAN_FILENAME), JSON.stringify(planPayload, null, 2), 'utf8');
+    const planPayload = {
+      projectId,
+      topic,
+      generatedAt: new Date().toISOString(),
+      animationPlan: finalPlan,
+      renderedFiles: renderedMoments.map((item) => item.outputPath),
+      review: approvedReview,
+    };
+    fs.writeFileSync(path.join(remotionProjectDir, PLAN_FILENAME), JSON.stringify(planPayload, null, 2), 'utf8');
+  }
 
   return {
     animationPlan: finalPlan,
@@ -1528,16 +1578,27 @@ export async function approveAnimationPlanRender(params: {
   projectId: string;
   topic: string;
   promptOverrides?: Record<string, string>;
+  /** If set, only these moment ids (from the saved timeline) are rendered — matches deleted draft clips. */
+  allowedMomentIds?: Set<string>;
 }): Promise<{
   animationPlan: AnimationPlan;
   overlayTracks: Track[];
   remotionProjectDir: string;
   renderedProjectDir: string;
 }> {
-  const { projectId, topic, promptOverrides } = params;
-  const review = loadAnimationPlanReview(projectId);
+  const { projectId, topic, promptOverrides, allowedMomentIds } = params;
+  let review = loadAnimationPlanReview(projectId);
   if (!review) {
     throw new Error('No pending animation plan review found. Create the animation plan first.');
+  }
+
+  if (allowedMomentIds) {
+    if (allowedMomentIds.size === 0) {
+      throw new Error(
+        'No animation clips in the timeline to approve. Restore clips or regenerate the animation plan.'
+      );
+    }
+    review = filterAnimationPlanReviewByAllowedMomentIds(review, allowedMomentIds);
   }
 
   const { remotionProjectDir, renderedProjectDir } = getAnimationProjectDirs(projectId);
@@ -1549,6 +1610,57 @@ export async function approveAnimationPlanRender(params: {
     remotionProjectDir,
     renderedProjectDir,
   });
+}
+
+export async function renderSingleAnimationMoment(params: {
+  projectId: string;
+  topic: string;
+  momentId: string;
+  promptOverrides?: Record<string, string>;
+}): Promise<{
+  overlayClip: OverlayClip;
+  animationMoment: AnimationMoment;
+  remotionProjectDir: string;
+  renderedProjectDir: string;
+}> {
+  const { projectId, topic, momentId, promptOverrides } = params;
+  const review = loadAnimationPlanReview(projectId);
+  if (!review) {
+    throw new Error('No pending animation plan review found. Create the animation plan first.');
+  }
+  const trimmedMomentId = momentId.trim();
+  if (!trimmedMomentId) {
+    throw new Error('Animation moment id is required.');
+  }
+
+  const filteredReview = filterAnimationPlanReviewByAllowedMomentIds(review, new Set([trimmedMomentId]));
+  const { remotionProjectDir, renderedProjectDir } = getAnimationProjectDirs(projectId);
+  const rendered = await renderAnimationPlanFromReview({
+    projectId,
+    topic,
+    review: filteredReview,
+    promptOverrides,
+    remotionProjectDir,
+    renderedProjectDir,
+    persistApproval: false,
+    resetRenderedDir: false,
+  });
+  const firstTrack = rendered.overlayTracks.find((track) => track.clips.length > 0);
+  const firstClip = firstTrack?.clips[0];
+  if (!firstClip || firstClip.kind !== 'overlay') {
+    throw new Error('Failed to render the selected animation clip.');
+  }
+  const renderedMoment = rendered.animationPlan.moments[0];
+  if (!renderedMoment) {
+    throw new Error('Rendered animation plan did not include a moment.');
+  }
+
+  return {
+    overlayClip: firstClip as OverlayClip,
+    animationMoment: renderedMoment,
+    remotionProjectDir: rendered.remotionProjectDir,
+    renderedProjectDir: rendered.renderedProjectDir,
+  };
 }
 
 export async function generateAnimationPlanAndRender(params: {

@@ -2,6 +2,7 @@
 
 import { useMemo, useRef } from 'react';
 import type { Clip, EditorProject, Track } from '../../../features/editor/types';
+import { voiceDisplayName } from '../../../features/editor/voiceDisplayName';
 
 type Props = {
   project: EditorProject;
@@ -48,9 +49,9 @@ function clipPathLabel(path?: string, fallback: string = 'Audio'): string {
 }
 
 function clipLabel(c: Clip): string {
-  if (c.kind === 'subtitle') return c.speaker;
+  if (c.kind === 'subtitle') return voiceDisplayName(c.speaker);
   if (c.kind === 'overlay') return c.label;
-  if (c.kind === 'character') return c.character;
+  if (c.kind === 'character') return voiceDisplayName(c.character);
   if (c.kind === 'music') return clipPathLabel(c.path, 'Music');
   if (c.kind === 'sfx') return clipPathLabel(c.path, 'SFX');
   return c.label;

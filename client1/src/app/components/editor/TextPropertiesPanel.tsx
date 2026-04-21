@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import type { Clip, ClipRef, EditorProject, OverlayClip } from '../../../features/editor/types';
+import { voiceDisplayName } from '../../../features/editor/voiceDisplayName';
 import { API_ENDPOINTS } from '../../../config/api';
 
 export type TextPropertiesPanelHandle = {
@@ -9,6 +10,21 @@ export type TextPropertiesPanelHandle = {
 };
 
 const TEMPLATE_TRACK_ID = 't_overlay_template';
+
+/** Shown between moment content and the model prompt when combining for editing. */
+const ANIMATION_PROMPT_SEPARATOR = '\n\n---\n\n';
+
+function combineAnimationContentAndPrompt(overlay: OverlayClip): string {
+  const content = (overlay.animationContent || '').trim();
+  const prompt = (overlay.promptText || '').trim();
+  if (overlay.promptEdited) {
+    return overlay.promptText ?? '';
+  }
+  if (content && prompt) {
+    return `${content}${ANIMATION_PROMPT_SEPARATOR}${prompt}`;
+  }
+  return content || prompt || '';
+}
 
 type Props = {
   width: number;
@@ -24,6 +40,8 @@ type Props = {
   onVideoStartChange?: (seconds: number) => void;
   /** Called after overlay image upload so parent can refetch project and refresh preview */
   onProjectUpdate?: () => void;
+  onGenerateAnimationClip?: (momentId: string) => Promise<void> | void;
+  generatingAnimationMomentId?: string | null;
 };
 
 function clamp01(n: number): number {
@@ -41,6 +59,8 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
   project,
   onVideoStartChange,
   onProjectUpdate,
+  onGenerateAnimationClip,
+  generatingAnimationMomentId,
 }, ref) {
   const isTemplateClip = selectedRef?.trackId === TEMPLATE_TRACK_ID && selected?.kind === 'overlay';
   const selectedOverlay = selected?.kind === 'overlay' ? (selected as OverlayClip) : null;
@@ -48,6 +68,12 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
   const planStatus = selectedOverlay?.planStatus ?? 'draft';
   const isDraftAnimationClip = isAnimationOverlayClip && planStatus === 'draft';
   const isApprovedAnimationClip = isAnimationOverlayClip && planStatus === 'approved';
+  const selectedMomentId = selectedOverlay?.animationMomentId?.trim() || '';
+  const isGeneratingSelectedAnimationClip = Boolean(
+    selectedMomentId &&
+      generatingAnimationMomentId &&
+      selectedMomentId === generatingAnimationMomentId
+  );
   const isTemplateVideo = project?.template?.type === 'video' && project?.template?.src;
   const showVideoStart = isTemplateClip && isTemplateVideo;
 
@@ -61,6 +87,7 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
   const [uploadingImage, setUploadingImage] = useState(false);
   const [removingImage, setRemovingImage] = useState(false);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [overlayPreviewIsVideo, setOverlayPreviewIsVideo] = useState(false);
   const [copiedField, setCopiedField] = useState<'prompt' | 'context' | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -118,16 +145,19 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
     };
   }, [isResizing, onWidthChange]);
 
-  // Load image preview when overlay clip is selected (use API URL so img src works in browser)
+  // Load overlay preview URL; video vs image from saved path (export/upload writes extension).
   useEffect(() => {
     if (selected?.kind === 'overlay' && projectId && !isAnimationOverlayClip) {
       const overlay = selected as OverlayClip;
       const url = API_ENDPOINTS.serveProjectImage(projectId, overlay.assetId);
       setImagePreview(url);
+      const p = overlay.path || '';
+      setOverlayPreviewIsVideo(/\.(mp4|webm|mov|m4v)$/i.test(p));
     } else {
       setImagePreview(null);
+      setOverlayPreviewIsVideo(false);
     }
-  }, [selected?.kind, selected?.id, selectedOverlay?.assetId, projectId, isAnimationOverlayClip]);
+  }, [selected?.kind, selected?.id, selectedOverlay?.assetId, selectedOverlay?.path, projectId, isAnimationOverlayClip]);
 
   const handleUploadImage = async (file: File) => {
     if (!selected || selected.kind !== 'overlay' || isAnimationOverlayClip) return;
@@ -151,12 +181,15 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
       
       if (data.success) {
         onUpdateClip({ path: data.imagePath } as Partial<Clip>);
-        // Use API URL for preview (cache-bust so new image shows)
+        const isVid =
+          data.assetKind === 'video' ||
+          (typeof data.filename === 'string' && /\.(mp4|webm|mov|m4v)$/i.test(data.filename));
+        setOverlayPreviewIsVideo(!!isVid);
         setImagePreview(`${API_ENDPOINTS.serveProjectImage(projectId, (selected as OverlayClip).assetId)}?t=${Date.now()}`);
         onProjectUpdate?.();
       }
     } catch (error) {
-      alert('Failed to upload image');
+      alert('Failed to upload media');
     } finally {
       setUploadingImage(false);
     }
@@ -165,19 +198,20 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
   const handleRemoveImage = async () => {
     if (!selected || selected.kind !== 'overlay' || isTemplateClip || isAnimationOverlayClip) return;
     const overlay = selected as OverlayClip;
-    if (!window.confirm('Remove this image from the overlay? The clip will stay; you can upload a new image later.')) return;
+    if (!window.confirm('Remove this media from the overlay? The clip stays; you can upload a new file later.')) return;
     setRemovingImage(true);
     try {
       const response = await fetch(API_ENDPOINTS.deleteProjectImage(projectId, overlay.assetId), {
         method: 'DELETE',
       });
-      if (!response.ok) throw new Error('Failed to remove image');
+      if (!response.ok) throw new Error('Failed to remove media');
       onUpdateClip({ path: undefined } as Partial<Clip>);
       setImagePreview(null);
+      setOverlayPreviewIsVideo(false);
       onProjectUpdate?.();
     } catch {
       setRemovingImage(false);
-      window.alert('Failed to remove image. Please try again.');
+      window.alert('Failed to remove media. Please try again.');
       return;
     }
     setRemovingImage(false);
@@ -189,6 +223,29 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
       handleUploadImage(file);
     }
   };
+
+  useEffect(() => {
+    if (!selected || selected.kind !== 'overlay' || isTemplateClip || isAnimationOverlayClip) return;
+
+    const handlePaste = (event: ClipboardEvent) => {
+      if (uploadingImage) return;
+      const items = event.clipboardData?.items;
+      if (!items || items.length === 0) return;
+
+      for (const item of Array.from(items)) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (!file) return;
+          event.preventDefault();
+          void handleUploadImage(file);
+          return;
+        }
+      }
+    };
+
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [selected, isTemplateClip, isAnimationOverlayClip, uploadingImage, projectId]);
 
   return (
     <div 
@@ -206,7 +263,7 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
 
       {!selected || !selectedRef ? (
         <div className="text-xs text-muted-foreground">
-          Click a clip in the timeline to edit it. Draft animation clips expose their animation prompt here, and image overlays expose upload and replace controls here.
+          Click a clip in the timeline to edit it. Draft animation clips expose their animation prompt here; clip-plan overlays let you upload images or short videos here.
         </div>
       ) : (
         <div className="space-y-4">
@@ -250,20 +307,33 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
             </div>
           )}
 
-          {/* When overlay clip is selected (e.g. from timeline), show Image Asset / upload first. Skip for template track. */}
+          {/* When overlay clip is selected (e.g. from timeline), show media upload. Skip for template track. */}
           {selected.kind === 'overlay' && !isTemplateClip && !isAnimationOverlayClip && (
             <div className="rounded border border-border bg-muted/30 p-3">
-              <div className="text-xs font-semibold mb-3">Image Asset</div>
+              <div className="text-xs font-semibold mb-3">Clip media</div>
               
               {imagePreview ? (
                 <div className="space-y-2">
-                  <img 
-                    src={imagePreview} 
-                    alt="Overlay preview" 
-                    className="w-full rounded border border-border bg-black/5"
-                    onError={() => setImagePreview(null)}
-                  />
-                  <div className="text-[10px] text-muted-foreground">Image uploaded</div>
+                  {overlayPreviewIsVideo ? (
+                    <video
+                      src={imagePreview}
+                      className="w-full rounded border border-border bg-black"
+                      controls
+                      muted
+                      playsInline
+                      onError={() => setImagePreview(null)}
+                    />
+                  ) : (
+                    <img 
+                      src={imagePreview} 
+                      alt="Overlay preview" 
+                      className="w-full rounded border border-border bg-black/5"
+                      onError={() => setImagePreview(null)}
+                    />
+                  )}
+                  <div className="text-[10px] text-muted-foreground">
+                    {overlayPreviewIsVideo ? 'Video uploaded' : 'Image uploaded'}
+                  </div>
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       onClick={() => fileInputRef.current?.click()}
@@ -278,21 +348,21 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
                       disabled={removingImage}
                       className="px-3 py-2 text-xs font-medium rounded border border-red-700/50 bg-red-600/15 text-red-700 hover:bg-red-600/25 transition disabled:opacity-50"
                     >
-                      {removingImage ? 'Removing...' : 'Remove image'}
+                      {removingImage ? 'Removing...' : 'Remove'}
                     </button>
                   </div>
                 </div>
               ) : (
                 <div className="space-y-2">
                   <div className="w-full h-32 rounded border-2 border-dashed border-border bg-muted/20 flex items-center justify-center text-muted-foreground text-xs">
-                    No image uploaded
+                    No image or video uploaded
                   </div>
                   <button
                     onClick={() => fileInputRef.current?.click()}
                     disabled={uploadingImage}
                     className="w-full px-3 py-2 text-xs bg-accent hover:bg-accent/90 text-white rounded transition disabled:opacity-50"
                   >
-                    {uploadingImage ? 'Uploading...' : '📤 Upload Image'}
+                    {uploadingImage ? 'Uploading...' : '📤 Upload image or video'}
                   </button>
                 </div>
               )}
@@ -300,7 +370,7 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*"
+                accept="image/*,video/mp4,video/webm,video/quicktime,video/x-m4v"
                 onChange={handleFileChange}
                 className="hidden"
               />
@@ -308,6 +378,7 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
               <div className="mt-3 text-[10px] text-muted-foreground">
                 <div className="font-semibold mb-1">Asset ID: {selectedOverlay?.assetId}</div>
                 <div>Label: {selectedOverlay?.label}</div>
+                <div className="mt-2">Tip: copy an image and press Ctrl/Cmd+V to paste it directly into this clip.</div>
               </div>
             </div>
           )}
@@ -328,23 +399,44 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
                   {isDraftAnimationClip ? 'Draft' : 'Approved'}
                 </span>
               </div>
+              {isDraftAnimationClip && onGenerateAnimationClip && selectedMomentId && (
+                <button
+                  type="button"
+                  disabled={isGeneratingSelectedAnimationClip}
+                  onClick={() => void onGenerateAnimationClip(selectedMomentId)}
+                  className="mt-3 w-full px-3 py-2 text-xs font-semibold rounded border border-emerald-700 bg-emerald-600 text-white hover:bg-emerald-700 transition disabled:opacity-50"
+                >
+                  {isGeneratingSelectedAnimationClip ? 'Generating clip...' : 'Generate this clip'}
+                </button>
+              )}
               <div className="mt-3">
                 <div className="mb-1 flex items-center justify-between">
-                  <label className="text-xs text-muted-foreground block">Prompt</label>
+                  <label className="text-xs text-muted-foreground block">
+                    Moment content and animation prompt
+                  </label>
                   <button
                     type="button"
-                    onClick={() => handleCopy('prompt', selectedOverlay?.promptText || '')}
+                    onClick={() =>
+                      handleCopy(
+                        'prompt',
+                        selectedOverlay ? combineAnimationContentAndPrompt(selectedOverlay) : ''
+                      )
+                    }
                     className="text-[10px] px-2 py-0.5 rounded border border-border bg-muted hover:bg-accent/10"
                   >
                     {copiedField === 'prompt' ? 'Copied' : 'Copy'}
                   </button>
                 </div>
                 <textarea
-                  value={selectedOverlay?.promptText || ''}
+                  value={
+                    selectedOverlay
+                      ? combineAnimationContentAndPrompt(selectedOverlay)
+                      : ''
+                  }
                   disabled={isApprovedAnimationClip}
                   placeholder={
                     isDraftAnimationClip
-                      ? 'Add or refine the animation prompt for this draft clip.'
+                      ? 'Moment content appears above the separator (---); refine or extend the full prompt below.'
                       : undefined
                   }
                   onChange={(e) =>
@@ -353,11 +445,27 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
                       promptEdited: true,
                     } as Partial<Clip>)
                   }
-                  className="w-full min-h-[120px] bg-muted border border-border rounded px-3 py-2 text-xs"
+                  onBlur={() => {
+                    if (!isDraftAnimationClip || !selectedOverlay || selectedOverlay.promptEdited) return;
+                    const content = (selectedOverlay.animationContent || '').trim();
+                    const prompt = (selectedOverlay.promptText || '').trim();
+                    const combined = [content, prompt].filter(Boolean).join(ANIMATION_PROMPT_SEPARATOR);
+                    if (!combined.trim()) return;
+                    if (combined !== prompt) {
+                      onUpdateClip({
+                        promptText: combined,
+                        promptEdited: true,
+                      } as Partial<Clip>);
+                    }
+                  }}
+                  className="w-full min-h-[160px] bg-muted border border-border rounded px-3 py-2 text-xs font-mono leading-relaxed"
                 />
                 {isDraftAnimationClip ? (
                   <div className="mt-2 text-[11px] text-muted-foreground">
-                    Add or edit the prompt text here. Timing and moment context stay locked for this review pass.
+                    Moment <span className="text-foreground/80">content</span> and{' '}
+                    <span className="text-foreground/80">prompt</span> are in one field so you can add context. A line
+                    with only <code className="text-[10px]">---</code> separates the two until you edit—then the whole
+                    box is saved as your prompt. Timing stays locked for this review pass.
                   </div>
                 ) : (
                   <div className="mt-2 text-[11px] text-muted-foreground">
@@ -368,7 +476,6 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
               <div className="mt-3 rounded border border-border bg-muted/40 p-2 space-y-1 text-[11px]">
                 <div><span className="text-muted-foreground">Moment:</span> {selectedOverlay?.animationMomentId}</div>
                 <div><span className="text-muted-foreground">Type:</span> {selectedOverlay?.animationType || 'n/a'}</div>
-                <div><span className="text-muted-foreground">Content:</span> {selectedOverlay?.animationContent || 'n/a'}</div>
                 <div><span className="text-muted-foreground">Subtitle:</span> {selectedOverlay?.animationSubtitle || 'n/a'}</div>
                 <div className="flex items-start justify-between gap-2">
                   <div><span className="text-muted-foreground">Context:</span> {selectedOverlay?.animationContextSummary || 'n/a'}</div>
@@ -457,6 +564,24 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
           {(selected.kind === 'overlay' || selected.kind === 'character') && !isAnimationOverlayClip && (
             <div className="rounded border border-border bg-muted/30 p-3">
               <div className="text-xs font-semibold mb-2">Transform</div>
+              {selected.kind === 'overlay' && (
+                <div className="mb-3">
+                  <label className="text-xs text-muted-foreground mb-1 block">Display mode</label>
+                  <select
+                    value={(selected as OverlayClip).displayMode ?? 'overlay'}
+                    onChange={(e) =>
+                      onUpdateClip({ displayMode: e.target.value as OverlayClip['displayMode'] } as Partial<Clip>)
+                    }
+                    className="w-full bg-muted border border-border rounded px-3 py-2 text-xs"
+                  >
+                    <option value="overlay">Overlay</option>
+                    <option value="replace">Replace</option>
+                  </select>
+                  <div className="mt-1 text-[10px] text-muted-foreground">
+                    Overlay keeps the template visible behind the clip. Replace swaps the full frame for clip duration.
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-3 gap-2">
                 <div>
                   <label className="text-xs text-muted-foreground mb-1 block">X (0-1)</label>
@@ -499,7 +624,7 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
             <div className="rounded border border-border bg-muted/30 p-3">
               <div className="text-xs font-semibold mb-2">Subtitle</div>
               <div className="text-xs text-muted-foreground">Speaker</div>
-              <div className="mt-1 text-xs font-semibold">{selected.speaker}</div>
+              <div className="mt-1 text-xs font-semibold">{voiceDisplayName(selected.speaker)}</div>
               <div className="mt-2 text-xs text-muted-foreground">Text</div>
               <textarea
                 value={selected.text}

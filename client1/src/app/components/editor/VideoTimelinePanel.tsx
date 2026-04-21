@@ -3,6 +3,7 @@
 import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { ArrowLeft, Download, Play, Pause, Plus, Settings, Trash2, Eye, EyeOff } from 'lucide-react';
 import type { Clip, ClipRef, EditorProject, Track } from '../../../features/editor/types';
+import { voiceDisplayName } from '../../../features/editor/voiceDisplayName';
 
 /**
  * Sort tracks in the correct order:
@@ -34,19 +35,19 @@ type Props = {
   onExport?: () => void;
   onSaveTimeline?: () => void;
   onGenerateSubtitlesAndChars?: () => void;
-  onGenerateImagePlan?: () => void;
+  onGenerateClipPlan?: () => void;
   onGenerateAnimationPlan?: () => void;
   onApproveAnimationPlan?: () => void;
   onGenerateSfxPlan?: () => void;
   isGeneratingDraft?: boolean;
-  isGeneratingImagePlan?: boolean;
+  isGeneratingClipPlan?: boolean;
   isGeneratingAnimationPlan?: boolean;
   isApprovingAnimationPlan?: boolean;
   isGeneratingSfxPlan?: boolean;
   isExporting?: boolean;
   exportProgress?: number;
   hasSubtitlesAndChars?: boolean;
-  hasImagePlan?: boolean;
+  hasClipPlan?: boolean;
   hasAnimationPlan?: boolean;
   hasDraftAnimationPlan?: boolean;
   hasApprovedAnimationPlan?: boolean;
@@ -177,8 +178,8 @@ function clipPathLabel(path?: string, fallback: string = 'Audio'): string {
 }
 
 function clipDisplayLabel(c: Clip): string {
-  if (c.kind === 'subtitle') return `${c.speaker}`;
-  if (c.kind === 'character') return c.character;
+  if (c.kind === 'subtitle') return voiceDisplayName(c.speaker);
+  if (c.kind === 'character') return voiceDisplayName(c.character);
   if (c.kind === 'overlay') return c.label;
   if (c.kind === 'music') return clipPathLabel(c.path, 'Music');
   if (c.kind === 'sfx') return clipPathLabel(c.path, 'SFX');
@@ -196,19 +197,19 @@ export default function VideoTimelinePanel({
   onExport,
   onSaveTimeline,
   onGenerateSubtitlesAndChars,
-  onGenerateImagePlan,
+  onGenerateClipPlan,
   onGenerateAnimationPlan,
   onApproveAnimationPlan,
   onGenerateSfxPlan,
   isGeneratingDraft,
-  isGeneratingImagePlan,
+  isGeneratingClipPlan,
   isGeneratingAnimationPlan,
   isApprovingAnimationPlan,
   isGeneratingSfxPlan,
   isExporting,
   exportProgress,
   hasSubtitlesAndChars,
-  hasImagePlan,
+  hasClipPlan,
   hasAnimationPlan,
   hasDraftAnimationPlan,
   hasApprovedAnimationPlan,
@@ -545,14 +546,14 @@ export default function VideoTimelinePanel({
               {isGeneratingDraft ? '⏳ Generating...' : 'Subtitles & Characters'}
             </button>
           )}
-          {!hasImagePlan && onGenerateImagePlan && (
+          {!hasClipPlan && onGenerateClipPlan && (
             <button
               type="button"
-              onClick={onGenerateImagePlan}
-              disabled={isGeneratingImagePlan}
+              onClick={onGenerateClipPlan}
+              disabled={isGeneratingClipPlan}
               className="px-3 py-1.5 text-xs font-semibold bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed shadow"
             >
-              {isGeneratingImagePlan ? '⏳ Generating...' : ' Image Plan'}
+              {isGeneratingClipPlan ? '⏳ Generating...' : 'Clip Plan'}
             </button>
           )}
           {onGenerateSfxPlan && (

@@ -1,7 +1,56 @@
+import fs from 'fs';
+import path from 'path';
 import { Timeline, Track, Clip } from '../schema/project';
+import { inferDialogueEmotion } from '../utils/inferDialogueEmotion';
+import { applyEmotionVarietyNudges, generateCharacterEmotionsWithAi } from './characterEmotionAi';
 import { ImageEmbeddingService } from './imageEmbedder';
 import { MIN_SUBTITLE_CLIP_DURATION } from './subtitleClipNormalize';
 
+const AUDIO_STORAGE_DIR = path.join(process.cwd(), 'storage', 'audio');
+
+type SessionConversationFile = {
+  characterSet?: string;
+  selectedCharacter?: string;
+};
+
+/**
+ * Single-voice sessions persist the real TTS identity in conversation.json (`selectedCharacter`).
+ * Prisma `dialogue.character` often stays "Narrator" even when `characterSet` / `selectedCharacter`
+ * were never written — still use Peter (or selectedCharacter) for subtitles + character clips.
+ */
+function readSessionConversationMeta(sessionId: string): SessionConversationFile | null {
+  try {
+    const filePath = path.join(AUDIO_STORAGE_DIR, sessionId, 'conversation.json');
+    if (!fs.existsSync(filePath)) return null;
+    return JSON.parse(fs.readFileSync(filePath, 'utf8')) as SessionConversationFile;
+  } catch {
+    return null;
+  }
+}
+
+function resolveClipSpeakerLabel(sessionId: string, dialogueCharacter: string): string {
+  const raw = (dialogueCharacter ?? '').trim();
+  const meta = readSessionConversationMeta(sessionId);
+  const selected =
+    typeof meta?.selectedCharacter === 'string' && meta.selectedCharacter.trim() !== ''
+      ? meta.selectedCharacter.trim()
+      : null;
+
+  if (meta?.characterSet === 'single' && selected) {
+    return selected;
+  }
+
+  if (/^narrator$/i.test(raw)) {
+    return selected ?? 'Peter';
+  }
+
+  return raw || dialogueCharacter;
+}
+
+/**
+ * Character plan (subtitles + bottom character clips + audio lane metadata).
+ * Independent from image plan — run `generateImagePlan` separately when you want overlay stills.
+ */
 export type SubtitlesAndCharactersResult = {
   duration: number;
   subtitleTrack: Track;
@@ -9,6 +58,7 @@ export type SubtitlesAndCharactersResult = {
   audioTrack: Track;
 };
 
+/** Image plan: overlay tracks (t_imgs / t_imgs_N) only. Does not create or modify character clips. */
 export type ImagePlanResult = {
   overlayTracks: Track[];
 };
@@ -27,7 +77,7 @@ export async function generateSubtitlesAndCharacters(
   }
 
   const subtitleClips = await generateSubtitleClips(session, audioSessionId);
-  const characterClips = await generateCharacterClips(session, audioSessionId);
+  const characterClips = await generateCharacterClips(session, audioSessionId, topic);
 
   const audioTrack: Track = {
     id: 't_audio',
@@ -66,8 +116,8 @@ export async function generateSubtitlesAndCharacters(
 }
 
 /**
- * Generate image plan overlay clips only.
- * Use this for the "Image Plan" action.
+ * Generate clip plan overlay clips only (AI-suggested image/video slots).
+ * Use this for the "Clip Plan" action.
  */
 export async function generateImagePlan(
   audioSessionId: string,
@@ -119,11 +169,11 @@ function clipsOverlap(
 
 /**
  * Assign overlay clips to tracks so that overlapping clips end up on different tracks.
- * First track is "Images" (t_imgs), then "Images 2" (t_imgs_2), etc.
+ * First track is "Clips" (t_imgs), then "Clips 2" (t_imgs_2), etc.
  */
 function assignOverlappingClipsToTracks(clips: Clip[]): Track[] {
   if (clips.length === 0) {
-    return [{ id: 't_imgs', type: 'overlay', name: 'Images', clips: [] }];
+    return [{ id: 't_imgs', type: 'overlay', name: 'Clips', clips: [] }];
   }
 
   const sorted = [...clips].sort((a, b) => a.start - b.start);
@@ -151,28 +201,27 @@ function assignOverlappingClipsToTracks(clips: Clip[]): Track[] {
   return trackClips.map((clipsInTrack, i) => ({
     id: i === 0 ? 't_imgs' : `t_imgs_${i + 1}`,
     type: 'overlay' as const,
-    name: i === 0 ? 'Images' : `Images ${i + 1}`,
+    name: i === 0 ? 'Clips' : `Clips ${i + 1}`,
     clips: clipsInTrack,
   }));
 }
 
 /**
- * @deprecated Use generateSubtitlesAndCharacters + generateImagePlan separately
- * Generate full AI draft (backward compatibility)
+ * Build a timeline that contains only subtitles, character clips, and audio — no image-plan overlays.
+ * For still image moments, call `generateImagePlan` separately and merge on the server via
+ * `generateImagePlanForProject` (or compose tracks yourself).
  */
 export async function generateAiDraft(
   audioSessionId: string,
   topic: string
 ): Promise<Timeline> {
-  const { duration, audioTrack, subtitleTrack, characterTrack } = await generateSubtitlesAndCharacters(audioSessionId, topic);
-  let overlayTracks: Track[] = [{ id: 't_imgs', type: 'overlay', name: 'Images', clips: [] }];
-  try {
-    const plan = await generateImagePlan(audioSessionId, topic);
-    overlayTracks = plan.overlayTracks;
-  } catch (_e) {}
+  const { duration, audioTrack, subtitleTrack, characterTrack } = await generateSubtitlesAndCharacters(
+    audioSessionId,
+    topic
+  );
   return {
     duration,
-    tracks: [audioTrack, subtitleTrack, ...overlayTracks, characterTrack],
+    tracks: [audioTrack, subtitleTrack, characterTrack],
   };
 }
 
@@ -265,6 +314,8 @@ async function generateSubtitleClips(session: any, _audioSessionId: string): Pro
   for (const dialogue of session.dialogues) {
     if (!dialogue.audioFile?.filePath) continue;
 
+    const speaker = resolveClipSpeakerLabel(_audioSessionId, dialogue.character);
+
     // Use clean sentence-level alignment (same strategy as backend)
     const alignment = await getWhisperXCleanAlignment(
       dialogue.audioFile.filePath,
@@ -287,7 +338,7 @@ async function generateSubtitleClips(session: any, _audioSessionId: string): Pro
           kind: 'subtitle',
           start: clipStart,
           duration: clipDuration,
-          speaker: dialogue.character,
+          speaker,
           text: sentence.text,
         });
         sentenceAcc = clipStart + clipDuration;
@@ -308,7 +359,7 @@ async function generateSubtitleClips(session: any, _audioSessionId: string): Pro
         kind: 'subtitle',
         start: cumulativeTime,
         duration,
-        speaker: dialogue.character,
+        speaker,
         text: dialogue.text,
       });
       cumulativeTime += duration;
@@ -322,7 +373,22 @@ async function generateSubtitleClips(session: any, _audioSessionId: string): Pro
  * Generate character clips based on speakers
  * Uses actual audio file duration (not WhisperX) so clips align with concatenated audio
  */
-async function generateCharacterClips(session: any, _audioSessionId: string): Promise<Clip[]> {
+async function generateCharacterClips(session: any, audioSessionId: string, topic: string): Promise<Clip[]> {
+  const dialoguesWithAudio = (session.dialogues as any[]).filter((d) => d?.audioFile?.filePath);
+  const emotionItems = dialoguesWithAudio.map((d) => ({
+    id: String(d.id),
+    text: String(d.text ?? ''),
+  }));
+  const aiEmotions =
+    emotionItems.length > 0 ? await generateCharacterEmotionsWithAi(emotionItems, topic) : {};
+
+  const emotionById: Record<string, string> = {};
+  for (const d of dialoguesWithAudio) {
+    const id = String(d.id);
+    emotionById[id] = aiEmotions[id] ?? inferDialogueEmotion(String(d.text ?? ''));
+  }
+  applyEmotionVarietyNudges(emotionItems, emotionById);
+
   const clips: Clip[] = [];
   let cumulativeTime = 0;
 
@@ -330,12 +396,16 @@ async function generateCharacterClips(session: any, _audioSessionId: string): Pr
     if (!dialogue.audioFile?.filePath) continue;
 
     const duration = await getAudioFileDuration(dialogue);
-    const character = dialogue.character;
+    const character = resolveClipSpeakerLabel(audioSessionId, dialogue.character);
 
-    // Position character based on speaker
-    const x = character === 'Stewie' ? 0.78 : character === 'Peter' ? 0.16 : 0.5;
+    // Position: duo uses Stewie/Peter corners; single-voice (Narrator) uses Peter slot.
+    const x =
+      character === 'Stewie' ? 0.78 : character === 'Peter' || character === 'Narrator' ? 0.16 : 0.5;
     const y = 0.70;
     const scale = 0.60;
+
+    const dialogueId = String(dialogue.id);
+    const emotion: string | undefined = character ? emotionById[dialogueId] : undefined;
 
     clips.push({
       id: `char_${dialogue.id}`,
@@ -346,6 +416,7 @@ async function generateCharacterClips(session: any, _audioSessionId: string): Pr
       x,
       y,
       scale,
+      ...(emotion && { emotion }),
     });
 
     cumulativeTime += duration;

@@ -21,7 +21,7 @@ export function buildAnimationDirectionPrompt({
 Target platforms: TikTok, Instagram Reels, YouTube Shorts.
 Your job: transform the timeline plan into 2D motion graphic directions that look like they
 were made in 2025-2026 — not 2020. Every moment must feel scroll-stopping, platform-native,
-and visually current.
+and visually current, mimicking modern UI engineering (Framer, React Native).
 
 PRIMARY JOB — HIGHLIGHT THE PUNCH (NOT GENERIC DECORATION)
 Motion graphics here mostly punctuate the talking video: they spotlight the specific word,
@@ -33,6 +33,44 @@ restates the whole sentence.
 Every moment must answer: "What is the ONE takeaway from this line?" That takeaway is what
 gets displayText, accent color, and the boldest motion. Avoid moments that could apply to
 any clip; tie visuals to the exact hook in the dialogue.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RULE 1: STRICT TIMING MATH (NO ORPHAN HERO WORDS)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Viewers may skim with sound low, or read before the VO catches up. A lone keyword on screen
+before the sentence explains it (e.g. "LOCKED" with no subject) feels like bad timing.
+
+1. **Calculate the Strike Frame**: Read DIALOGUE_WINDOWS_BY_MOMENT and identify the timestamp
+   where the hook word/phrase is spoken.
+2. **Show your math**: convert timestamp to frames at 30 FPS.
+   Strike Frame = (timestamp in seconds) × 30.
+3. **Context Beat first**: Frames 0 until Strike Frame are for context-only visuals (shapes,
+   UI anchors, arcs, grid builds, parallax). Hero text cannot be fully visible yet.
+4. **Hard lock on audio**: Hero displayText lands exactly at Strike Frame using a T-series technique.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RULE 2: NO DEAD BACKGROUNDS (LAYERED COMPLEXITY)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+A flat static background is forbidden. Every moment must use at least 3 active layers:
+- Layer 1 (Ambient Background): continuous motion from frame 0 using one B-series pattern.
+- Layer 2 (Graphic/UI Anchor): a G-series or L-series context element that arrives before hero text.
+- Layer 3 (Kinetic Typography): delayed hero text lock using a T-series technique at Strike Frame.
+
+Opacity-only text fades are banned. Use physics-based motion (spring, bounce, elastic).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+B-SERIES: MODERN BACKGROUND PATTERNS (NON-DISTRACTING)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- B1. Slow Gradient Drift: blurred radial blooms (15-25% opacity) drifting/orbiting slowly.
+- B2. Architectural Grid: 1px low-contrast grid (<10% opacity) with subtle vertical pan.
+- B3. LED Dot Matrix: soft dot clusters pulsing between 10-25% opacity, no fast strobe.
+- B4. Monospace Data Scrim: faint falling numbers/code, opacity strictly below 12%.
+- B5. Soft Topography Lines: 1px contour lines moving laterally at low opacity (~15%).
+- B6. Subdued Film Grain: constant grain layer around 15% opacity.
+
+Anti-interference guardrails:
+- B-series layers stay at the far back, low contrast, and cannot compete with readable text.
+- No sharp high-contrast imagery or fast background motion in Layer 1.
 
 HARD CONSTRAINTS:
 - Flat 2D motion graphics ONLY. No 3D. No isometric perspective. No z-axis depth tricks.
@@ -89,6 +127,9 @@ RULES (every violation fails the output):
 MANDATORY TOOLING:
 - Use the "skill" tool to load "remotion-best-practices" before writing any output.
 - Use all RESEARCH_CONTEXT below.
+- Use Exa MCP (internet research) in this direction stage to validate style choices against current short-form motion trends before finalizing output.
+- For each moment, map at least one researched style cue (transition language, pacing pattern, composition idea, or typography behavior) into the animationPrompt.
+- Keep researched cues practical for 2D Remotion implementation (no impossible VFX, no 3D rigs).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 INPUTS
@@ -183,6 +224,23 @@ REFERENCE PALETTE CATALOGUE (pick from or riff off freely):
 "espresso-rose"
   bg:#180e0b  primary:#a0524a  accent:#d4a0a0  text:#f5ede8
   Feel: dark mode warmth, soft, approachable.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1.5 — INTERNET STYLE VALIDATION (EXA REQUIRED)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Before writing final JSON, use Exa MCP to quickly validate that each moment's aesthetic/motion
+direction aligns with current (2024-2026) short-form motion language.
+
+Do this per moment:
+- Identify 1-2 relevant style references or trend patterns from web research.
+- Translate findings into concrete motion decisions usable in Remotion (entry pattern, hold behavior,
+  transition cadence, type treatment, UI choreography).
+- Keep output grounded: no generic "make it modern" wording.
+
+Write this influence into:
+- composition.aestheticNotes (briefly reference the kind of trend influence applied),
+- beat1.techniques[] (specific technique code + name),
+- animationPrompt (frame-by-frame detail showing how that influence appears on screen).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 2 — VISUAL AESTHETIC SYSTEM
@@ -646,6 +704,22 @@ ALL elements: 120px margin top/bottom, 60px margin left/right.
 Platform UI (likes, captions, profile icons) occludes outer edges.
 Key content placed outside safe zone = invisible to viewers.
 
+TEXT PLACEMENT HARD CONSTRAINTS (STRICT):
+- ALL text elements (primary + optional secondary + badges/labels) must stay fully inside a tighter
+  text-safe box: top >= 180px, bottom <= 1740px, left >= 120px, right <= 960px (1080x1920 frame).
+- Do NOT place any text flush against any edge or corner. Minimum breathing room:
+  120px from left/right and 180px from top/bottom at all keyframes.
+- Text must remain horizontal and readable: no vertical text stacks, no 90° rotation,
+  no diagonal/slanted baseline, no perspective skew, no curved-on-path text.
+- Top strip and corner micro-label text are banned (e.g. tiny brand wordmarks at top-left/top-right).
+- Keep text in the central reading band: preferred y-center between 38% and 68% frame height for
+  primary displayText, unless punch timing requires a brief offset.
+- Keep text block width between 35% and 82% of frame width. Ultra-narrow single-letter
+  columns and over-wide edge-to-edge headlines are both rejected.
+- Animate text with translateX/translateY/scale/opacity only (2D). Any transform that can
+  push glyphs outside the text-safe box at entry/overshoot/exit is forbidden.
+- If a layout risks clipping, re-center or switch to L3/L4 style composition before output.
+
 Eye tracking patterns:
 Z-pattern (sparse moments) → display top-left, secondary top-right, diagonal, bottom read.
 F-pattern (dense moments)  → horizontal scan top, then vertical down left side.
@@ -711,6 +785,8 @@ narratorText   → full sentence the narrator speaks. FOR AUDIO SYNC ONLY. NEVER
 
 displayText    → THE ONLY TEXT THAT APPEARS ON SCREEN. 1-4 words maximum. No exceptions.
                Derived from narratorText — pick the 1-4 most important words from it.
+               Prefer a phrase that carries meaning alone; avoid a single word that needs prior
+               context unless punch timing (above) defers the lock until the VO has set it up.
                This is what the primary text element renders at 72px+, fontWeight 800-900.
                e.g. narratorText: "Over sixty three percent of deployed instances are vulnerable to attacks"
                     displayText:  "63% VULNERABLE"
@@ -730,25 +806,31 @@ elements[]     → explicit list of every visible element with type:value AND fo
                      "progress-arc:78%", "warm-bloom:accent-color-radius-160px",
                      "noise-overlay:opacity-0.15", "hard-shadow-card:primary-fill-accent-7px-shadow"]
                REJECT any text element entry missing fontSize. REJECT any entry below 48px.
-beat1          → primary entry animation. techniques[] = list of T/G/L/I codes + names.
-               Entry should complete within 0.3-0.5s (frames 0-15 at 30fps). Fast and decisive.
+beat1          → primary entry animation. techniques[] must include at least one B* code, at least
+               one G* or L* code, and at least one T* code (plus optional I*). Entry should complete
+               within 0.3-0.5s (frames 0-15 at 30fps). Fast and decisive.
 holdWindow     → covers the majority of clip duration. ALWAYS in motion — never fully stopped.
                Pick a hold easing (breathe/drift/drift-x/pulse-glow/slow-scale) and keep
                amplitude subtle. This is most of what the viewer sees — make it feel alive.
 beat2OrNull    → NULL by default. Only populate if duration ≥ 6s AND a genuine second
                visual event exists. Do not invent a second beat to fill time.
-animationPrompt → 3-5 lines ONLY. Written as a TIME SEQUENCE, not a component spec.
+animationPrompt → 3-6 lines ONLY. Written as a TIME SEQUENCE, not a component spec.
                WRONG: "A card with primary fill and accent border."
                RIGHT: "Frames 0-12: card enters from below via spring-snappy, boxShadow
                         '7px 7px 0 accent' visible as it settles. Frames 12-50: card breathes
                         (scale 1.0→1.012→1.0), counter rolls 0→47 (T8). Frame 50: snap-cut out."
   Every sentence must answer: WHAT changes → WHEN (frame number) → HOW (easing/spring).
-  Line 1: "Frames 0-X: [what enters, from where, via easing name]."
-  Line 2: "Frames X-Y: [hold easing in effect. what remains visible and in motion]."
-  Line 3: "At frame Y: [second event if beat2 exists — what changes and when]."
-  Line 4: "Colors: [which palette hex on which element, briefly]."
-  Line 5: "Icons/assets: [Lucide name, Simple Icons slug, or SVG description]."
+  Line 1: "Frames 0-[Strike Frame]: [Layer 1 B-series background behavior] + [Layer 2 context beat entry]."
+  Line 2: "Frames [Strike Frame]-Y: [hold easing in effect for background/graphics]."
+  Line 3: "Punch sync: Hook word '[WORD]' spoken at [X.X]s -> Frame [Y]. Text locks exactly at Frame [Y] via [T-series technique]."
+  Line 4: "At frame Y: [second event if beat2 exists — what changes and when]."
+  Line 5: "Colors: [which palette hex on which element, briefly]."
+  Line 6: "Icons/assets: [Lucide name, Simple Icons slug, or SVG description]."
   The word "frames" must appear at least 3 times in every animationPrompt.
+  Complexity requirement: each animationPrompt must describe at least 3 distinct motion actions
+  across the clip (e.g., context layer entry, hero text lock, secondary event/exit), not a single fade.
+  Detailed means concrete values and behavior: frame ranges, easing names, what object changes, and
+  relationship between layers (background/mid/foreground).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PRE-OUTPUT CHECKLIST (verify every item before returning JSON):
@@ -765,7 +847,9 @@ PRE-OUTPUT CHECKLIST (verify every item before returning JSON):
 □ bg and text pass 4.5:1 contrast on every moment.
 □ accent used on exactly ONE element per moment.
 □ colorNotes on every moment explicitly maps hex → element.
-□ Every moment: at least one technique code referenced in beat1.techniques[].
+□ Math verified: Hook timestamp from dialogue windows is converted with (seconds × 30) and used as Strike Frame.
+□ No dead backgrounds: Layer 1 uses one explicit B-series pattern with continuous low-contrast motion.
+□ Every moment: beat1.techniques[] lists at least one B* code, at least one G* or L* code, and at least one T* code.
 □ elements[] contains explicit type:value pairs for every visible element.
 □ Every text entry in elements[] has a fontSize annotation (e.g. "— 96px"). No exceptions.
 □ Zero text elements in elements[] below 48px. If found, delete or upsize.
@@ -778,8 +862,14 @@ PRE-OUTPUT CHECKLIST (verify every item before returning JSON):
 □ Every moment has holdWindow with holdEasing from: breathe/drift/drift-x/pulse-glow/slow-scale.
 □ NO moment uses "static" as its holdEasing. Animation never fully stops.
 □ beat2OrNull is NULL unless moment duration ≥ 6s AND a genuine second event exists.
-□ animationPrompt is 3-5 lines. Written as time sequence (frames X-Y: ...) not component spec.
+□ animationPrompt is 3-6 lines and follows strict format with Strike Frame context beat + Punch sync math line.
 □ The word "frames" appears at least 3 times in every animationPrompt.
+□ Exa-based style validation applied per moment and reflected in aestheticNotes + animationPrompt.
+□ Layered complexity verified: at least 3 distinct motion actions (background, context anchor, hero lock) before optional secondary/exit.
+□ ALL text elements remain fully inside text-safe box (top>=180, bottom<=1740, left>=120, right<=960 at 1080x1920).
+□ Text remains horizontal/readable only (no vertical stacks, no 90°/diagonal/skewed text, no curved path text).
+□ No top-strip/corner micro-label text (tiny brand labels near top-left/top-right are rejected).
+□ No text clipping during any keyframe (entry, overshoot, hold, exit); if clipping risk exists, revise layout/scale.
 □ NO 3D. NO isometric. NO z-axis perspective. NO rotateX/rotateY.
 □ NO outdated styles: no card-wobble, no generic lower-third slide, no plain fade-in text.
 □ Return JSON only. No markdown fences. No explanation text outside JSON.`;

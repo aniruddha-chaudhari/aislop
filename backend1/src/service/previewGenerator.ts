@@ -4,13 +4,15 @@ const ffmpeg = require('fluent-ffmpeg');
 const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
 import { PrismaClient } from '../generated/prisma';
 import type { Project, SubtitleClip, OverlayClip, CharacterClip, MusicClip, SfxClip } from '../schema/project';
-import { getCharacterImagePath } from '../utils/characterImages';
+import { getCharacterClipImagePath } from '../utils/characterImages';
+import { appendCharacterClipsToFilterComplex, expandCharacterClipsExcludingReplaceRanges } from './characterOverlayFilters';
 import { computeOverlayPlacement } from './overlayTransform';
 import {
   fixSubtitleClipsTimelineNonOverlap,
   clampAssEventToClip,
   getSubtitleWordText,
 } from './subtitleClipNormalize';
+import { resolveSessionOverlayPath } from '../utils/overlayAssets';
 
 const prisma = new PrismaClient();
 const TEMP_DIR = path.join(process.cwd(), 'storage', 'temp');
@@ -85,7 +87,7 @@ function isPlanOverlayTrack(track: { type?: string; id?: string }): boolean {
 }
 
 function resolveOverlayAssetPath(clip: OverlayClip, audioSessionId: string): string {
-  return clip.path ?? path.join(IMAGE_UPLOAD_DIR, audioSessionId, `${clip.assetId}.png`);
+  return resolveSessionOverlayPath(IMAGE_UPLOAD_DIR, audioSessionId, clip.path, clip.assetId);
 }
 
 function isStillImageAsset(filePath: string): boolean {
@@ -95,7 +97,8 @@ function isStillImageAsset(filePath: string): boolean {
 /**
  * Add an overlay as an input. For still images: loop for full timeline.
  * For video (e.g. animation moment): trim to clip.duration only so overlay plays 0→duration in order;
- * the filter chain must apply setpts=PTS+clip.start/TB so it lines up with timeline.
+ * the filter chain must apply setpts=PTS-STARTPTS+clip.start/TB so it lines up with timeline
+ * without carrying source timestamps that can push the visual later.
  */
 function addOverlayInput(
   command: any,
@@ -119,19 +122,22 @@ function isReplaceOverlayClip(clip: OverlayClip): boolean {
   return clip.displayMode === 'replace' && clip.planStatus !== 'draft';
 }
 
+function getTopRegionHeight(frameHeight: number): number {
+  // Reserve the same subtitle-safe area proportion used by 1080x1920 export.
+  const subtitleSafeBottomMargin = Math.floor((700 / 1920) * frameHeight);
+  return Math.max(1, frameHeight - subtitleSafeBottomMargin);
+}
+
 function buildReplaceOverlayRanges(clips: OverlayClip[]): TimeRange[] {
   return clips
     .filter(isReplaceOverlayClip)
     .map((clip) => ({ start: clip.start, end: clip.start + clip.duration }));
 }
 
-function excludeSubtitlesInRanges(subtitleClips: SubtitleClip[], excludedRanges: TimeRange[]): SubtitleClip[] {
-  if (excludedRanges.length === 0) return subtitleClips;
-  return subtitleClips.filter((clip) => {
-    const clipStart = clip.start;
-    const clipEnd = clip.start + clip.duration;
-    return !excludedRanges.some((range) => clipStart < range.end && range.start < clipEnd);
-  });
+function excludeSubtitlesInRanges(subtitleClips: SubtitleClip[], _excludedRanges: TimeRange[]): SubtitleClip[] {
+  // Keep subtitle timeline untouched even during replace overlays.
+  // Dropping subtitle clips before enrichment can shift later word timings.
+  return subtitleClips;
 }
 
 // Ensure preview directory exists
@@ -693,7 +699,11 @@ export async function generateTimelinePreview(
     const subtitleTrack = timeline?.tracks?.find((t: any) => t.type === 'subtitle');
 
     const overlayClips = planOverlayTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'overlay') || [])) as OverlayClip[];
-    const characterClips = (characterTrack?.clips?.filter((c: any) => c.kind === 'character') || []) as CharacterClip[];
+    let characterClips = (characterTrack?.clips?.filter((c: any) => c.kind === 'character') || []) as CharacterClip[];
+    characterClips = expandCharacterClipsExcludingReplaceRanges(
+      characterClips,
+      buildReplaceOverlayRanges(overlayClips)
+    );
     let subtitleClips = (subtitleTrack?.clips?.filter((c: any) => c.kind === 'subtitle') || []) as SubtitleClip[];
     const musicClips = musicTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'music') || [])) as MusicClip[];
     const sfxClips = sfxTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'sfx') || [])) as SfxClip[];
@@ -766,7 +776,7 @@ export async function generateTimelinePreview(
     let nextIdx = nextInputIndex;
     const charInputs: { clip: CharacterClip; inputIndex: number }[] = [];
     for (const clip of characterClips) {
-      const charPath = getCharacterImagePath(clip.character);
+      const charPath = getCharacterClipImagePath(clip);
       if (charPath) {
         command.input(charPath);
         charInputs.push({ clip, inputIndex: nextIdx++ });
@@ -797,12 +807,20 @@ export async function generateTimelinePreview(
     overlayInputs.forEach(({ clip, inputIndex, overlayPath }, index) => {
       const isReplace = isReplaceOverlayClip(clip);
       const isVideoOverlay = !isStillImageAsset(overlayPath);
-      const setpts = isVideoOverlay ? `setpts=PTS+${clip.start}/TB,` : '';
+      const setpts = isVideoOverlay ? `setpts=PTS-STARTPTS+${clip.start}/TB,` : '';
       const scaledLabel = isReplace ? `ov_replace_${index}` : `ov${index}`;
       const overlayLabel = isReplace ? `vr${index}` : `vo${index}`;
       if (isReplace) {
         // Preserve full frame and fit inside vertical canvas for replace mode previews.
         filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x101014[${scaledLabel}]`;
+        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
+        lastLabel = overlayLabel;
+        return;
+      }
+
+      if (isVideoOverlay) {
+        const topRegionH = getTopRegionHeight(PREVIEW_HEIGHT);
+        filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${topRegionH}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${topRegionH}:(ow-iw)/2:0:0x00000000[${scaledLabel}]`;
         filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
         lastLabel = overlayLabel;
         return;
@@ -822,56 +840,26 @@ export async function generateTimelinePreview(
     });
 
     if (charInputs.length > 0) {
-      const stewieClips = charInputs.filter(c => c.clip.character === 'Stewie');
-      const peterClips = charInputs.filter(c => c.clip.character === 'Peter');
-      const otherClips = charInputs.filter(c => c.clip.character !== 'Stewie' && c.clip.character !== 'Peter');
-
-      const stewieRanges: string[] = [];
-      const peterRanges: string[] = [];
-      const otherRanges: string[] = [];
-      stewieClips.forEach(({ clip }) => {
-        stewieRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
-      });
-      peterClips.forEach(({ clip }) => {
-        peterRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
-      });
-      otherClips.forEach(({ clip }) => {
-        otherRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
-      });
-
-      const stewieEnable = stewieRanges.length > 0 ? stewieRanges.join('+') : '0';
-      const peterEnable = peterRanges.length > 0 ? peterRanges.join('+') : '0';
-      const otherEnable = otherRanges.length > 0 ? otherRanges.join('+') : '0';
-
       const stewieScaleW = Math.floor(500 * SCALE);
       const stewieScaleH = Math.floor(600 * SCALE);
       const peterScaleW = Math.floor(580 * SCALE);
       const peterScaleH = Math.floor(720 * SCALE);
       const otherScaleW = Math.floor(560 * SCALE);
       const otherScaleH = Math.floor(760 * SCALE);
-      const stewieInputIndex = stewieClips[0]?.inputIndex;
-      const peterInputIndex = peterClips[0]?.inputIndex;
-      const otherInputIndex = otherClips[0]?.inputIndex;
       const otherX = Math.floor(260 * SCALE);
       const otherY = Math.floor(1160 * SCALE);
-
-      if (stewieInputIndex !== undefined) {
-        filterComplex += `;[${stewieInputIndex}:v]scale=${stewieScaleW}:${stewieScaleH}:force_original_aspect_ratio=decrease[stewie_scaled]`;
-        filterComplex += `;[${lastLabel}][stewie_scaled]overlay=${stewieX}:${stewieY}:enable='${stewieEnable}'[stewie_overlay]`;
-        lastLabel = 'stewie_overlay';
-      }
-
-      if (peterInputIndex !== undefined) {
-        filterComplex += `;[${peterInputIndex}:v]scale=${peterScaleW}:${peterScaleH}:force_original_aspect_ratio=decrease[peter_scaled]`;
-        filterComplex += `;[${lastLabel}][peter_scaled]overlay=${peterX}:${peterY}:enable='${peterEnable}'[with_characters]`;
-        lastLabel = 'with_characters';
-      }
-
-      if (otherInputIndex !== undefined) {
-        filterComplex += `;[${otherInputIndex}:v]scale=${otherScaleW}:${otherScaleH}:force_original_aspect_ratio=decrease[other_scaled]`;
-        filterComplex += `;[${lastLabel}][other_scaled]overlay=${otherX}:${otherY}:enable='${otherEnable}'[with_other_characters]`;
-        lastLabel = 'with_other_characters';
-      }
+      const { extraFilter, lastLabel: afterChars } = appendCharacterClipsToFilterComplex({
+        charInputs,
+        lastLabel,
+        labelPrefix: 'prev',
+        geom: {
+          stewie: { x: stewieX, y: stewieY, w: stewieScaleW, h: stewieScaleH },
+          peter: { x: peterX, y: peterY, w: peterScaleW, h: peterScaleH },
+          other: { x: otherX, y: otherY, w: otherScaleW, h: otherScaleH },
+        },
+      });
+      filterComplex += extraFilter;
+      lastLabel = afterChars;
     }
 
     onProgress?.(50, 'Encoding preview...');
@@ -912,7 +900,7 @@ export async function generateTimelinePreview(
       ...charInputs.map(({ clip, inputIndex }) => ({
         index: inputIndex,
         type: 'Character',
-        path: getCharacterImagePath(clip.character)
+        path: getCharacterClipImagePath(clip)
       }))
     ];
 
@@ -921,18 +909,21 @@ export async function generateTimelinePreview(
     command.on('start', () => {});
     command.on('stderr', () => {});
 
+    const useNvenc = process.env.FFMPEG_USE_NVENC === '1';
+    const videoCodecOpts = useNvenc
+      ? ['-c:v', 'h264_nvenc', '-preset', 'p4']
+      : ['-c:v', 'libx264', '-preset', 'veryfast'];
+
     command
       .complexFilter(filterComplex)
       .outputOptions([
         '-map', '[out]',  // Map filter output for video
         '-map', audioMix.outputLabel ?? '1:a',    // Map audio from concatenated input
         '-t', duration.toString(),
-        // Use GPU encoding (h264_nvenc) for timeline-aware preview as well.
-        '-c:v', 'h264_nvenc',
+        ...videoCodecOpts,
         '-b:v', PREVIEW_BITRATE,
         '-maxrate', '750k',
         '-bufsize', '1500k',
-        '-preset', 'p4',
         '-c:a', 'aac',
         '-b:a', '64k',
         '-ac', '2',
@@ -1073,7 +1064,11 @@ export async function generateTimelinePreviewHls(
     const subtitleTrack = timeline?.tracks?.find((t: any) => t.type === 'subtitle');
 
     const overlayClips = planOverlayTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'overlay') || [])) as OverlayClip[];
-    const characterClips = (characterTrack?.clips?.filter((c: any) => c.kind === 'character') || []) as CharacterClip[];
+    let characterClips = (characterTrack?.clips?.filter((c: any) => c.kind === 'character') || []) as CharacterClip[];
+    characterClips = expandCharacterClipsExcludingReplaceRanges(
+      characterClips,
+      buildReplaceOverlayRanges(overlayClips)
+    );
     let subtitleClips = (subtitleTrack?.clips?.filter((c: any) => c.kind === 'subtitle') || []) as SubtitleClip[];
     const musicClips = musicTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'music') || [])) as MusicClip[];
     const sfxClips = sfxTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'sfx') || [])) as SfxClip[];
@@ -1146,7 +1141,7 @@ export async function generateTimelinePreviewHls(
     let nextIdx = nextInputIndex;
     const charInputs: { clip: CharacterClip; inputIndex: number }[] = [];
     for (const clip of characterClips) {
-      const charPath = getCharacterImagePath(clip.character);
+      const charPath = getCharacterClipImagePath(clip);
       if (charPath) {
         command.input(charPath);
         charInputs.push({ clip, inputIndex: nextIdx++ });
@@ -1176,12 +1171,20 @@ export async function generateTimelinePreviewHls(
     overlayInputs.forEach(({ clip, inputIndex, overlayPath }, index) => {
       const isReplace = isReplaceOverlayClip(clip);
       const isVideoOverlay = !isStillImageAsset(overlayPath);
-      const setpts = isVideoOverlay ? `setpts=PTS+${clip.start}/TB,` : '';
+      const setpts = isVideoOverlay ? `setpts=PTS-STARTPTS+${clip.start}/TB,` : '';
       const scaledLabel = isReplace ? `ov_replace_${index}` : `ov${index}`;
       const overlayLabel = isReplace ? `vr${index}` : `vo${index}`;
       if (isReplace) {
         // Preserve full frame and fit inside vertical canvas for replace mode previews.
         filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x101014[${scaledLabel}]`;
+        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
+        lastLabel = overlayLabel;
+        return;
+      }
+
+      if (isVideoOverlay) {
+        const topRegionH = getTopRegionHeight(PREVIEW_HEIGHT);
+        filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${topRegionH}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${topRegionH}:(ow-iw)/2:0:0x00000000[${scaledLabel}]`;
         filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
         lastLabel = overlayLabel;
         return;
@@ -1201,56 +1204,26 @@ export async function generateTimelinePreviewHls(
     });
 
     if (charInputs.length > 0) {
-      const stewieClips = charInputs.filter(c => c.clip.character === 'Stewie');
-      const peterClips = charInputs.filter(c => c.clip.character === 'Peter');
-      const otherClips = charInputs.filter(c => c.clip.character !== 'Stewie' && c.clip.character !== 'Peter');
-
-      const stewieRanges: string[] = [];
-      const peterRanges: string[] = [];
-      const otherRanges: string[] = [];
-      stewieClips.forEach(({ clip }) => {
-        stewieRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
-      });
-      peterClips.forEach(({ clip }) => {
-        peterRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
-      });
-      otherClips.forEach(({ clip }) => {
-        otherRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
-      });
-
-      const stewieEnable = stewieRanges.length > 0 ? stewieRanges.join('+') : '0';
-      const peterEnable = peterRanges.length > 0 ? peterRanges.join('+') : '0';
-      const otherEnable = otherRanges.length > 0 ? otherRanges.join('+') : '0';
-
       const stewieScaleW = Math.floor(500 * SCALE);
       const stewieScaleH = Math.floor(600 * SCALE);
       const peterScaleW = Math.floor(580 * SCALE);
       const peterScaleH = Math.floor(720 * SCALE);
       const otherScaleW = Math.floor(560 * SCALE);
       const otherScaleH = Math.floor(760 * SCALE);
-      const stewieInputIndex = stewieClips[0]?.inputIndex;
-      const peterInputIndex = peterClips[0]?.inputIndex;
-      const otherInputIndex = otherClips[0]?.inputIndex;
       const otherX = Math.floor(260 * SCALE);
       const otherY = Math.floor(1160 * SCALE);
-
-      if (stewieInputIndex !== undefined) {
-        filterComplex += `;[${stewieInputIndex}:v]scale=${stewieScaleW}:${stewieScaleH}:force_original_aspect_ratio=decrease[stewie_scaled]`;
-        filterComplex += `;[${lastLabel}][stewie_scaled]overlay=${stewieX}:${stewieY}:enable='${stewieEnable}'[stewie_overlay]`;
-        lastLabel = 'stewie_overlay';
-      }
-
-      if (peterInputIndex !== undefined) {
-        filterComplex += `;[${peterInputIndex}:v]scale=${peterScaleW}:${peterScaleH}:force_original_aspect_ratio=decrease[peter_scaled]`;
-        filterComplex += `;[${lastLabel}][peter_scaled]overlay=${peterX}:${peterY}:enable='${peterEnable}'[with_characters]`;
-        lastLabel = 'with_characters';
-      }
-
-      if (otherInputIndex !== undefined) {
-        filterComplex += `;[${otherInputIndex}:v]scale=${otherScaleW}:${otherScaleH}:force_original_aspect_ratio=decrease[other_scaled]`;
-        filterComplex += `;[${lastLabel}][other_scaled]overlay=${otherX}:${otherY}:enable='${otherEnable}'[with_other_characters]`;
-        lastLabel = 'with_other_characters';
-      }
+      const { extraFilter, lastLabel: afterChars } = appendCharacterClipsToFilterComplex({
+        charInputs,
+        lastLabel,
+        labelPrefix: 'hls',
+        geom: {
+          stewie: { x: stewieX, y: stewieY, w: stewieScaleW, h: stewieScaleH },
+          peter: { x: peterX, y: peterY, w: peterScaleW, h: peterScaleH },
+          other: { x: otherX, y: otherY, w: otherScaleW, h: otherScaleH },
+        },
+      });
+      filterComplex += extraFilter;
+      lastLabel = afterChars;
     }
 
     onProgress?.(50, 'Encoding HLS preview...');
@@ -1271,8 +1244,13 @@ export async function generateTimelinePreviewHls(
 
     const timeout = setTimeout(() => {}, 600000);
 
-    command.on('start', () => {});
-    command.on('stderr', () => {});
+    command.on('start', (cmdLine: string) => {
+      console.log('[HLS Preview] ffmpeg start', cmdLine);
+    });
+    command.on('stderr', (line: string) => {
+      // Log ffmpeg diagnostics for easier debugging of Windows codec/filter issues.
+      console.log('[HLS Preview] ffmpeg stderr:', line);
+    });
 
     command
       .complexFilter(filterComplex)
@@ -1536,8 +1514,12 @@ export async function generateTimelineSegmentPreview(
     const overlayClips = sliceClipsToWindow(
       planOverlayTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'overlay') || [])) as OverlayClip[]
     );
-    const characterClips = sliceClipsToWindow(
+    let characterClips = sliceClipsToWindow(
       (characterTrack?.clips?.filter((c: any) => c.kind === 'character') || []) as CharacterClip[]
+    );
+    characterClips = expandCharacterClipsExcludingReplaceRanges(
+      characterClips,
+      buildReplaceOverlayRanges(overlayClips)
     );
     const musicClips = sliceAudioClipsToWindow(
       musicTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'music') || [])) as MusicClip[],
@@ -1644,7 +1626,7 @@ export async function generateTimelineSegmentPreview(
     let nextIdx = nextInputIndex;
     const charInputs: { clip: CharacterClip; inputIndex: number }[] = [];
     for (const clip of characterClips) {
-      const charPath = getCharacterImagePath(clip.character);
+      const charPath = getCharacterClipImagePath(clip);
       if (charPath) {
         command.input(charPath);
         charInputs.push({ clip, inputIndex: nextIdx++ });
@@ -1687,12 +1669,20 @@ export async function generateTimelineSegmentPreview(
     overlayInputs.forEach(({ clip, inputIndex, overlayPath }, index) => {
       const isReplace = isReplaceOverlayClip(clip);
       const isVideoOverlay = !isStillImageAsset(overlayPath);
-      const setpts = isVideoOverlay ? `setpts=PTS+${clip.start}/TB,` : '';
+      const setpts = isVideoOverlay ? `setpts=PTS-STARTPTS+${clip.start}/TB,` : '';
       const scaledLabel = isReplace ? `ov_replace_${index}` : `ov${index}`;
       const overlayLabel = isReplace ? `vr${index}` : `vo${index}`;
       if (isReplace) {
         // Preserve full frame and fit inside vertical canvas for replace mode previews.
         filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x101014[${scaledLabel}]`;
+        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
+        lastLabel = overlayLabel;
+        return;
+      }
+
+      if (isVideoOverlay) {
+        const topRegionH = getTopRegionHeight(PREVIEW_HEIGHT);
+        filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${topRegionH}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${topRegionH}:(ow-iw)/2:0:0x00000000[${scaledLabel}]`;
         filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
         lastLabel = overlayLabel;
         return;
@@ -1711,58 +1701,27 @@ export async function generateTimelineSegmentPreview(
       lastLabel = overlayLabel;
     });
 
-    // Character overlays in local segment time.
     if (charInputs.length > 0) {
-      const stewieClips = charInputs.filter(c => c.clip.character === 'Stewie');
-      const peterClips = charInputs.filter(c => c.clip.character === 'Peter');
-      const otherClips = charInputs.filter(c => c.clip.character !== 'Stewie' && c.clip.character !== 'Peter');
-
-      const stewieRanges: string[] = [];
-      const peterRanges: string[] = [];
-      const otherRanges: string[] = [];
-      stewieClips.forEach(({ clip }) => {
-        stewieRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
-      });
-      peterClips.forEach(({ clip }) => {
-        peterRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
-      });
-      otherClips.forEach(({ clip }) => {
-        otherRanges.push(`between(t,${clip.start.toFixed(3)},${(clip.start + clip.duration).toFixed(3)})`);
-      });
-
-      const stewieEnable = stewieRanges.length > 0 ? stewieRanges.join('+') : '0';
-      const peterEnable = peterRanges.length > 0 ? peterRanges.join('+') : '0';
-      const otherEnable = otherRanges.length > 0 ? otherRanges.join('+') : '0';
-
       const stewieScaleW = Math.floor(500 * SCALE);
       const stewieScaleH = Math.floor(600 * SCALE);
       const peterScaleW = Math.floor(580 * SCALE);
       const peterScaleH = Math.floor(720 * SCALE);
       const otherScaleW = Math.floor(560 * SCALE);
       const otherScaleH = Math.floor(760 * SCALE);
-      const stewieInputIndex = stewieClips[0]?.inputIndex;
-      const peterInputIndex = peterClips[0]?.inputIndex;
-      const otherInputIndex = otherClips[0]?.inputIndex;
       const otherX = Math.floor(260 * SCALE);
       const otherY = Math.floor(1160 * SCALE);
-
-      if (stewieInputIndex !== undefined) {
-        filterComplex += `;[${stewieInputIndex}:v]scale=${stewieScaleW}:${stewieScaleH}:force_original_aspect_ratio=decrease[stewie_scaled]`;
-        filterComplex += `;[${lastLabel}][stewie_scaled]overlay=${stewieX}:${stewieY}:enable='${stewieEnable}'[stewie_overlay]`;
-        lastLabel = 'stewie_overlay';
-      }
-
-      if (peterInputIndex !== undefined) {
-        filterComplex += `;[${peterInputIndex}:v]scale=${peterScaleW}:${peterScaleH}:force_original_aspect_ratio=decrease[peter_scaled]`;
-        filterComplex += `;[${lastLabel}][peter_scaled]overlay=${peterX}:${peterY}:enable='${peterEnable}'[with_characters]`;
-        lastLabel = 'with_characters';
-      }
-
-      if (otherInputIndex !== undefined) {
-        filterComplex += `;[${otherInputIndex}:v]scale=${otherScaleW}:${otherScaleH}:force_original_aspect_ratio=decrease[other_scaled]`;
-        filterComplex += `;[${lastLabel}][other_scaled]overlay=${otherX}:${otherY}:enable='${otherEnable}'[with_other_characters]`;
-        lastLabel = 'with_other_characters';
-      }
+      const { extraFilter, lastLabel: afterChars } = appendCharacterClipsToFilterComplex({
+        charInputs,
+        lastLabel,
+        labelPrefix: 'seg',
+        geom: {
+          stewie: { x: stewieX, y: stewieY, w: stewieScaleW, h: stewieScaleH },
+          peter: { x: peterX, y: peterY, w: peterScaleW, h: peterScaleH },
+          other: { x: otherX, y: otherY, w: otherScaleW, h: otherScaleH },
+        },
+      });
+      filterComplex += extraFilter;
+      lastLabel = afterChars;
     }
 
     onProgress?.(50, 'Encoding segment preview...');

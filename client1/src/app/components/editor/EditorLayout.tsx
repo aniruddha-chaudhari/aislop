@@ -8,25 +8,7 @@ import CanvasPreview, { type PreviewPlayerApi } from './CanvasPreview';
 import TextPropertiesPanel, { type TextPropertiesPanelHandle } from './TextPropertiesPanel';
 import VideoTimelinePanel from './VideoTimelinePanel';
 import { API_ENDPOINTS, API_BASE_URL } from '../../../config/api';
-
-/**
- * Sort tracks in the correct order:
- * 1. Overlay (template) - always first
- * 2. Dialogue audio - second
- * 3. Music, then SFX
- * 4. Everything else (subtitle, character, etc.) - after
- */
-function sortTracks(tracks: Track[]): Track[] {
-  const overlayTracks = tracks.filter(t => t.type === 'overlay');
-  const audioTracks = tracks.filter(t => t.type === 'audio');
-  const musicTracks = tracks.filter(t => t.type === 'music');
-  const sfxTracks = tracks.filter(t => t.type === 'sfx');
-  const otherTracks = tracks.filter(
-    t => t.type !== 'overlay' && t.type !== 'audio' && t.type !== 'music' && t.type !== 'sfx'
-  );
-  
-  return [...overlayTracks, ...audioTracks, ...musicTracks, ...sfxTracks, ...otherTracks];
-}
+import { editorProjectFromApi, sortEditorTracks as sortTracks } from '../../../features/editor/mapApiProject';
 
 function findFirstDraftAnimationClip(project: EditorProject): ClipRef | null {
   for (const track of project.tracks) {
@@ -86,9 +68,10 @@ const IMAGE_PLAN_DEFAULT_SCALE = 0.5;
 export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const router = useRouter();
   const [isGeneratingDraft, setIsGeneratingDraft] = useState(false);
-  const [isGeneratingImagePlan, setIsGeneratingImagePlan] = useState(false);
+  const [isGeneratingClipPlan, setIsGeneratingClipPlan] = useState(false);
   const [isGeneratingAnimationPlan, setIsGeneratingAnimationPlan] = useState(false);
   const [isApprovingAnimationPlan, setIsApprovingAnimationPlan] = useState(false);
+  const [generatingAnimationMomentId, setGeneratingAnimationMomentId] = useState<string | null>(null);
   const [isDeletingAnimationPlan, setIsDeletingAnimationPlan] = useState(false);
   const [isGeneratingSfxPlan, setIsGeneratingSfxPlan] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -1045,10 +1028,10 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         assetId: `media_video_${Date.now()}`,
         label: asset.filename,
         path: asset.path,
-        x: 0.5,
-        y: 0.5,
-        scale: 1,
-        displayMode: 'replace',
+        x: IMAGE_PLAN_DEFAULT_X,
+        y: IMAGE_PLAN_DEFAULT_Y,
+        scale: IMAGE_PLAN_DEFAULT_SCALE,
+        displayMode: 'overlay',
       };
 
       const editableOverlayTrack = p.tracks.find((t) => t.type === 'overlay' && !t.locked && t.id !== 't_overlay_template');
@@ -1280,8 +1263,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const hasSubtitlesAndChars = draftProject.tracks.some(t =>
     (t.type === 'subtitle' || t.type === 'character') && t.clips.length > 0
   );
-  // Image plan generated (any image overlay track t_imgs / t_imgs_N has clips)
-  const hasImagePlan = draftProject.tracks.some(t =>
+  // Clip plan generated (overlay tracks t_imgs / t_imgs_N have clips)
+  const hasClipPlan = draftProject.tracks.some(t =>
     t.type === 'overlay' && (t.id === 't_imgs' || /^t_imgs_\d+$/.test(t.id)) && t.clips.length > 0
   );
   const animationTracks = draftProject.tracks.filter(
@@ -1310,14 +1293,15 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     setMessage({ type: 'info', text: 'Generating subtitles & characters...' });
 
     try {
-      const response = await fetch(API_ENDPOINTS.generateAiDraft(project.id), {
+      const response = await fetch(API_ENDPOINTS.generateSubtitlesAndCharacters(project.id), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ topic: project.name }),
+        cache: 'no-store',
       });
 
       if (!response.ok) {
-        console.error('[EditorLayout] /api/project/:id/ai-draft HTTP error', {
+        console.error('[EditorLayout] /api/project/:id/subtitles-characters HTTP error', {
           projectId: project.id,
           status: response.status,
           statusText: response.statusText,
@@ -1329,6 +1313,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
 
       if (data.success && data.project) {
         setMessage({ type: 'success', text: 'Subtitles & characters generated!' });
+        setDraftProject(editorProjectFromApi(data.project));
         const updated = await onProjectUpdate?.();
         if (updated) setDraftProject(updated);
         setTimeout(() => setMessage(null), 3000);
@@ -1350,15 +1335,16 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     }
   };
 
-  const handleGenerateImagePlan = async () => {
-    setIsGeneratingImagePlan(true);
-    setMessage({ type: 'info', text: 'Generating image plan...' });
+  const handleGenerateClipPlan = async () => {
+    setIsGeneratingClipPlan(true);
+    setMessage({ type: 'info', text: 'Generating clip plan...' });
 
     try {
-      const response = await fetch(API_ENDPOINTS.generateImagePlan(project.id), {
+      const response = await fetch(API_ENDPOINTS.generateClipPlan(project.id), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ topic: project.name }),
+        cache: 'no-store',
       });
 
       if (!response.ok) {
@@ -1368,20 +1354,21 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       const data = await response.json();
 
       if (data.success && data.project) {
-        setMessage({ type: 'success', text: 'Image plan generated!' });
+        setMessage({ type: 'success', text: 'Clip plan generated!' });
+        setDraftProject(editorProjectFromApi(data.project));
         const updated = await onProjectUpdate?.();
         if (updated) setDraftProject(updated);
         setTimeout(() => setMessage(null), 3000);
       } else {
-        throw new Error(data.error || 'Failed to generate image plan');
+        throw new Error(data.error || 'Failed to generate clip plan');
       }
     } catch (error) {
       setMessage({
         type: 'error',
-        text: error instanceof Error ? error.message : 'Failed to generate image plan',
+        text: error instanceof Error ? error.message : 'Failed to generate clip plan',
       });
     } finally {
-      setIsGeneratingImagePlan(false);
+      setIsGeneratingClipPlan(false);
     }
   };
 
@@ -1481,6 +1468,82 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       });
     } finally {
       setIsApprovingAnimationPlan(false);
+    }
+  };
+
+  const handleGenerateSingleAnimationClip = async (momentId: string) => {
+    if (!momentId) return;
+    if (isDirty) {
+      const saveResponse = await fetch(API_ENDPOINTS.saveTimeline(project.id), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          timeline: {
+            duration: draftProject.duration,
+            tracks: draftProject.tracks,
+          },
+        }),
+      });
+      if (!saveResponse.ok) {
+        setMessage({ type: 'error', text: 'Please save timeline changes before generating this clip.' });
+        return;
+      }
+      const saveData = await saveResponse.json();
+      if (!saveData?.success) {
+        setMessage({ type: 'error', text: saveData?.error || 'Please save timeline changes before generating this clip.' });
+        return;
+      }
+      setIsDirty(false);
+    }
+
+    setGeneratingAnimationMomentId(momentId);
+    setMessage({ type: 'info', text: 'Generating selected animation clip...' });
+    try {
+      const response = await fetch(`${API_ENDPOINTS.generateAnimationClip(project.id, momentId)}?t=${Date.now()}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: project.name }),
+        cache: 'no-store',
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to generate animation clip');
+      }
+
+      const updated = await onProjectUpdate?.();
+      const fallbackProject =
+        data.project && data.project.timeline ? editorProjectFromApi(data.project) : draftProject;
+      const nextProject = updated ?? fallbackProject;
+      if (updated) setDraftProject(updated);
+      const renderedRef = (() => {
+        for (const track of nextProject.tracks) {
+          for (const clip of track.clips) {
+            if (
+              clip.kind === 'overlay' &&
+              (clip as any).animationMomentId === momentId &&
+              (clip as any).planStatus === 'approved'
+            ) {
+              return { trackId: track.id, clipId: clip.id } as ClipRef;
+            }
+          }
+        }
+        return null;
+      })();
+      if (renderedRef) {
+        setSelected(renderedRef);
+      }
+      setMessage({ type: 'success', text: 'Selected animation clip generated.' });
+      setTimeout(() => setMessage(null), 2500);
+    } catch (error) {
+      setMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : 'Failed to generate selected animation clip',
+      });
+    } finally {
+      setGeneratingAnimationMomentId(null);
     }
   };
 
@@ -1758,6 +1821,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             project={draftProject}
             onVideoStartChange={handleVideoStartChange}
             onProjectUpdate={onProjectUpdate}
+            onGenerateAnimationClip={handleGenerateSingleAnimationClip}
+            generatingAnimationMomentId={generatingAnimationMomentId}
           />
         </div>
 
@@ -1773,19 +1838,19 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
           onExport={handleExport}
           onSaveTimeline={handleSaveTimeline}
             onGenerateSubtitlesAndChars={handleGenerateSubtitlesAndChars}
-            onGenerateImagePlan={handleGenerateImagePlan}
+            onGenerateClipPlan={handleGenerateClipPlan}
             onGenerateAnimationPlan={handleGenerateAnimationPlan}
             onApproveAnimationPlan={handleApproveAnimationPlan}
             onGenerateSfxPlan={handleGenerateSfxPlan}
             isGeneratingDraft={isGeneratingDraft}
-            isGeneratingImagePlan={isGeneratingImagePlan}
+            isGeneratingClipPlan={isGeneratingClipPlan}
             isGeneratingAnimationPlan={isGeneratingAnimationPlan}
             isApprovingAnimationPlan={isApprovingAnimationPlan}
             isGeneratingSfxPlan={isGeneratingSfxPlan}
           isExporting={isExporting}
           exportProgress={exportProgress}
           hasSubtitlesAndChars={hasSubtitlesAndChars}
-          hasImagePlan={hasImagePlan}
+          hasClipPlan={hasClipPlan}
           hasAnimationPlan={hasAnimationPlan}
           hasDraftAnimationPlan={hasDraftAnimationPlan}
           hasApprovedAnimationPlan={hasApprovedAnimationPlan}

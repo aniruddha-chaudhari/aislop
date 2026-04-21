@@ -79,6 +79,8 @@ export const CharacterClipSchema = z.object({
   x: z.number(),
   y: z.number(),
   scale: z.number(),
+  /** Optional high-level emotion label for this character segment (e.g. "neutral", "talking", "excited"). */
+  emotion: z.string().optional(),
 });
 
 export const ClipSchema = z.discriminatedUnion('kind', [

@@ -1026,7 +1026,7 @@ export async function generateVideoWithSubtitles(
           const character = normalizeCharacterName(dialogue.character);
           if (character === 'Stewie') {
             stewieRanges.push(`between(t,${start},${end})`);
-          } else if (character === 'Peter') {
+          } else if (character === 'Peter' || character === 'Narrator') {
             peterRanges.push(`between(t,${start},${end})`);
           }
         });
@@ -1162,7 +1162,7 @@ export async function generateVideoWithSubtitles(
               const character = normalizeCharacterName(dialogue.character);
               if (character === 'Stewie') {
                 stewieRanges.push(`between(t,${start},${end})`);
-              } else if (character === 'Peter') {
+              } else if (character === 'Peter' || character === 'Narrator') {
                 peterRanges.push(`between(t,${start},${end})`);
               }
             });

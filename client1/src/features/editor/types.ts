@@ -59,6 +59,8 @@ export type OverlayClip = BaseClip & {
 export type CharacterClip = BaseClip & {
   kind: 'character';
   character: string;
+  /** Backend maps this to portrait variants (e.g. happy → peter_happy.png). */
+  emotion?: string;
   x: number;
   y: number;
   scale: number;

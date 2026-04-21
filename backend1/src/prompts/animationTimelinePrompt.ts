@@ -83,6 +83,7 @@ TYPE — choose exactly one; use the value that best fits the segment:
 
 CONTENT — write a detailed semantic description (no visual or design instructions):
 - Length: about 15–35 words (max ~180 characters). One to two clear sentences or one rich phrase so the direction stage has enough to work with.
+- Timing hint (when it helps): say where the memorable phrase lands in the spoken line — e.g. early in the sentence, mid-line, or in the closing clause — so graphics can sync the hero beat with audio instead of flashing a keyword before the viewer has heard the setup.
 - Include: the main idea, key terms, and enough context so a motion designer knows what the animation should convey (e.g. "Kubernetes is a system that runs containers at scale across many machines; the key idea is orchestration and automation" not just "Kubernetes in one line").
 - For comparison: name the two sides and the contrast (e.g. "Docker runs on one machine; Kubernetes orchestrates many containers across a cluster").
 - For process: name the steps or stages in order (e.g. "Three steps: build the image, push to a registry, then deploy to the cluster").
@@ -209,7 +210,7 @@ STEP 2 — Create timeline plan
 4. Moments in chronological order, non-overlapping, 4s gap when possible.
 
 TYPE values: definition, callout, comparison, process, timeline, quote, stat, list
-CONTENT: semantic description only—no visual instructions.
+CONTENT: semantic description only—no visual instructions. When useful, note where the emphasis falls in the spoken line (early / mid / closing) so downstream animation can sync the hero beat with audio.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT FORMAT (JSON only)

@@ -1,6 +1,7 @@
 'use client';
 
 import type { Clip, EditorProject, OverlayClip } from '../../../features/editor/types';
+import { voiceDisplayName } from '../../../features/editor/voiceDisplayName';
 
 type Props = {
   selected: Clip | null;
@@ -47,7 +48,7 @@ export default function PropertiesPanel({ selected }: Props) {
               <div className="mt-2 text-xs">
                 <div className="text-[var(--editor-muted)]">Speaker</div>
                 <div className="mt-1 rounded-lg border border-[var(--border)] bg-[color-mix(in_srgb,var(--editor-fg)_5%,transparent)] px-3 py-2 font-medium">
-                  {selected.speaker}
+                  {voiceDisplayName(selected.speaker)}
                 </div>
                 <div className="mt-3 text-[var(--editor-muted)]">Text</div>
                 <div className="mt-1 rounded-lg border border-[var(--border)] bg-[color-mix(in_srgb,var(--editor-fg)_5%,transparent)] px-3 py-2">
@@ -63,7 +64,7 @@ export default function PropertiesPanel({ selected }: Props) {
             <div className="rounded-xl border border-[var(--border)] bg-black/20 p-3">
               <div className="text-[11px] font-semibold text-[var(--editor-muted)]">Character</div>
               <div className="mt-2 rounded-lg border border-[var(--border)] bg-[color-mix(in_srgb,var(--editor-fg)_5%,transparent)] px-3 py-2 text-xs font-semibold">
-                {selected.character}
+                {voiceDisplayName(selected.character)}
               </div>
               <div className="mt-3 grid grid-cols-3 gap-2">
                 <Field label="X" value={fmt(selected.x)} />
@@ -139,7 +140,7 @@ function OverlayProps({ overlay }: { overlay: OverlayClip }) {
         <Field label="Scale" value={fmt(overlay.scale)} />
       </div>
       <div className="mt-3 text-xs text-[var(--editor-muted)]">
-        Use X/Y/Scale in the properties panel to adjust image transform.
+        Use X/Y/Scale to adjust overlay transform (images and videos).
       </div>
     </div>
   );

@@ -85,10 +85,19 @@ export const API_ENDPOINTS = {
   getProject: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}`,
   updateProject: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}`,
   deleteProject: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}`,
+  /** Character plan: subtitles + character track (no image embedding). */
+  generateSubtitlesAndCharacters: (projectId: string) =>
+    `${API_BASE_URL}/api/project/${projectId}/subtitles-characters`,
+  /** @deprecated Same as generateSubtitlesAndCharacters — kept for older clients */
   generateAiDraft: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/ai-draft`,
-  generateImagePlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/image-plan`,
+  /** AI overlay slot plan (images + optional video uploads per slot). */
+  generateClipPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/clip-plan`,
+  /** @deprecated Use generateClipPlan — same URL as clip-plan. */
+  generateImagePlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/clip-plan`,
   generateAnimationPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/animation-plan`,
   approveAnimationPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/animation-plan/approve`,
+  generateAnimationClip: (projectId: string, momentId: string) =>
+    `${API_BASE_URL}/api/project/${projectId}/animation-plan/clip/${encodeURIComponent(momentId)}/generate`,
   deleteAnimationPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/animation-plan`,
   generateSfxPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/sfx-plan`,
   saveTimeline: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/timeline`,

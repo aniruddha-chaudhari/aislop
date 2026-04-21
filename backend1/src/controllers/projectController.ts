@@ -24,7 +24,14 @@ import {
   generateAnimationPlanDraft,
   isAnimationOverlayTrack,
   loadAnimationPlanReview,
+  renderSingleAnimationMoment,
 } from '../service/animationPlanService';
+import {
+  extensionForOverlayUpload,
+  mimeForOverlayFile,
+  removeExistingOverlayFiles,
+  OVERLAY_ASSET_EXTENSIONS,
+} from '../utils/overlayAssets';
 
 const ANIMATION_DEBUG_ENABLED = process.env.ANIMATION_DEBUG === '1';
 
@@ -52,6 +59,21 @@ function collectPromptOverridesFromTimeline(tracks: Track[]): Record<string, str
     }
   }
   return overrides;
+}
+
+/** Draft animation overlay clips on the saved timeline — used so approve respects deleted clips. */
+function collectAnimationMomentIdsFromTimeline(tracks: Track[]): Set<string> {
+  const ids = new Set<string>();
+  for (const track of tracks) {
+    if (!isAnimationOverlayTrack(track)) continue;
+    for (const clip of track.clips) {
+      if (clip.kind !== 'overlay') continue;
+      const overlay = clip as OverlayClip;
+      const momentId = typeof overlay.animationMomentId === 'string' ? overlay.animationMomentId.trim() : '';
+      if (momentId) ids.add(momentId);
+    }
+  }
+  return ids;
 }
 
 function logPreviewTelemetry(event: string, data: Record<string, unknown> = {}): void {
@@ -298,7 +320,7 @@ const TEMP_DIR = path.join(process.cwd(), 'storage', 'temp');
 const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
 
 /**
- * Remove session-level image plan and uploaded images when no project uses this session.
+ * Remove session-level clip-plan files and uploaded overlay media when no project uses this session.
  * Call after deleting a project so a new project with the same session gets a fresh plan.
  */
 async function cleanupSessionFilesIfUnused(audioSessionId: string): Promise<void> {
@@ -370,7 +392,12 @@ export async function deleteProject(ctx: HttpContext): Promise<HandlerResult> {
 }
 
 
-export async function generateAiDraftForProject(ctx: HttpContext): Promise<HandlerResult> {
+/**
+ * Character plan only: WhisperX subtitles + character track + audio lane.
+ * Preserves existing overlay tracks (clip plan, template, animations) and music/sfx.
+ * Does not run clip embedding — use POST /api/project/:id/clip-plan for that.
+ */
+export async function generateSubtitlesAndCharactersForProject(ctx: HttpContext): Promise<HandlerResult> {
   try {
     const projectId = ctx.params?.id;
     const body = ctx.body as any;
@@ -430,7 +457,7 @@ export async function generateAiDraftForProject(ctx: HttpContext): Promise<Handl
       message: 'Subtitles & characters generated successfully',
     });
   } catch (error) {
-    console.error('[Project] generateAiDraftForProject error', {
+    console.error('[Project] generateSubtitlesAndCharactersForProject error', {
       projectId: ctx.params?.id,
       body: ctx.body,
       message: error instanceof Error ? error.message : String(error),
@@ -438,12 +465,19 @@ export async function generateAiDraftForProject(ctx: HttpContext): Promise<Handl
     });
     return jsonResponse(500, {
       success: false,
-      error: error instanceof Error ? error.message : 'Failed to generate AI draft',
+      error: error instanceof Error ? error.message : 'Failed to generate subtitles & characters',
     });
   }
 }
 
+/** @deprecated Prefer POST /api/project/:id/subtitles-characters — same handler, legacy path name */
+export const generateAiDraftForProject = generateSubtitlesAndCharactersForProject;
 
+
+/**
+ * Clip plan (overlay placements): replaces t_imgs / t_imgs_N overlay tracks from embedding analysis.
+ * Does not modify subtitle or character tracks.
+ */
 export async function generateImagePlanForProject(ctx: HttpContext): Promise<HandlerResult> {
   try {
     const projectId = ctx.params?.id;
@@ -475,7 +509,7 @@ export async function generateImagePlanForProject(ctx: HttpContext): Promise<Han
     const topic = body.topic || project.name || 'Technical conversation';
     const result = await generateImagePlan(project.audioSessionId, topic);
 
-    // Merge overlay tracks into existing timeline: replace all image overlay tracks (t_imgs, t_imgs_2, ...) in place
+    // Merge: replace only image-plan overlay tracks (t_imgs, t_imgs_2, ...). Character/subtitle tracks unchanged.
     const existing = project.timeline;
     const existingTracks = (existing?.tracks ?? []) as Track[];
     const isImageOverlayTrack = (t: Track) =>
@@ -504,12 +538,12 @@ export async function generateImagePlanForProject(ctx: HttpContext): Promise<Han
       success: true,
       project: updatedProject,
       timeline,
-      message: 'Image plan generated successfully',
+      message: 'Clip plan generated successfully',
     });
   } catch (error) {
     return jsonResponse(500, {
       success: false,
-      error: error instanceof Error ? error.message : 'Failed to generate image plan',
+      error: error instanceof Error ? error.message : 'Failed to generate clip plan',
     });
   }
 }
@@ -667,11 +701,14 @@ export async function approveAnimationPlanForProject(ctx: HttpContext): Promise<
         : (await getSessionDuration(project.audioSessionId)) || 60;
 
     const topic = body.topic || project.name || 'Educational short video';
-    const promptOverrides = collectPromptOverridesFromTimeline((project.timeline?.tracks ?? []) as Track[]);
+    const timelineTracks = (project.timeline?.tracks ?? []) as Track[];
+    const promptOverrides = collectPromptOverridesFromTimeline(timelineTracks);
+    const allowedMomentIds = collectAnimationMomentIdsFromTimeline(timelineTracks);
     const result = await approveAnimationPlanRender({
       projectId,
       topic,
       promptOverrides,
+      allowedMomentIds,
     });
 
     const existingTracks = (project.timeline?.tracks ?? []) as Track[];
@@ -722,6 +759,99 @@ export async function approveAnimationPlanForProject(ctx: HttpContext): Promise<
   }
 }
 
+export async function generateAnimationClipForProject(ctx: HttpContext): Promise<HandlerResult> {
+  try {
+    const projectId = ctx.params?.id;
+    const momentId = ctx.params?.momentId;
+    const body = (ctx.body as any) || {};
+
+    if (!projectId) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Project ID is required',
+      });
+    }
+    if (!momentId || !momentId.trim()) {
+      return jsonResponse(400, {
+        success: false,
+        error: 'Animation moment id is required',
+      });
+    }
+
+    const project = await projectService.getProject(projectId);
+    if (!project) {
+      return jsonResponse(404, {
+        success: false,
+        error: 'Project not found',
+      });
+    }
+
+    const topic = body.topic || project.name || 'Educational short video';
+    const timelineTracks = (project.timeline?.tracks ?? []) as Track[];
+    const promptOverrides = collectPromptOverridesFromTimeline(timelineTracks);
+
+    const single = await renderSingleAnimationMoment({
+      projectId,
+      topic,
+      momentId: momentId.trim(),
+      promptOverrides,
+    });
+
+    const existingTracks = (project.timeline?.tracks ?? []) as Track[];
+    let replaced = false;
+    const nextTracks = existingTracks.map((track) => {
+      if (!isAnimationOverlayTrack(track)) return track;
+      const nextClips = track.clips.map((clip) => {
+        if (clip.kind !== 'overlay') return clip;
+        const overlay = clip as OverlayClip;
+        if ((overlay.animationMomentId || '').trim() !== momentId.trim()) return clip;
+        replaced = true;
+        return single.overlayClip;
+      });
+      return { ...track, clips: nextClips };
+    });
+
+    if (!replaced) {
+      const firstAnimTrackIndex = nextTracks.findIndex((track) => isAnimationOverlayTrack(track));
+      if (firstAnimTrackIndex >= 0) {
+        const track = nextTracks[firstAnimTrackIndex];
+        nextTracks[firstAnimTrackIndex] = {
+          ...track,
+          clips: [...track.clips, single.overlayClip],
+        };
+      } else {
+        nextTracks.push({
+          id: 't_anim',
+          type: 'overlay',
+          name: 'Animation',
+          clips: [single.overlayClip],
+        } as Track);
+      }
+    }
+
+    const duration =
+      typeof project.timeline?.duration === 'number' && project.timeline.duration > 0
+        ? project.timeline.duration
+        : (await getSessionDuration(project.audioSessionId)) || 60;
+
+    const timeline = { duration, tracks: nextTracks };
+    const updatedProject = await projectService.updateTimeline(projectId, timeline);
+
+    return jsonResponse(200, {
+      success: true,
+      project: updatedProject,
+      timeline,
+      momentId: momentId.trim(),
+      message: 'Animation clip rendered successfully',
+    });
+  } catch (error) {
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to generate animation clip',
+    });
+  }
+}
+
 export async function deleteAnimationPlanForProject(ctx: HttpContext): Promise<HandlerResult> {
   try {
     const projectId = ctx.params?.id;
@@ -768,7 +898,7 @@ export async function deleteAnimationPlanForProject(ctx: HttpContext): Promise<H
 }
 
 /**
- * Generate SFX plan for a project (uses existing image plan overlay timings)
+ * Generate SFX plan for a project (uses existing clip plan overlay timings)
  * POST /api/project/:id/sfx-plan
  */
 export async function generateSfxPlanForProject(ctx: HttpContext): Promise<HandlerResult> {
@@ -1008,7 +1138,7 @@ export async function getExportStatus(ctx: HttpContext): Promise<HandlerResult> 
 }
 
 /**
- * Upload image for an overlay clip
+ * Upload image or video for an overlay clip (clip plan / timeline overlays).
  * POST /api/project/:id/upload-image
  */
 export async function uploadImageForClip(ctx: HttpContext): Promise<HandlerResult> {
@@ -1031,20 +1161,25 @@ export async function uploadImageForClip(ctx: HttpContext): Promise<HandlerResul
       });
     }
 
-    // Get uploaded file from multipart form
     const file = ctx.file;
     if (!file) {
       return jsonResponse(400, {
         success: false,
-        error: 'No image file provided',
+        error: 'No media file provided',
       });
     }
 
-    // Get assetId from form data (which clip this image is for)
     const body = ctx.body as { assetId?: string } | undefined;
     const assetId = body?.assetId || `asset_${Date.now()}`;
 
-    // Save image to storage/images/{sessionId}/
+    const ext = extensionForOverlayUpload(file.mimetype, file.originalname);
+    if (!ext) {
+      return jsonResponse(400, {
+        success: false,
+        error: `Unsupported file type. Allowed: ${OVERLAY_ASSET_EXTENSIONS.join(', ')}`,
+      });
+    }
+
     const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
     const sessionDir = path.join(IMAGE_UPLOAD_DIR, project.audioSessionId);
 
@@ -1052,23 +1187,27 @@ export async function uploadImageForClip(ctx: HttpContext): Promise<HandlerResul
       fs.mkdirSync(sessionDir, { recursive: true });
     }
 
-    const imageFilename = `${assetId}.png`;
-    const imagePath = path.join(sessionDir, imageFilename);
+    removeExistingOverlayFiles(sessionDir, assetId);
 
-    // Copy from upload temp path to final location
+    const filename = `${assetId}${ext}`;
+    const imagePath = path.join(sessionDir, filename);
+
     await fs.promises.copyFile(file.path, imagePath);
+
+    const assetKind = /^\.(mp4|webm|mov|m4v)$/i.test(ext) ? 'video' : 'image';
 
     return jsonResponse(200, {
       success: true,
       assetId,
       imagePath,
-      filename: imageFilename,
-      message: 'Image uploaded successfully',
+      filename,
+      assetKind,
+      message: assetKind === 'video' ? 'Video uploaded successfully' : 'Image uploaded successfully',
     });
   } catch (error) {
     return jsonResponse(500, {
       success: false,
-      error: error instanceof Error ? error.message : 'Failed to upload image',
+      error: error instanceof Error ? error.message : 'Failed to upload overlay media',
     });
   }
 }
@@ -1110,11 +1249,11 @@ export async function listProjectImages(ctx: HttpContext): Promise<HandlerResult
 
     const files = fs.readdirSync(sessionDir);
     const images = files
-      .filter(f => f.endsWith('.png') || f.endsWith('.jpg') || f.endsWith('.jpeg'))
+      .filter(f => OVERLAY_ASSET_EXTENSIONS.some(ext => f.toLowerCase().endsWith(ext)))
       .map(filename => {
         const filePath = path.join(sessionDir, filename);
         const stats = fs.statSync(filePath);
-        const assetId = filename.replace(/\.(png|jpg|jpeg)$/, '');
+        const assetId = filename.replace(/\.[^.]+$/, '');
 
         return {
           assetId,
@@ -1166,9 +1305,8 @@ export async function serveProjectImage(ctx: HttpContext): Promise<HandlerResult
     const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
     const sessionDir = path.join(IMAGE_UPLOAD_DIR, project.audioSessionId);
 
-    const extensions = ['.png', '.jpg', '.jpeg'];
     let filePath: string | null = null;
-    for (const ext of extensions) {
+    for (const ext of OVERLAY_ASSET_EXTENSIONS) {
       const candidate = path.join(sessionDir, `${assetId}${ext}`);
       if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
         filePath = candidate;
@@ -1179,20 +1317,12 @@ export async function serveProjectImage(ctx: HttpContext): Promise<HandlerResult
     if (!filePath) {
       return jsonResponse(404, {
         success: false,
-        error: 'Image not found',
+        error: 'Overlay media not found',
       });
     }
 
     const buf = fs.readFileSync(filePath);
-    const ext = path.extname(filePath).toLowerCase();
-    const mime: Record<string, string> = {
-      '.png': 'image/png',
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.gif': 'image/gif',
-      '.webp': 'image/webp',
-    };
-    const contentType = mime[ext] ?? 'application/octet-stream';
+    const contentType = mimeForOverlayFile(filePath);
 
     return new Response(buf, {
       status: 200,
@@ -1205,7 +1335,7 @@ export async function serveProjectImage(ctx: HttpContext): Promise<HandlerResult
   } catch (error) {
     return jsonResponse(500, {
       success: false,
-      error: error instanceof Error ? error.message : 'Failed to serve image',
+      error: error instanceof Error ? error.message : 'Failed to serve overlay media',
     });
   }
 }
@@ -1245,9 +1375,8 @@ export async function deleteProjectImage(ctx: HttpContext): Promise<HandlerResul
       });
     }
 
-    const extensions = ['.png', '.jpg', '.jpeg'];
     let removed = false;
-    for (const ext of extensions) {
+    for (const ext of OVERLAY_ASSET_EXTENSIONS) {
       const filePath = path.join(sessionDir, `${assetId}${ext}`);
       if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
         fs.unlinkSync(filePath);
@@ -1258,12 +1387,12 @@ export async function deleteProjectImage(ctx: HttpContext): Promise<HandlerResul
 
     return jsonResponse(200, {
       success: true,
-      message: removed ? 'Image removed' : 'Image already removed or not found',
+      message: removed ? 'Overlay media removed' : 'Already removed or not found',
     });
   } catch (error) {
     return jsonResponse(500, {
       success: false,
-      error: error instanceof Error ? error.message : 'Failed to delete image',
+      error: error instanceof Error ? error.message : 'Failed to delete overlay media',
     });
   }
 }

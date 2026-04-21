@@ -23,6 +23,20 @@ export function jsonResponse(status: number, json: object, headers?: Record<stri
   return { status, json, headers };
 }
 
+export function fileResponse(
+  status: number,
+  file: ArrayBuffer | ArrayBufferView | Blob,
+  contentType: string,
+  headers?: Record<string, string>
+): StreamResult {
+  const body = file instanceof Blob ? file : new Blob([file], { type: contentType });
+  return {
+    status,
+    body,
+    headers: { 'Content-Type': contentType, ...headers },
+  };
+}
+
 export function toResponse(result: HandlerResult): Response {
   if (result instanceof Response) return result;
   if ('json' in result) {
