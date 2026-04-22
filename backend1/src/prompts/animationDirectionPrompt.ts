@@ -620,11 +620,11 @@ I7. POP-LAND-SLIDE-OUT (SEQUENTIAL SPACE SHARING)
 Two elements share the same screen position sequentially, without cutting the scene.
 Element A:
   Frames 0-10: scale 0→1.1→1.0 spring-bouncy (pops in).
-  Frames 10-28: holds static (the "pause" — let viewer read it).
+  Frames 10-28: low-amplitude hold (scale 1.0→1.01→1.0, 2.5s loop) so readability stays high while motion remains alive.
   Frames 28-36: translateY 0→+80px ease-in-expo simultaneously opacity 1→0 (slides out down).
 Element B (enters immediately after A exits):
   Frames 36-46: translateY -80px→0 spring-snappy, opacity 0→1 (slides in from above).
-  Frames 46+: holds static with breathe.
+  Frames 46+: holds with breathe.
 The motion direction (A exits down, B enters from above) creates a continuous downward
 "reveal" feel — like a ticker or scoreboard flipping. Can reverse direction (A up, B from below).
 → Best for: "X → then Y", stat comparisons, "before/after" in a single moment, 6s+ clips only.
@@ -648,7 +648,9 @@ HOLD:
 "breathe"          → scale 1.0→1.015→1.0, Easing.inOut(Easing.sine), 2.5s loop.
 "drift"            → translate ±3px, spring({stiffness:20, damping:10}), 3s loop.
 "pulse-glow"       → bloom opacity 0.55→0.2→0.55, Easing.out(Easing.quad), 1.5s loop.
-"static"           → zero motion. Required at least once per moment. Maximum readability.
+"drift-x"          → translateX -4px→+4px→-4px, Easing.inOut(Easing.sine), 3s loop.
+"slow-scale"       → scale 1.0→1.013→1.0, Easing.inOut(Easing.sine), 2.5s loop.
+"static"           → BANNED. Never use. Hold motion must remain subtly alive.
 
 EXIT:
 "ease-in-expo"     → Clean, rockets off. For definitive scene exits.
@@ -677,7 +679,7 @@ The remaining time is the hold — make it readable and visually confident.
 
 MOMENT-LEVEL:
 - Entry animation: completes within 0.3-0.5s. Spring physics settle fast.
-- Hold: the majority of the clip duration. Static or one subtle hold easing.
+- Hold: the majority of the clip duration. Always use subtle continuous motion (never static).
 - beat2OrNull: NULL by default. Only non-null if duration ≥ 6s AND there is a
   genuine second visual event (e.g. a counter finishing, a second element arriving).
   Do NOT invent a second beat just to fill space.
@@ -691,11 +693,11 @@ VIDEO-LEVEL:
 - Pattern: punchy → floaty/rhythmic → cinematic is the ideal arc.
 
 MOTION CHARACTER DEFINITIONS:
-"punchy"    → spring-snappy entries. static holds. snap-cut or elastic-rebound exits.
+"punchy"    → spring-snappy entries. breathe/drift holds. snap-cut or elastic-rebound exits.
 "floaty"    → spring-floaty entries. breathe/drift holds. shrink-fade exits.
 "rhythmic"  → elements enter on beat cadence, even timing. moderate spring.
-"cinematic" → slow build (spring-floaty + blur-to-sharp). long static hold. subtle drift. ease-in-expo exit.
-"glitchy"   → T7 glitch-stamp on single word. rest of moment is clean and static. Max once per video.
+"cinematic" → slow build (spring-floaty + blur-to-sharp). long low-amplitude hold motion. subtle drift. ease-in-expo exit.
+"glitchy"   → T7 glitch-stamp on single word. rest of moment stays clean with low-amplitude motion. Max once per video.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 6 — 9:16 SAFE ZONE
@@ -814,18 +816,21 @@ holdWindow     → covers the majority of clip duration. ALWAYS in motion — ne
                amplitude subtle. This is most of what the viewer sees — make it feel alive.
 beat2OrNull    → NULL by default. Only populate if duration ≥ 6s AND a genuine second
                visual event exists. Do not invent a second beat to fill time.
-animationPrompt → 3-6 lines ONLY. Written as a TIME SEQUENCE, not a component spec.
+animationPrompt → Detailed natural-language timing spec with NO line limit.
+               Written as a TIME SEQUENCE, not a component spec.
                WRONG: "A card with primary fill and accent border."
                RIGHT: "Frames 0-12: card enters from below via spring-snappy, boxShadow
                         '7px 7px 0 accent' visible as it settles. Frames 12-50: card breathes
                         (scale 1.0→1.012→1.0), counter rolls 0→47 (T8). Frame 50: snap-cut out."
   Every sentence must answer: WHAT changes → WHEN (frame number) → HOW (easing/spring).
-  Line 1: "Frames 0-[Strike Frame]: [Layer 1 B-series background behavior] + [Layer 2 context beat entry]."
-  Line 2: "Frames [Strike Frame]-Y: [hold easing in effect for background/graphics]."
-  Line 3: "Punch sync: Hook word '[WORD]' spoken at [X.X]s -> Frame [Y]. Text locks exactly at Frame [Y] via [T-series technique]."
-  Line 4: "At frame Y: [second event if beat2 exists — what changes and when]."
-  Line 5: "Colors: [which palette hex on which element, briefly]."
-  Line 6: "Icons/assets: [Lucide name, Simple Icons slug, or SVG description]."
+  Include these six REQUIRED anchor lines first, then add as many extra lines as needed for clarity:
+  Line 1: "Frames 0-[Strike Frame]: [Layer 1 B-series background behavior] + [Layer 2 context beat entry], hero text hidden."
+  Line 2: "Frames [Strike Frame]-Y: [hold easing behavior for background/graphics] with explicit amplitude and loop timing."
+  Line 3: "Punch sync: Hook word '[WORD]' spoken at [X.X]s into clip → [X.X] × 30 = Frame [Y]; text locks exactly at Frame [Y] via [T-series technique]."
+  Line 4: "At frame Y: [second event if beat2 exists; otherwise explicitly state beat2 is null and no second event fires]."
+  Line 5: "Colors: [hex → element mapping with contrast-safe surface/text pairings]."
+  Line 6: "Icons/assets: [Lucide name, Simple Icons slug, SVG description, or 'none']."
+  After Line 6, add any additional frame-by-frame lines needed so the renderer does not have to guess.
   The word "frames" must appear at least 3 times in every animationPrompt.
   Complexity requirement: each animationPrompt must describe at least 3 distinct motion actions
   across the clip (e.g., context layer entry, hero text lock, secondary event/exit), not a single fade.
@@ -862,7 +867,7 @@ PRE-OUTPUT CHECKLIST (verify every item before returning JSON):
 □ Every moment has holdWindow with holdEasing from: breathe/drift/drift-x/pulse-glow/slow-scale.
 □ NO moment uses "static" as its holdEasing. Animation never fully stops.
 □ beat2OrNull is NULL unless moment duration ≥ 6s AND a genuine second event exists.
-□ animationPrompt is 3-6 lines and follows strict format with Strike Frame context beat + Punch sync math line.
+□ animationPrompt includes the 6 required anchor lines, explicit Strike math ([X.X] × 30 = Frame [Y]), and any additional lines needed for full clarity.
 □ The word "frames" appears at least 3 times in every animationPrompt.
 □ Exa-based style validation applied per moment and reflected in aestheticNotes + animationPrompt.
 □ Layered complexity verified: at least 3 distinct motion actions (background, context anchor, hero lock) before optional secondary/exit.

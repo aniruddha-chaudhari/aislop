@@ -94,11 +94,11 @@ export const API_ENDPOINTS = {
   generateClipPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/clip-plan`,
   /** @deprecated Use generateClipPlan — same URL as clip-plan. */
   generateImagePlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/clip-plan`,
-  generateAnimationPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/animation-plan`,
-  approveAnimationPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/animation-plan/approve`,
+  generateAnimationPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/hyperframes-animation-plan`,
+  approveAnimationPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/hyperframes-animation-plan/approve`,
   generateAnimationClip: (projectId: string, momentId: string) =>
-    `${API_BASE_URL}/api/project/${projectId}/animation-plan/clip/${encodeURIComponent(momentId)}/generate`,
-  deleteAnimationPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/animation-plan`,
+    `${API_BASE_URL}/api/project/${projectId}/hyperframes-animation-plan/clip/${encodeURIComponent(momentId)}/generate`,
+  deleteAnimationPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/hyperframes-animation-plan`,
   generateSfxPlan: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/sfx-plan`,
   saveTimeline: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/timeline`,
   exportProject: (projectId: string) => `${API_BASE_URL}/api/project/${projectId}/export`,

@@ -5,6 +5,8 @@ import { Project, ProjectSchema, Timeline } from '../schema/project';
 const PROJECTS_DIR = path.join(process.cwd(), 'storage', 'projects');
 const REMOTION_ANIMATION_DIR = path.join(process.cwd(), 'storage', 'remotion-animation');
 const RENDERED_ANIMATIONS_DIR = path.join(process.cwd(), 'storage', 'rendered-animations');
+const HYPERFRAMES_ANIMATION_DIR = path.join(process.cwd(), 'storage', 'hyperframes-animation');
+const RENDERED_HYPERFRAMES_ANIMATIONS_DIR = path.join(process.cwd(), 'storage', 'rendered-hyperframes-animations');
 
 // Ensure projects directory exists
 if (!fs.existsSync(PROJECTS_DIR)) {
@@ -194,6 +196,8 @@ export async function deleteProject(projectId: string): Promise<boolean> {
     const folder = getAnimationFolderName(projectId);
     removeDirIfExists(path.join(REMOTION_ANIMATION_DIR, folder));
     removeDirIfExists(path.join(RENDERED_ANIMATIONS_DIR, folder));
+    removeDirIfExists(path.join(HYPERFRAMES_ANIMATION_DIR, folder));
+    removeDirIfExists(path.join(RENDERED_HYPERFRAMES_ANIMATIONS_DIR, folder));
     return true;
   } catch (error) {
     return false;

@@ -257,6 +257,15 @@ function cleanText(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
+function cleanPromptText(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
 function normalizeHex(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -712,7 +721,7 @@ function normalizePlan(
       motion: cleanText(motion) || undefined,
       layout: cleanText(layout) || undefined,
       emphasis: cleanText(emphasis) || undefined,
-      animationPrompt: cleanText(animationPrompt) || undefined,
+      animationPrompt: cleanPromptText(animationPrompt) || undefined,
     } as AnimationMoment);
   }
 

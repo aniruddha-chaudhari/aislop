@@ -78,6 +78,27 @@ function logPreviewServiceTelemetry(event: string, data: Record<string, unknown>
   });
 }
 
+function createPreviewAudioTempPaths(projectId: string, purpose: string): { audioListPath: string; concatenatedAudioPath: string } {
+  const safeProjectId = projectId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const safePurpose = purpose.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const runId = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  const baseName = `${safePurpose}_${safeProjectId}_${runId}`;
+  return {
+    audioListPath: path.join(TEMP_DIR, `${baseName}_audio_list.txt`),
+    concatenatedAudioPath: path.join(TEMP_DIR, `${baseName}_audio.wav`),
+  };
+}
+
+function cleanupPreviewTempFiles(...filePaths: string[]): void {
+  for (const filePath of filePaths) {
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    } catch (_) {}
+  }
+}
+
 function isPlanOverlayTrack(track: { type?: string; id?: string }): boolean {
   if (track.type !== 'overlay') return false;
   if (!track.id || track.id === 't_overlay_template') return false;
@@ -201,11 +222,10 @@ export async function generatePreview(
 
     onProgress?.(10, 'Concatenating audio files...');
 
-    const audioListPath = path.join(TEMP_DIR, `preview_audio_list_${projectId}.txt`);
+    const { audioListPath, concatenatedAudioPath } = createPreviewAudioTempPaths(projectId, 'preview');
     const audioListContent = audioFiles.map(f => `file '${f.replace(/'/g, "'\\''")}'`).join('\n');
     fs.writeFileSync(audioListPath, audioListContent);
 
-    const concatenatedAudioPath = path.join(TEMP_DIR, `preview_audio_${projectId}.wav`);
     await new Promise<void>((resolve, reject) => {
       const concatCmd = ffmpeg()
         .input(audioListPath)
@@ -215,7 +235,10 @@ export async function generatePreview(
       concatCmd.on('start', () => {});
       concatCmd.on('stderr', () => {});
       concatCmd.on('end', () => resolve());
-      concatCmd.on('error', (err: Error) => reject(err));
+      concatCmd.on('error', (err: Error) => {
+        cleanupPreviewTempFiles(audioListPath, concatenatedAudioPath);
+        reject(err);
+      });
       concatCmd.run();
     });
 
@@ -280,13 +303,13 @@ export async function generatePreview(
     await new Promise<void>((resolve, reject) => {
       command
         .on('end', () => {
-          try {
-            fs.unlinkSync(audioListPath);
-            fs.unlinkSync(concatenatedAudioPath);
-          } catch (_) {}
+          cleanupPreviewTempFiles(audioListPath, concatenatedAudioPath);
           resolve();
         })
-        .on('error', (err: Error) => reject(err))
+        .on('error', (err: Error) => {
+          cleanupPreviewTempFiles(audioListPath, concatenatedAudioPath);
+          reject(err);
+        })
         .run();
     });
 
@@ -669,11 +692,10 @@ export async function generateTimelinePreview(
     if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
     onProgress?.(10, 'Concatenating audio...');
-    const audioListPath = path.join(TEMP_DIR, `preview_audio_list_${projectId}.txt`);
+    const { audioListPath, concatenatedAudioPath } = createPreviewAudioTempPaths(projectId, 'timeline_preview');
     const audioListContent = audioFiles.map((f: string) => `file '${f.replace(/'/g, "'\\''")}'`).join('\n');
     fs.writeFileSync(audioListPath, audioListContent);
 
-    const concatenatedAudioPath = path.join(TEMP_DIR, `preview_audio_${projectId}.wav`);
     await new Promise<void>((resolve, reject) => {
       const concatCmd = ffmpeg()
         .input(audioListPath)
@@ -683,7 +705,10 @@ export async function generateTimelinePreview(
       concatCmd.on('start', () => {});
       concatCmd.on('stderr', () => {});
       concatCmd.on('end', () => resolve());
-      concatCmd.on('error', (err: Error) => reject(err));
+      concatCmd.on('error', (err: Error) => {
+        cleanupPreviewTempFiles(audioListPath, concatenatedAudioPath);
+        reject(err);
+      });
       concatCmd.run();
     });
     // Prevent tail clipping when stored timeline/session duration is slightly shorter than actual audio.
@@ -940,14 +965,12 @@ export async function generateTimelinePreview(
       command
         .on('end', () => {
           clearTimeout(timeout);
-          try {
-            fs.unlinkSync(audioListPath);
-            fs.unlinkSync(concatenatedAudioPath);
-          } catch (_) {}
+          cleanupPreviewTempFiles(audioListPath, concatenatedAudioPath);
           resolve();
         })
         .on('error', (err: Error) => {
           clearTimeout(timeout);
+          cleanupPreviewTempFiles(audioListPath, concatenatedAudioPath);
           reject(err);
         })
         .run();
@@ -1034,11 +1057,10 @@ export async function generateTimelinePreviewHls(
     if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
     onProgress?.(10, 'Concatenating audio for HLS preview...');
-    const audioListPath = path.join(TEMP_DIR, `preview_audio_list_${projectId}.txt`);
+    const { audioListPath, concatenatedAudioPath } = createPreviewAudioTempPaths(projectId, 'hls_preview');
     const audioListContent = audioFiles.map((f: string) => `file '${f.replace(/'/g, "'\\''")}'`).join('\n');
     fs.writeFileSync(audioListPath, audioListContent);
 
-    const concatenatedAudioPath = path.join(TEMP_DIR, `preview_audio_${projectId}.wav`);
     await new Promise<void>((resolve, reject) => {
       const concatCmd = ffmpeg()
         .input(audioListPath)
@@ -1048,7 +1070,10 @@ export async function generateTimelinePreviewHls(
       concatCmd.on('start', () => {});
       concatCmd.on('stderr', () => {});
       concatCmd.on('end', () => resolve());
-      concatCmd.on('error', (err: Error) => reject(err));
+      concatCmd.on('error', (err: Error) => {
+        cleanupPreviewTempFiles(audioListPath, concatenatedAudioPath);
+        reject(err);
+      });
       concatCmd.run();
     });
     // Prevent tail clipping when stored timeline/session duration is slightly shorter than actual audio.
@@ -1283,10 +1308,7 @@ export async function generateTimelinePreviewHls(
       command
         .on('end', () => {
           clearTimeout(timeout);
-          try {
-            fs.unlinkSync(audioListPath);
-            fs.unlinkSync(concatenatedAudioPath);
-          } catch (_) {}
+          cleanupPreviewTempFiles(audioListPath, concatenatedAudioPath);
           
           // Post-process playlist: rewrite segment paths to use API URLs.
           // FFmpeg writes relative paths like "seg_000.ts", but we need absolute API URLs.
@@ -1310,6 +1332,7 @@ export async function generateTimelinePreviewHls(
         })
         .on('error', (err: Error) => {
           clearTimeout(timeout);
+          cleanupPreviewTempFiles(audioListPath, concatenatedAudioPath);
           reject(err);
         })
         .run();
@@ -1424,11 +1447,10 @@ export async function generateTimelineSegmentPreview(
     if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
     onProgress?.(10, 'Concatenating audio (segment)...');
-    const audioListPath = path.join(TEMP_DIR, `preview_audio_list_${projectId}.txt`);
+    const { audioListPath, concatenatedAudioPath } = createPreviewAudioTempPaths(projectId, 'segment_preview');
     const audioListContent = audioFiles.map((f: string) => `file '${f.replace(/'/g, "'\\''")}'`).join('\n');
     fs.writeFileSync(audioListPath, audioListContent);
 
-    const concatenatedAudioPath = path.join(TEMP_DIR, `preview_audio_${projectId}.wav`);
     await new Promise<void>((resolve, reject) => {
       const concatCmd = ffmpeg()
         .input(audioListPath)
@@ -1438,7 +1460,10 @@ export async function generateTimelineSegmentPreview(
       concatCmd.on('start', () => {});
       concatCmd.on('stderr', () => {});
       concatCmd.on('end', () => resolve());
-      concatCmd.on('error', (err: Error) => reject(err));
+      concatCmd.on('error', (err: Error) => {
+        cleanupPreviewTempFiles(audioListPath, concatenatedAudioPath);
+        reject(err);
+      });
       concatCmd.run();
     });
 
@@ -1772,14 +1797,12 @@ export async function generateTimelineSegmentPreview(
       command
         .on('end', () => {
           clearTimeout(timeout);
-          try {
-            fs.unlinkSync(audioListPath);
-            fs.unlinkSync(concatenatedAudioPath);
-          } catch (_) {}
+          cleanupPreviewTempFiles(audioListPath, concatenatedAudioPath);
           resolve();
         })
         .on('error', (err: Error) => {
           clearTimeout(timeout);
+          cleanupPreviewTempFiles(audioListPath, concatenatedAudioPath);
           reject(err);
         })
         .run();

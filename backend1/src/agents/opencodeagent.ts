@@ -885,6 +885,18 @@ function cleanOneLineText(value: unknown, maxChars: number): string {
   return normalized.length > maxChars ? normalized.slice(0, maxChars).trim() : normalized;
 }
 
+function cleanMultilineText(value: unknown, maxChars: number): string {
+  if (typeof value !== 'string') return '';
+  const normalized = value
+    .split(/\r?\n/)
+    .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+  if (!normalized) return '';
+  return normalized.length > maxChars ? normalized.slice(0, maxChars).trim() : normalized;
+}
+
 function formatSeconds(seconds: number): string {
   return `${seconds.toFixed(2)}s`;
 }
@@ -1186,7 +1198,7 @@ function alignDirectionOutputToTimeline(
     const content = cleanOneLineText(source.content, NO_CHAR_CAP) || baseMoment.content;
     const emphasis = cleanOneLineText(source.emphasis, NO_CHAR_CAP);
     const animationPrompt =
-      cleanOneLineText(source.animationPrompt, NO_CHAR_CAP) ||
+      cleanMultilineText(source.animationPrompt, NO_CHAR_CAP) ||
       `Scene focus: ${content}. Motion cadence: 1-2 active beats, then one hold beat for readability.`;
 
     return {
@@ -1736,7 +1748,7 @@ RULES:
 - Keep moments at or below HARD_MOMENT_CAP from ANIMATION_BUDGET.
 - subtitle: short script-aligned cue (what narrator is saying).
 - content: visual concept label for rendering (NOT subtitle text repetition).
-- animationPrompt: 2-4 lines with scene objects, camera/motion intent, transitions, depth, icon/logo ideas, and at least one hold/low-motion beat.
+- animationPrompt: detailed natural-language timing spec with no line limit, including scene objects, motion intent, transitions, depth, icon/logo ideas, and at least one hold/low-motion beat.
 - Avoid generic wobble cards and plain text-on-card scenes.
 - Do not keep every second highly animated. Use pulse-and-rest cadence to maintain engagement.
 - For each moment, include at most 2 active beats and 1 intentional hold/readability window.

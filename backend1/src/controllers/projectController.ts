@@ -27,6 +27,14 @@ import {
   renderSingleAnimationMoment,
 } from '../service/animationPlanService';
 import {
+  approveHyperframesAnimationPlanRender,
+  cleanupHyperframesAnimationCacheForProject,
+  generateHyperframesAnimationPlanDraft,
+  isHyperframesAnimationOverlayTrack,
+  loadHyperframesAnimationPlanReview,
+  renderSingleHyperframesAnimationMoment,
+} from '../service/hyperframesAnimationPlanService';
+import {
   extensionForOverlayUpload,
   mimeForOverlayFile,
   removeExistingOverlayFiles,
@@ -37,6 +45,16 @@ const ANIMATION_DEBUG_ENABLED = process.env.ANIMATION_DEBUG === '1';
 
 function hasDraftAnimationClip(track: Track): boolean {
   if (!isAnimationOverlayTrack(track)) return false;
+  return track.clips.some(
+    (clip) =>
+      clip.kind === 'overlay' &&
+      typeof (clip as OverlayClip).animationMomentId === 'string' &&
+      ((clip as OverlayClip).planStatus ?? 'draft') === 'draft'
+  );
+}
+
+function hasDraftHyperframesAnimationClip(track: Track): boolean {
+  if (!isHyperframesAnimationOverlayTrack(track)) return false;
   return track.clips.some(
     (clip) =>
       clip.kind === 'overlay' &&
@@ -74,6 +92,59 @@ function collectAnimationMomentIdsFromTimeline(tracks: Track[]): Set<string> {
     }
   }
   return ids;
+}
+
+function collectHyperframesPromptOverridesFromTimeline(tracks: Track[]): Record<string, string> {
+  const overrides: Record<string, string> = {};
+  for (const track of tracks) {
+    if (!isHyperframesAnimationOverlayTrack(track)) continue;
+    for (const clip of track.clips) {
+      if (clip.kind !== 'overlay') continue;
+      const overlay = clip as OverlayClip;
+      const momentId = typeof overlay.animationMomentId === 'string' ? overlay.animationMomentId.trim() : '';
+      const promptText = typeof overlay.promptText === 'string' ? overlay.promptText.trim() : '';
+      if (!momentId || !promptText) continue;
+      overrides[momentId] = promptText;
+    }
+  }
+  return overrides;
+}
+
+function collectHyperframesAnimationMomentIdsFromTimeline(tracks: Track[]): Set<string> {
+  const ids = new Set<string>();
+  for (const track of tracks) {
+    if (!isHyperframesAnimationOverlayTrack(track)) continue;
+    for (const clip of track.clips) {
+      if (clip.kind !== 'overlay') continue;
+      const overlay = clip as OverlayClip;
+      const momentId = typeof overlay.animationMomentId === 'string' ? overlay.animationMomentId.trim() : '';
+      if (momentId) ids.add(momentId);
+    }
+  }
+  return ids;
+}
+
+function mergeAnimationOverlayTracks(existingTracks: Track[], overlayTracks: Track[]): Track[] {
+  const firstAnimIndex = existingTracks.findIndex((t) => isHyperframesAnimationOverlayTrack(t));
+  const isImageOverlayTrack = (t: Track) =>
+    t.type === 'overlay' && (t.id === 't_imgs' || /^t_imgs_\d+$/.test(t.id));
+
+  if (firstAnimIndex >= 0) {
+    const before = existingTracks.slice(0, firstAnimIndex).filter((t) => !isHyperframesAnimationOverlayTrack(t));
+    const after = existingTracks.slice(firstAnimIndex).filter((t) => !isHyperframesAnimationOverlayTrack(t));
+    return [...before, ...overlayTracks, ...after];
+  }
+
+  const withoutAnim = existingTracks.filter((t) => !isHyperframesAnimationOverlayTrack(t));
+  const lastImageIndex = withoutAnim.reduce((idx, track, i) => (isImageOverlayTrack(track) ? i : idx), -1);
+  if (lastImageIndex >= 0) {
+    return [
+      ...withoutAnim.slice(0, lastImageIndex + 1),
+      ...overlayTracks,
+      ...withoutAnim.slice(lastImageIndex + 1),
+    ];
+  }
+  return [...withoutAnim, ...overlayTracks];
 }
 
 function logPreviewTelemetry(event: string, data: Record<string, unknown> = {}): void {
@@ -848,6 +919,370 @@ export async function generateAnimationClipForProject(ctx: HttpContext): Promise
     return jsonResponse(500, {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to generate animation clip',
+    });
+  }
+}
+
+export async function generateHyperframesAnimationPlanForProject(ctx: HttpContext): Promise<HandlerResult> {
+  const requestStartedAt = Date.now();
+  const projectIdForLog = ctx.params?.id;
+  console.log('[HyperFrames API] generate plan request received', {
+    projectId: projectIdForLog,
+    timestamp: new Date().toISOString(),
+  });
+  try {
+    const projectId = ctx.params?.id;
+    const body = (ctx.body as any) || {};
+
+    if (!projectId) {
+      console.warn('[HyperFrames API] generate plan rejected: missing project id');
+      return jsonResponse(400, { success: false, error: 'Project ID is required' });
+    }
+
+    const project = await projectService.getProject(projectId);
+    if (!project) {
+      console.warn('[HyperFrames API] generate plan rejected: project not found', { projectId });
+      return jsonResponse(404, { success: false, error: 'Project not found' });
+    }
+
+    const subtitleTrack = project.timeline?.tracks?.find((t) => t.type === 'subtitle');
+    const subtitleClips = (subtitleTrack?.clips ?? []).filter((c): c is SubtitleClip => c.kind === 'subtitle');
+    console.log('[HyperFrames API] generate plan project loaded', {
+      projectId,
+      projectName: project.name,
+      trackCount: project.timeline?.tracks?.length ?? 0,
+      subtitleClipCount: subtitleClips.length,
+      existingDuration: project.timeline?.duration,
+    });
+    if (subtitleClips.length === 0) {
+      console.warn('[HyperFrames API] generate plan rejected: no subtitles', { projectId });
+      return jsonResponse(400, {
+        success: false,
+        error: 'Subtitles are required before generating animation plan',
+      });
+    }
+
+    const existingDuration = project.timeline?.duration;
+    const duration =
+      typeof existingDuration === 'number' && existingDuration > 0
+        ? existingDuration
+        : (await getSessionDuration(project.audioSessionId)) || 60;
+    const topic = body.topic || project.name || 'Educational short video';
+    const existingTracks = (project.timeline?.tracks ?? []) as Track[];
+
+    const existingReview = loadHyperframesAnimationPlanReview(projectId);
+    if (existingReview && existingTracks.some((track) => hasDraftHyperframesAnimationClip(track))) {
+      console.log('[HyperFrames API] generate plan reused existing draft', {
+        projectId,
+        momentCount: existingReview.animationPlan?.moments?.length ?? 0,
+        elapsedMs: Date.now() - requestStartedAt,
+      });
+      return jsonResponse(200, {
+        success: true,
+        requiresApproval: true,
+        animationPlan: existingReview?.animationPlan,
+        review: existingReview,
+        project,
+        timeline: project.timeline,
+        message: 'HyperFrames animation draft plan already exists. Review clips in the timeline and approve when ready.',
+      });
+    }
+
+    const result = await generateHyperframesAnimationPlanDraft({
+      projectId,
+      topic,
+      subtitleClips,
+      videoDurationSeconds: duration,
+    });
+    const tracks = mergeAnimationOverlayTracks(existingTracks, result.overlayTracks);
+    const timeline = { duration, tracks };
+    const updatedProject = await projectService.updateTimeline(projectId, timeline);
+    console.log('[HyperFrames API] generate plan completed', {
+      projectId,
+      momentCount: result.animationPlan.moments.length,
+      overlayTrackCount: result.overlayTracks.length,
+      duration,
+      elapsedMs: Date.now() - requestStartedAt,
+      hyperframesProjectDir: result.hyperframesProjectDir,
+      renderedProjectDir: result.renderedProjectDir,
+    });
+
+    return jsonResponse(200, {
+      success: true,
+      requiresApproval: true,
+      animationPlan: result.animationPlan,
+      review: result.review,
+      project: updatedProject,
+      timeline,
+      message: 'HyperFrames animation plan created. Review and approve to render.',
+    });
+  } catch (error) {
+    console.error('[HyperFrames Animation Plan] request failed', {
+      projectId: projectIdForLog,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      elapsedMs: Date.now() - requestStartedAt,
+    });
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to generate HyperFrames animation plan',
+    });
+  }
+}
+
+export async function approveHyperframesAnimationPlanForProject(ctx: HttpContext): Promise<HandlerResult> {
+  const requestStartedAt = Date.now();
+  const projectIdForLog = ctx.params?.id;
+  console.log('[HyperFrames API] approve plan request received', {
+    projectId: projectIdForLog,
+    timestamp: new Date().toISOString(),
+  });
+  try {
+    const projectId = ctx.params?.id;
+    const body = (ctx.body as any) || {};
+
+    if (!projectId) {
+      console.warn('[HyperFrames API] approve plan rejected: missing project id');
+      return jsonResponse(400, { success: false, error: 'Project ID is required' });
+    }
+
+    const project = await projectService.getProject(projectId);
+    if (!project) {
+      console.warn('[HyperFrames API] approve plan rejected: project not found', { projectId });
+      return jsonResponse(404, { success: false, error: 'Project not found' });
+    }
+
+    const existingDuration = project.timeline?.duration;
+    const duration =
+      typeof existingDuration === 'number' && existingDuration > 0
+        ? existingDuration
+        : (await getSessionDuration(project.audioSessionId)) || 60;
+    const topic = body.topic || project.name || 'Educational short video';
+    const timelineTracks = (project.timeline?.tracks ?? []) as Track[];
+    const promptOverrides = collectHyperframesPromptOverridesFromTimeline(timelineTracks);
+    const allowedMomentIds = collectHyperframesAnimationMomentIdsFromTimeline(timelineTracks);
+    console.log('[HyperFrames API] approve plan project loaded', {
+      projectId,
+      trackCount: timelineTracks.length,
+      allowedMomentCount: allowedMomentIds.size,
+      promptOverrideCount: Object.keys(promptOverrides).length,
+      duration,
+    });
+    const result = await approveHyperframesAnimationPlanRender({
+      projectId,
+      topic,
+      promptOverrides,
+      allowedMomentIds,
+      timelineTracks,
+      videoDurationSeconds: duration,
+    });
+
+    const tracks = mergeAnimationOverlayTracks((project.timeline?.tracks ?? []) as Track[], result.overlayTracks);
+    const timeline = { duration, tracks };
+    const updatedProject = await projectService.updateTimeline(projectId, timeline);
+    console.log('[HyperFrames API] approve plan completed', {
+      projectId,
+      renderedMomentCount: result.animationPlan.moments.length,
+      overlayTrackCount: result.overlayTracks.length,
+      elapsedMs: Date.now() - requestStartedAt,
+      hyperframesProjectDir: result.hyperframesProjectDir,
+      renderedProjectDir: result.renderedProjectDir,
+    });
+
+    return jsonResponse(200, {
+      success: true,
+      animationPlan: result.animationPlan,
+      project: updatedProject,
+      timeline,
+      message: 'HyperFrames animation plan approved and rendered successfully',
+    });
+  } catch (error) {
+    console.error('[HyperFrames Animation Plan Approval] request failed', {
+      projectId: projectIdForLog,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      elapsedMs: Date.now() - requestStartedAt,
+    });
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to approve HyperFrames animation plan',
+    });
+  }
+}
+
+export async function generateHyperframesAnimationClipForProject(ctx: HttpContext): Promise<HandlerResult> {
+  const requestStartedAt = Date.now();
+  const projectIdForLog = ctx.params?.id;
+  const momentIdForLog = ctx.params?.momentId;
+  console.log('[HyperFrames API] generate single clip request received', {
+    projectId: projectIdForLog,
+    momentId: momentIdForLog,
+    timestamp: new Date().toISOString(),
+  });
+  try {
+    const projectId = ctx.params?.id;
+    const momentId = ctx.params?.momentId;
+    const body = (ctx.body as any) || {};
+
+    if (!projectId) {
+      console.warn('[HyperFrames API] generate single clip rejected: missing project id');
+      return jsonResponse(400, { success: false, error: 'Project ID is required' });
+    }
+    if (!momentId || !momentId.trim()) {
+      console.warn('[HyperFrames API] generate single clip rejected: missing moment id', { projectId });
+      return jsonResponse(400, { success: false, error: 'Animation moment id is required' });
+    }
+
+    const project = await projectService.getProject(projectId);
+    if (!project) {
+      console.warn('[HyperFrames API] generate single clip rejected: project not found', { projectId });
+      return jsonResponse(404, { success: false, error: 'Project not found' });
+    }
+
+    const topic = body.topic || project.name || 'Educational short video';
+    const existingTracks = (project.timeline?.tracks ?? []) as Track[];
+    const promptOverrides = collectHyperframesPromptOverridesFromTimeline(existingTracks);
+    console.log('[HyperFrames API] generate single clip project loaded', {
+      projectId,
+      momentId: momentId.trim(),
+      trackCount: existingTracks.length,
+      promptOverrideCount: Object.keys(promptOverrides).length,
+    });
+    const single = await renderSingleHyperframesAnimationMoment({
+      projectId,
+      topic,
+      momentId: momentId.trim(),
+      promptOverrides,
+      timelineTracks: existingTracks,
+      videoDurationSeconds:
+        typeof project.timeline?.duration === 'number' && project.timeline.duration > 0
+          ? project.timeline.duration
+          : undefined,
+    });
+
+    let replaced = false;
+    const nextTracks = existingTracks.map((track) => {
+      if (!isHyperframesAnimationOverlayTrack(track)) return track;
+      const nextClips = track.clips.map((clip) => {
+        if (clip.kind !== 'overlay') return clip;
+        const overlay = clip as OverlayClip;
+        if ((overlay.animationMomentId || '').trim() !== momentId.trim()) return clip;
+        replaced = true;
+        return single.overlayClip;
+      });
+      return { ...track, clips: nextClips };
+    });
+
+    if (!replaced) {
+      const firstAnimTrackIndex = nextTracks.findIndex((track) => isHyperframesAnimationOverlayTrack(track));
+      if (firstAnimTrackIndex >= 0) {
+        const track = nextTracks[firstAnimTrackIndex];
+        nextTracks[firstAnimTrackIndex] = { ...track, clips: [...track.clips, single.overlayClip] };
+      } else {
+        nextTracks.push({ id: 't_anim', type: 'overlay', name: 'Animation', clips: [single.overlayClip] } as Track);
+      }
+    }
+
+    const duration =
+      typeof project.timeline?.duration === 'number' && project.timeline.duration > 0
+        ? project.timeline.duration
+        : (await getSessionDuration(project.audioSessionId)) || 60;
+    const timeline = { duration, tracks: nextTracks };
+    const updatedProject = await projectService.updateTimeline(projectId, timeline);
+    console.log('[HyperFrames API] generate single clip completed', {
+      projectId,
+      momentId: momentId.trim(),
+      replaced,
+      duration,
+      elapsedMs: Date.now() - requestStartedAt,
+      hyperframesProjectDir: single.hyperframesProjectDir,
+      renderedProjectDir: single.renderedProjectDir,
+      outputPath: single.overlayClip.path,
+    });
+
+    return jsonResponse(200, {
+      success: true,
+      project: updatedProject,
+      timeline,
+      momentId: momentId.trim(),
+      message: 'HyperFrames animation clip rendered successfully',
+    });
+  } catch (error) {
+    console.error('[HyperFrames API] generate single clip failed', {
+      projectId: projectIdForLog,
+      momentId: momentIdForLog,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      elapsedMs: Date.now() - requestStartedAt,
+    });
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to generate HyperFrames animation clip',
+    });
+  }
+}
+
+export async function deleteHyperframesAnimationPlanForProject(ctx: HttpContext): Promise<HandlerResult> {
+  const requestStartedAt = Date.now();
+  const projectIdForLog = ctx.params?.id;
+  console.log('[HyperFrames API] delete plan request received', {
+    projectId: projectIdForLog,
+    timestamp: new Date().toISOString(),
+  });
+  try {
+    const projectId = ctx.params?.id;
+    if (!projectId) {
+      console.warn('[HyperFrames API] delete plan rejected: missing project id');
+      return jsonResponse(400, {
+        success: false,
+        error: 'Project ID is required',
+      });
+    }
+
+    const project = await projectService.getProject(projectId);
+    if (!project) {
+      console.warn('[HyperFrames API] delete plan rejected: project not found', { projectId });
+      return jsonResponse(404, {
+        success: false,
+        error: 'Project not found',
+      });
+    }
+
+    const existing = project.timeline;
+    const existingTracks = (existing?.tracks ?? []) as Track[];
+    const tracks = existingTracks.filter((t) => !isHyperframesAnimationOverlayTrack(t));
+    const duration =
+      typeof existing?.duration === 'number' && existing.duration > 0
+        ? existing.duration
+        : (await getSessionDuration(project.audioSessionId)) || 60;
+
+    const timeline = { duration, tracks };
+    const updatedProject = await projectService.updateTimeline(projectId, timeline);
+    const cleanup = cleanupHyperframesAnimationCacheForProject(projectId);
+    console.log('[HyperFrames API] delete plan completed', {
+      projectId,
+      removedTrackCount: existingTracks.length - tracks.length,
+      elapsedMs: Date.now() - requestStartedAt,
+      cleanup,
+    });
+
+    return jsonResponse(200, {
+      success: true,
+      project: updatedProject,
+      timeline,
+      cacheCleared: cleanup,
+      message: 'HyperFrames animation plan deleted successfully',
+    });
+  } catch (error) {
+    console.error('[HyperFrames API] delete plan failed', {
+      projectId: projectIdForLog,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      elapsedMs: Date.now() - requestStartedAt,
+    });
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to delete HyperFrames animation plan',
     });
   }
 }
