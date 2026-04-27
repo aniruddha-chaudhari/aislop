@@ -107,8 +107,8 @@ function isPlanOverlayTrack(track: { type?: string; id?: string }): boolean {
   return true;
 }
 
-function resolveOverlayAssetPath(clip: OverlayClip, audioSessionId: string): string {
-  return resolveSessionOverlayPath(IMAGE_UPLOAD_DIR, audioSessionId, clip.path, clip.assetId);
+function resolveOverlayAssetPath(clip: OverlayClip, audioSessionId: string, projectId: string): string {
+  return resolveSessionOverlayPath(IMAGE_UPLOAD_DIR, audioSessionId, clip.path, clip.assetId, projectId);
 }
 
 function isStillImageAsset(filePath: string): boolean {
@@ -118,7 +118,7 @@ function isStillImageAsset(filePath: string): boolean {
 /**
  * Add an overlay as an input. For still images: loop for full timeline.
  * For video (e.g. animation moment): trim to clip.duration only so overlay plays 0→duration in order;
- * the filter chain must apply setpts=PTS-STARTPTS+clip.start/TB so it lines up with timeline
+ * the filter chain applies setpts=PTS-STARTPTS+clip.start/TB so every overlay lines up with timeline
  * without carrying source timestamps that can push the visual later.
  */
 function addOverlayInput(
@@ -143,6 +143,10 @@ function isReplaceOverlayClip(clip: OverlayClip): boolean {
   return clip.displayMode === 'replace' && clip.planStatus !== 'draft';
 }
 
+function isHyperframesAnimationOverlayClip(clip: OverlayClip): boolean {
+  return Boolean(clip.animationMomentId);
+}
+
 function getTopRegionHeight(frameHeight: number): number {
   // Reserve the same subtitle-safe area proportion used by 1080x1920 export.
   const subtitleSafeBottomMargin = Math.floor((700 / 1920) * frameHeight);
@@ -152,6 +156,12 @@ function getTopRegionHeight(frameHeight: number): number {
 function buildReplaceOverlayRanges(clips: OverlayClip[]): TimeRange[] {
   return clips
     .filter(isReplaceOverlayClip)
+    .map((clip) => ({ start: clip.start, end: clip.start + clip.duration }));
+}
+
+function buildCharacterHiddenOverlayRanges(clips: OverlayClip[]): TimeRange[] {
+  return clips
+    .filter((clip) => isReplaceOverlayClip(clip) || (isHyperframesAnimationOverlayClip(clip) && clip.planStatus !== 'draft'))
     .map((clip) => ({ start: clip.start, end: clip.start + clip.duration }));
 }
 
@@ -727,7 +737,7 @@ export async function generateTimelinePreview(
     let characterClips = (characterTrack?.clips?.filter((c: any) => c.kind === 'character') || []) as CharacterClip[];
     characterClips = expandCharacterClipsExcludingReplaceRanges(
       characterClips,
-      buildReplaceOverlayRanges(overlayClips)
+      buildCharacterHiddenOverlayRanges(overlayClips)
     );
     let subtitleClips = (subtitleTrack?.clips?.filter((c: any) => c.kind === 'subtitle') || []) as SubtitleClip[];
     const musicClips = musicTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'music') || [])) as MusicClip[];
@@ -791,7 +801,7 @@ export async function generateTimelinePreview(
     const overlayInputs: { clip: OverlayClip; inputIndex: number; overlayPath: string }[] = [];
     overlayClips.forEach((clip: OverlayClip) => {
       if (clip.planStatus === 'draft') return;
-      const overlayPath = resolveOverlayAssetPath(clip, audioSessionId);
+      const overlayPath = resolveOverlayAssetPath(clip, audioSessionId, projectId);
       if (fs.existsSync(overlayPath)) {
         addOverlayInput(command, overlayPath, clip, duration);
         overlayInputs.push({ clip, inputIndex: nextInputIndex++, overlayPath });
@@ -819,7 +829,7 @@ export async function generateTimelinePreview(
     const fontSize = Math.floor(48 * SCALE);
     const marginV = Math.floor(700 * SCALE);
 
-    filterComplex = `[0:v]scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=increase,crop=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT},format=yuv420p[bg]`;
+    filterComplex = `[0:v]setpts=PTS-STARTPTS,scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=increase,crop=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT},format=yuv420p[bg]`;
     lastLabel = 'bg';
 
     if (assPath && fs.existsSync(assPath)) {
@@ -832,21 +842,28 @@ export async function generateTimelinePreview(
     overlayInputs.forEach(({ clip, inputIndex, overlayPath }, index) => {
       const isReplace = isReplaceOverlayClip(clip);
       const isVideoOverlay = !isStillImageAsset(overlayPath);
-      const setpts = isVideoOverlay ? `setpts=PTS-STARTPTS+${clip.start}/TB,` : '';
+      const setpts = `setpts=PTS-STARTPTS+${clip.start}/TB,${isVideoOverlay ? 'fps=30,' : ''}`;
       const scaledLabel = isReplace ? `ov_replace_${index}` : `ov${index}`;
       const overlayLabel = isReplace ? `vr${index}` : `vo${index}`;
       if (isReplace) {
         // Preserve full frame and fit inside vertical canvas for replace mode previews.
         filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x101014[${scaledLabel}]`;
-        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
+        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
         lastLabel = overlayLabel;
         return;
       }
 
       if (isVideoOverlay) {
+        if (isHyperframesAnimationOverlayClip(clip)) {
+          filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x00000000[${scaledLabel}]`;
+          filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
+          lastLabel = overlayLabel;
+          return;
+        }
+
         const topRegionH = getTopRegionHeight(PREVIEW_HEIGHT);
         filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${topRegionH}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${topRegionH}:(ow-iw)/2:0:0x00000000[${scaledLabel}]`;
-        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
+        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
         lastLabel = overlayLabel;
         return;
       }
@@ -860,7 +877,7 @@ export async function generateTimelinePreview(
         OVERLAY_LEGACY_TOP_Y
       );
       filterComplex += `;[${inputIndex}:v]${setpts}scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
-      filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
+      filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
       lastLabel = overlayLabel;
     });
 
@@ -920,7 +937,7 @@ export async function generateTimelinePreview(
       ...overlayInputs.map(({ clip, inputIndex }) => ({
         index: inputIndex,
         type: 'Overlay',
-        path: resolveOverlayAssetPath(clip, audioSessionId)
+        path: resolveOverlayAssetPath(clip, audioSessionId, projectId)
       })),
       ...charInputs.map(({ clip, inputIndex }) => ({
         index: inputIndex,
@@ -1092,7 +1109,7 @@ export async function generateTimelinePreviewHls(
     let characterClips = (characterTrack?.clips?.filter((c: any) => c.kind === 'character') || []) as CharacterClip[];
     characterClips = expandCharacterClipsExcludingReplaceRanges(
       characterClips,
-      buildReplaceOverlayRanges(overlayClips)
+      buildCharacterHiddenOverlayRanges(overlayClips)
     );
     let subtitleClips = (subtitleTrack?.clips?.filter((c: any) => c.kind === 'subtitle') || []) as SubtitleClip[];
     const musicClips = musicTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'music') || [])) as MusicClip[];
@@ -1156,7 +1173,7 @@ export async function generateTimelinePreviewHls(
     const overlayInputs: { clip: OverlayClip; inputIndex: number; overlayPath: string }[] = [];
     overlayClips.forEach((clip: OverlayClip) => {
       if (clip.planStatus === 'draft') return;
-      const overlayPath = resolveOverlayAssetPath(clip, audioSessionId);
+      const overlayPath = resolveOverlayAssetPath(clip, audioSessionId, projectId);
       if (fs.existsSync(overlayPath)) {
         addOverlayInput(command, overlayPath, clip, duration);
         overlayInputs.push({ clip, inputIndex: nextInputIndex++, overlayPath });
@@ -1183,7 +1200,7 @@ export async function generateTimelinePreviewHls(
     const fontSize = Math.floor(48 * SCALE);
     const marginV = Math.floor(700 * SCALE);
 
-    filterComplex = `[0:v]scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=increase,crop=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT},format=yuv420p[bg]`;
+    filterComplex = `[0:v]setpts=PTS-STARTPTS,scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=increase,crop=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT},format=yuv420p[bg]`;
     lastLabel = 'bg';
 
     if (assPath && fs.existsSync(assPath)) {
@@ -1196,21 +1213,28 @@ export async function generateTimelinePreviewHls(
     overlayInputs.forEach(({ clip, inputIndex, overlayPath }, index) => {
       const isReplace = isReplaceOverlayClip(clip);
       const isVideoOverlay = !isStillImageAsset(overlayPath);
-      const setpts = isVideoOverlay ? `setpts=PTS-STARTPTS+${clip.start}/TB,` : '';
+      const setpts = `setpts=PTS-STARTPTS+${clip.start}/TB,${isVideoOverlay ? 'fps=30,' : ''}`;
       const scaledLabel = isReplace ? `ov_replace_${index}` : `ov${index}`;
       const overlayLabel = isReplace ? `vr${index}` : `vo${index}`;
       if (isReplace) {
         // Preserve full frame and fit inside vertical canvas for replace mode previews.
         filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x101014[${scaledLabel}]`;
-        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
+        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
         lastLabel = overlayLabel;
         return;
       }
 
       if (isVideoOverlay) {
+        if (isHyperframesAnimationOverlayClip(clip)) {
+          filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x00000000[${scaledLabel}]`;
+          filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
+          lastLabel = overlayLabel;
+          return;
+        }
+
         const topRegionH = getTopRegionHeight(PREVIEW_HEIGHT);
         filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${topRegionH}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${topRegionH}:(ow-iw)/2:0:0x00000000[${scaledLabel}]`;
-        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
+        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
         lastLabel = overlayLabel;
         return;
       }
@@ -1224,7 +1248,7 @@ export async function generateTimelinePreviewHls(
         OVERLAY_LEGACY_TOP_Y
       );
       filterComplex += `;[${inputIndex}:v]${setpts}scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
-      filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
+      filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
       lastLabel = overlayLabel;
     });
 
@@ -1544,7 +1568,7 @@ export async function generateTimelineSegmentPreview(
     );
     characterClips = expandCharacterClipsExcludingReplaceRanges(
       characterClips,
-      buildReplaceOverlayRanges(overlayClips)
+      buildCharacterHiddenOverlayRanges(overlayClips)
     );
     const musicClips = sliceAudioClipsToWindow(
       musicTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'music') || [])) as MusicClip[],
@@ -1641,7 +1665,7 @@ export async function generateTimelineSegmentPreview(
     const overlayInputs: { clip: OverlayClip; inputIndex: number; overlayPath: string }[] = [];
     overlayClips.forEach((clip: OverlayClip) => {
       if (clip.planStatus === 'draft') return;
-      const overlayPath = resolveOverlayAssetPath(clip, audioSessionId);
+      const overlayPath = resolveOverlayAssetPath(clip, audioSessionId, projectId);
       if (fs.existsSync(overlayPath)) {
         addOverlayInput(command, overlayPath, clip, segmentDuration);
         overlayInputs.push({ clip, inputIndex: nextInputIndex++, overlayPath });
@@ -1671,7 +1695,7 @@ export async function generateTimelineSegmentPreview(
     // For videos, we already sought to fileStart and took segmentDuration; just scale/crop (no trim).
     if (isImage) {
       filterComplex =
-        `[0:v]scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=increase,` +
+        `[0:v]setpts=PTS-STARTPTS,scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=increase,` +
         `crop=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT},format=yuv420p[bg]`;
     } else {
       filterComplex =
@@ -1694,21 +1718,28 @@ export async function generateTimelineSegmentPreview(
     overlayInputs.forEach(({ clip, inputIndex, overlayPath }, index) => {
       const isReplace = isReplaceOverlayClip(clip);
       const isVideoOverlay = !isStillImageAsset(overlayPath);
-      const setpts = isVideoOverlay ? `setpts=PTS-STARTPTS+${clip.start}/TB,` : '';
+      const setpts = `setpts=PTS-STARTPTS+${clip.start}/TB,${isVideoOverlay ? 'fps=30,' : ''}`;
       const scaledLabel = isReplace ? `ov_replace_${index}` : `ov${index}`;
       const overlayLabel = isReplace ? `vr${index}` : `vo${index}`;
       if (isReplace) {
         // Preserve full frame and fit inside vertical canvas for replace mode previews.
         filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x101014[${scaledLabel}]`;
-        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
+        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
         lastLabel = overlayLabel;
         return;
       }
 
       if (isVideoOverlay) {
+        if (isHyperframesAnimationOverlayClip(clip)) {
+          filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x00000000[${scaledLabel}]`;
+          filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
+          lastLabel = overlayLabel;
+          return;
+        }
+
         const topRegionH = getTopRegionHeight(PREVIEW_HEIGHT);
         filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${topRegionH}:force_original_aspect_ratio=decrease,pad=${PREVIEW_WIDTH}:${topRegionH}:(ow-iw)/2:0:0x00000000[${scaledLabel}]`;
-        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
+        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
         lastLabel = overlayLabel;
         return;
       }
@@ -1722,7 +1753,7 @@ export async function generateTimelineSegmentPreview(
         OVERLAY_LEGACY_TOP_Y
       );
       filterComplex += `;[${inputIndex}:v]${setpts}scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
-      filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
+      filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
       lastLabel = overlayLabel;
     });
 

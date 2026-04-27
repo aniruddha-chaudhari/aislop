@@ -72,6 +72,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const [isGeneratingAnimationPlan, setIsGeneratingAnimationPlan] = useState(false);
   const [isApprovingAnimationPlan, setIsApprovingAnimationPlan] = useState(false);
   const [generatingAnimationMomentId, setGeneratingAnimationMomentId] = useState<string | null>(null);
+  const [isCreatingAnimationClip, setIsCreatingAnimationClip] = useState(false);
   const [isDeletingAnimationPlan, setIsDeletingAnimationPlan] = useState(false);
   const [isGeneratingSfxPlan, setIsGeneratingSfxPlan] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -1521,10 +1522,11 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       const renderedRef = (() => {
         for (const track of nextProject.tracks) {
           for (const clip of track.clips) {
+            const overlay = clip.kind === 'overlay' ? (clip as OverlayClip) : null;
             if (
-              clip.kind === 'overlay' &&
-              (clip as any).animationMomentId === momentId &&
-              (clip as any).planStatus === 'approved'
+              overlay &&
+              overlay.animationMomentId === momentId &&
+              overlay.planStatus === 'approved'
             ) {
               return { trackId: track.id, clipId: clip.id } as ClipRef;
             }
@@ -1545,6 +1547,85 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     } finally {
       setGeneratingAnimationMomentId(null);
     }
+  };
+
+  const handleCreateAnimationAtPlayhead = async (prompt: string, requestedDuration: number) => {
+    const cleanPrompt = prompt.trim();
+    if (!cleanPrompt || isCreatingAnimationClip) return;
+
+    const createdAt = Date.now();
+    const momentId = `custom_anim_${createdAt}`;
+    const clipId = `anim_draft_${momentId}`;
+    const scrubTime = Math.max(0, Number(playheadTime.toFixed(3)));
+    const preRollSeconds = Math.min(0.35, scrubTime);
+    const start = Math.max(0, Number((scrubTime - preRollSeconds).toFixed(3)));
+    const punchTime = Number((scrubTime - start).toFixed(3));
+    const duration = Math.max(1, Math.min(8, Number.isFinite(requestedDuration) ? requestedDuration : 3));
+    const clipDuration = Math.max(0.5, Math.min(duration, Math.max(0.5, draftProject.duration - start)));
+    const syncedPrompt = [
+      `SYNC CONTRACT: The user scrubbed to ${scrubTime.toFixed(3)}s in the main timeline. This clip starts at ${start.toFixed(3)}s, so the main visual punch/hero reveal must land at ${punchTime.toFixed(3)}s inside this HyperFrames clip. Use the first ${punchTime.toFixed(3)}s only for anticipation/build-up. Do not make the important visual arrive after that punch time.`,
+      cleanPrompt,
+    ].join('\n\n');
+    const label = cleanPrompt
+      .replace(/\s+/g, ' ')
+      .split(' ')
+      .slice(0, 4)
+      .join(' ')
+      .toUpperCase();
+    const selectedRef: ClipRef = { trackId: 't_anim', clipId };
+
+    const animationClip: Clip = {
+      id: clipId,
+      kind: 'overlay',
+      start,
+      duration: clipDuration,
+      assetId: clipId,
+      label: label || 'CUSTOM ANIMATION',
+      x: 0.5,
+      y: 0.65,
+      scale: 1,
+      displayMode: 'overlay',
+      planStatus: 'draft',
+      promptText: syncedPrompt,
+      promptEdited: true,
+      animationMomentId: momentId,
+      animationType: 'hyperframes',
+      animationContent: label || cleanPrompt.slice(0, 80),
+      animationSubtitle: cleanPrompt,
+      animationContextSummary: cleanPrompt.slice(0, 320),
+    };
+
+    const nextTracks = (() => {
+      const tracks = draftProject.tracks.map((track) => ({ ...track, clips: [...track.clips] }));
+      const existingIndex = tracks.findIndex((track) => track.id === 't_anim');
+      if (existingIndex >= 0) {
+        tracks[existingIndex] = {
+          ...tracks[existingIndex],
+          clips: [...tracks[existingIndex].clips, animationClip],
+        };
+        return sortTracks(tracks);
+      }
+      const animationTrack: Track = {
+        id: 't_anim',
+        type: 'overlay',
+        name: 'Animation',
+        clips: [animationClip],
+      };
+      return sortTracks([...tracks, animationTrack]);
+    })();
+
+    const nextProject: EditorProject = {
+      ...draftProject,
+      tracks: nextTracks,
+    };
+
+    setIsCreatingAnimationClip(true);
+    setDraftProject(nextProject);
+    setSelected(selectedRef);
+    setIsDirty(true);
+    setMessage({ type: 'success', text: `Draft animation clip added at ${start.toFixed(2)}s.` });
+    setTimeout(() => setMessage(null), 2200);
+    setIsCreatingAnimationClip(false);
   };
 
   const handleDeleteAnimationPlan = async () => {
@@ -1773,6 +1854,9 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             onDeleteAnimationPlan={handleDeleteAnimationPlan}
             hasAnimationPlan={hasAnimationPlan}
             deletingAnimationPlan={isDeletingAnimationPlan}
+            playheadTime={playheadTime}
+            onCreateAnimationAtPlayhead={handleCreateAnimationAtPlayhead}
+            creatingAnimationClip={isCreatingAnimationClip}
             onChangeAudioSession={async (sessionId) => {
               const session = audioSessions.find(s => s.sessionId === sessionId);
               await handleChangeAudioSession(sessionId, session?.name || sessionId);

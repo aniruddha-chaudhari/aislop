@@ -8,6 +8,7 @@ import {
   type OpenCodeOutputDiagnostics,
 } from './opencodeagent';
 import { buildHyperframesClipHtmlPrompt, type HyperframesClipHtmlPromptParams } from '../prompts/hyperframesClipHtmlPrompt';
+import { buildHyperframesAnimationPlanPrompt } from '../prompts/hyperframesAnimationPlanPrompt';
 
 export type HyperframesOpenCodeEnvironmentCheck = Awaited<ReturnType<typeof inspectOpenCodeEnvironment>> & {
   hyperframesSkillInstalled: boolean;
@@ -110,6 +111,15 @@ function detectExaUsage(diagnostics: OpenCodeOutputDiagnostics, output: string):
   );
 }
 
+function shouldRequireSkillToolUsage(): boolean {
+  return process.env.OPENCODE_REQUIRE_SKILL_TOOL_USAGE === '1';
+}
+
+function hasUsableAnimationPlan(output: string): boolean {
+  const parsed = parseOpenCodeJSON<{ moments?: unknown }>(output);
+  return Boolean(parsed && Array.isArray(parsed.moments) && parsed.moments.length > 0);
+}
+
 function extractHtmlFromOutput(output: string): string | null {
   const parsed = parseOpenCodeJSON<{ html?: unknown; indexHtml?: unknown }>(output);
   const raw = parsed?.html ?? parsed?.indexHtml;
@@ -142,62 +152,12 @@ function buildPlanPrompt(args: {
   videoDurationSeconds: number;
   maxMoments: number;
 }): string {
-  const duration = Math.max(1, Number(args.videoDurationSeconds || 60));
-  const maxMoments = Math.max(1, Math.min(16, Math.floor(args.maxMoments || 8)));
-  return `You are the HyperFrames animation planning agent for short-form vertical videos.
-
-MANDATORY AGENT RULES:
-- Use the "skill" tool and load "hyperframes".
-- Use the "skill" tool and load "hyperframes-cli".
-- Use the "skill" tool and load "gsap".
-- Use Exa MCP before final answer to validate current short-form motion/typography references.
-- Do not use Remotion, React, TSX, frame hooks, or component code anywhere in this plan.
-
-TASK:
-Create a concise animation plan for HyperFrames HTML/GSAP clips that will be rendered as replace-mode timeline overlays.
-
-TOPIC: "${args.topic}"
-VIDEO_DURATION_SECONDS: ${duration}
-MAX_MOMENTS: ${maxMoments}
-DIALOGUE_CONTEXT:
-${args.dialogueContext || 'No subtitle context provided.'}
-
-RULES:
-- Choose at most ${maxMoments} animation moments.
-- Each moment must start on or near a dialogue line timestamp and last 2.0 to 7.0 seconds.
-- Total animation coverage should feel like pulse-and-rest, not constant animation.
-- Each moment must use short display text only, never full subtitles.
-- Each moment must include a colorPalette with bg, primary, accent, text hex values.
-- Each animationPrompt must describe HyperFrames HTML/GSAP timing in seconds, not Remotion frames.
-- Each animationPrompt must be as detailed as needed in natural language with NO line-count cap.
-- Every animationPrompt must explicitly describe background behavior (ambient layer, context anchor layer, hero text layer) and preserve clear timing anchors.
-- Include a short researchSummary string describing the style references validated with Exa.
-
-OUTPUT JSON ONLY:
-{
-  "videoDurationSeconds": ${duration},
-  "researchSummary": "string",
-  "moments": [
-    {
-      "start": number,
-      "duration": number,
-      "type": "kinetic-type" | "data-callout" | "diagram" | "ui-metaphor" | "quote-punch",
-      "narratorText": "spoken sentence context only",
-      "displayText": "1-4 words",
-      "content": "semantic visual concept",
-      "colorPalette": { "bg": "#111111", "primary": "#AAAAAA", "accent": "#BBBBBB", "text": "#FFFFFF" },
-      "composition": {
-        "layout": "string",
-        "aestheticSystem": "string",
-        "motionCharacter": "punchy" | "floaty" | "rhythmic" | "cinematic" | "glitchy",
-        "elements": ["visible element list with sizes"],
-        "aestheticNotes": "string"
-      },
-      "emphasis": "string",
-      "animationPrompt": "detailed natural-language timing spec in seconds with no line limit; include explicit background layering and punch-sync timing"
-    }
-  ]
-}`;
+  return buildHyperframesAnimationPlanPrompt({
+    topic: args.topic,
+    videoDurationSeconds: args.videoDurationSeconds,
+    maxMoments: args.maxMoments,
+    dialogueContext: args.dialogueContext,
+  });
 }
 
 export async function generateHyperframesAnimationPlanWithResearch(
@@ -272,18 +232,42 @@ export async function generateHyperframesAnimationPlanWithResearch(
     toolUseNames: diagnostics.toolUseNames,
     ...skillUsage,
   });
+  const strictSkillToolUsage = shouldRequireSkillToolUsage();
   if (!skillUsage.usedHyperframesSkill || !skillUsage.usedHyperframesCliSkill || !skillUsage.usedGsapSkill) {
-    console.warn('[HyperFrames Agent] plan missing required skill usage; retrying', skillUsage);
-    const retryPrompt = `${prompt}
+    if (!strictSkillToolUsage && hasUsableAnimationPlan(output)) {
+      console.warn('[HyperFrames Agent] accepting plan without explicit skill tool markers', {
+        strictEnforcement: strictSkillToolUsage,
+        outputChars: output.length,
+        toolUseNames: diagnostics.toolUseNames,
+        ...skillUsage,
+      });
+    } else {
+      console.warn('[HyperFrames Agent] plan missing required skill usage; retrying', skillUsage);
+      const retryPrompt = `${prompt}
 
 HARD RETRY REQUIREMENT:
 Before final JSON, call the "skill" tool for "hyperframes", "hyperframes-cli", and "gsap".`;
-    output = await opencodeRun({ prompt: retryPrompt, model, format: 'json', quiet: true, cwd });
-    diagnostics = summarizeOpenCodeOutput(output);
-    skillUsage = detectHyperframesSkillUsage(diagnostics, output);
+      console.log('[HyperFrames Agent] plan retry generation start', {
+        strictEnforcement: strictSkillToolUsage,
+        model,
+        cwd,
+        retryPromptChars: retryPrompt.length,
+      });
+      output = await opencodeRun({ prompt: retryPrompt, model, format: 'json', quiet: true, cwd });
+      diagnostics = summarizeOpenCodeOutput(output);
+      skillUsage = detectHyperframesSkillUsage(diagnostics, output);
+      console.log('[HyperFrames Agent] plan retry generation complete', {
+        outputChars: output.length,
+        toolUseNames: diagnostics.toolUseNames,
+        ...skillUsage,
+      });
+    }
   }
 
-  if (!skillUsage.usedHyperframesSkill || !skillUsage.usedHyperframesCliSkill || !skillUsage.usedGsapSkill) {
+  if (
+    (!skillUsage.usedHyperframesSkill || !skillUsage.usedHyperframesCliSkill || !skillUsage.usedGsapSkill) &&
+    (strictSkillToolUsage || !hasUsableAnimationPlan(output))
+  ) {
     throw new Error('OpenCode did not use the required HyperFrames skills after retry.');
   }
 
@@ -335,9 +319,9 @@ export async function generateHyperframesClipHtmlWithSkill(
 
   const model = options?.model || 'animationGemini';
   const prompt = buildHyperframesClipHtmlPrompt(params);
-  const output = await opencodeRun({ prompt, model, format: 'json', quiet: true, cwd });
-  const diagnostics = summarizeOpenCodeOutput(output);
-  const skillUsage = detectHyperframesSkillUsage(diagnostics, output);
+  let output = await opencodeRun({ prompt, model, format: 'json', quiet: true, cwd });
+  let diagnostics = summarizeOpenCodeOutput(output);
+  let skillUsage = detectHyperframesSkillUsage(diagnostics, output);
   console.log('[HyperFrames Agent] clip HTML generation response received', {
     momentIndex: params.moment.index,
     outputChars: output.length,
@@ -345,11 +329,36 @@ export async function generateHyperframesClipHtmlWithSkill(
     elapsedMs: Date.now() - startedAt,
     ...skillUsage,
   });
+
   if (!skillUsage.usedHyperframesSkill || !skillUsage.usedHyperframesCliSkill || !skillUsage.usedGsapSkill) {
-    throw new Error('OpenCode did not use the required HyperFrames skills for clip HTML generation.');
+    console.warn('[HyperFrames Agent] clip HTML missing required skill usage markers; retrying once', {
+      momentIndex: params.moment.index,
+      ...skillUsage,
+    });
+    const retryPrompt = `${prompt}
+
+HARD RETRY REQUIREMENT:
+Before final JSON, call the "skill" tool for "hyperframes", "hyperframes-cli", and "gsap".`;
+    output = await opencodeRun({ prompt: retryPrompt, model, format: 'json', quiet: true, cwd });
+    diagnostics = summarizeOpenCodeOutput(output);
+    skillUsage = detectHyperframesSkillUsage(diagnostics, output);
   }
 
-  const html = extractHtmlFromOutput(output);
+  let html = extractHtmlFromOutput(output);
+  if (!skillUsage.usedHyperframesSkill || !skillUsage.usedHyperframesCliSkill || !skillUsage.usedGsapSkill) {
+    const strictEnforcement = shouldRequireSkillToolUsage();
+    if (strictEnforcement || !html) {
+      throw new Error('OpenCode did not use the required HyperFrames skills for clip HTML generation.');
+    }
+    console.warn('[HyperFrames Agent] accepting clip HTML without explicit skill tool markers', {
+      momentIndex: params.moment.index,
+      strictEnforcement,
+      htmlChars: html.length,
+      toolUseNames: diagnostics.toolUseNames,
+      ...skillUsage,
+    });
+  }
+
   console.log('[HyperFrames Agent] clip HTML extraction complete', {
     momentIndex: params.moment.index,
     htmlChars: html?.length ?? 0,

@@ -67,13 +67,23 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
   const isAnimationOverlayClip = Boolean(selectedOverlay?.animationMomentId);
   const planStatus = selectedOverlay?.planStatus ?? 'draft';
   const isDraftAnimationClip = isAnimationOverlayClip && planStatus === 'draft';
-  const isApprovedAnimationClip = isAnimationOverlayClip && planStatus === 'approved';
   const selectedMomentId = selectedOverlay?.animationMomentId?.trim() || '';
   const isGeneratingSelectedAnimationClip = Boolean(
     selectedMomentId &&
       generatingAnimationMomentId &&
       selectedMomentId === generatingAnimationMomentId
   );
+  const availableGenerationPaths = (() => {
+    const merged = [...(selectedOverlay?.generationHistory || []), selectedOverlay?.path];
+    const deduped: string[] = [];
+    for (const entry of merged) {
+      const normalized = typeof entry === 'string' ? entry.trim() : '';
+      if (!normalized) continue;
+      if (!deduped.includes(normalized)) deduped.push(normalized);
+    }
+    return deduped;
+  })();
+  const selectedGenerationPath = (selectedOverlay?.path || '').trim();
   const isTemplateVideo = project?.template?.type === 'video' && project?.template?.src;
   const showVideoStart = isTemplateClip && isTemplateVideo;
 
@@ -149,6 +159,12 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
   useEffect(() => {
     if (selected?.kind === 'overlay' && projectId && !isAnimationOverlayClip) {
       const overlay = selected as OverlayClip;
+      const hasSavedMediaPath = typeof overlay.path === 'string' && overlay.path.trim() !== '';
+      if (!hasSavedMediaPath) {
+        setImagePreview(null);
+        setOverlayPreviewIsVideo(false);
+        return;
+      }
       const url = API_ENDPOINTS.serveProjectImage(projectId, overlay.assetId);
       setImagePreview(url);
       const p = overlay.path || '';
@@ -399,15 +415,50 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
                   {isDraftAnimationClip ? 'Draft' : 'Approved'}
                 </span>
               </div>
-              {isDraftAnimationClip && onGenerateAnimationClip && selectedMomentId && (
+              {onGenerateAnimationClip && selectedMomentId && (
                 <button
                   type="button"
                   disabled={isGeneratingSelectedAnimationClip}
                   onClick={() => void onGenerateAnimationClip(selectedMomentId)}
                   className="mt-3 w-full px-3 py-2 text-xs font-semibold rounded border border-emerald-700 bg-emerald-600 text-white hover:bg-emerald-700 transition disabled:opacity-50"
                 >
-                  {isGeneratingSelectedAnimationClip ? 'Generating clip...' : 'Generate this clip'}
+                  {isGeneratingSelectedAnimationClip
+                    ? 'Generating clip...'
+                    : selectedOverlay?.path
+                      ? 'Regenerate this clip'
+                      : 'Generate this clip'}
                 </button>
+              )}
+              {onGenerateAnimationClip && selectedMomentId && (
+                <div className="mt-2 text-[11px] text-muted-foreground">
+                  Change the prompt if needed, or leave it as-is to regenerate this clip with the current prompt.
+                </div>
+              )}
+              {availableGenerationPaths.length > 0 && (
+                <div className="mt-3 rounded border border-border bg-muted/40 p-2">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <label className="text-xs text-muted-foreground">Clip generation</label>
+                    <span className="text-[10px] text-muted-foreground">{availableGenerationPaths.length} saved</span>
+                  </div>
+                  <select
+                    value={selectedGenerationPath || availableGenerationPaths[0]}
+                    onChange={(e) => onUpdateClip({ path: e.target.value } as Partial<Clip>)}
+                    className="w-full bg-muted border border-border rounded px-2 py-1.5 text-xs"
+                  >
+                    {availableGenerationPaths.map((pathValue, index) => {
+                      const filename = pathValue.split(/[\\/]/).pop() || pathValue;
+                      const label = index === 0 ? 'Current generation' : `Previous generation ${index}`;
+                      return (
+                        <option key={pathValue} value={pathValue}>
+                          {label} - {filename}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  <div className="mt-1 text-[10px] text-muted-foreground">
+                    Switch between current and previous renders without creating a new one.
+                  </div>
+                </div>
               )}
               <div className="mt-3">
                 <div className="mb-1 flex items-center justify-between">
@@ -433,11 +484,8 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
                       ? combineAnimationContentAndPrompt(selectedOverlay)
                       : ''
                   }
-                  disabled={isApprovedAnimationClip}
                   placeholder={
-                    isDraftAnimationClip
-                      ? 'Moment content appears above the separator (---); refine or extend the full prompt below.'
-                      : undefined
+                    'Moment content appears above the separator (---); refine or extend the full prompt below.'
                   }
                   onChange={(e) =>
                     onUpdateClip({
@@ -460,18 +508,12 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
                   }}
                   className="w-full min-h-[160px] bg-muted border border-border rounded px-3 py-2 text-xs font-mono leading-relaxed"
                 />
-                {isDraftAnimationClip ? (
-                  <div className="mt-2 text-[11px] text-muted-foreground">
-                    Moment <span className="text-foreground/80">content</span> and{' '}
-                    <span className="text-foreground/80">prompt</span> are in one field so you can add context. A line
-                    with only <code className="text-[10px]">---</code> separates the two until you edit—then the whole
-                    box is saved as your prompt. Timing stays locked for this review pass.
-                  </div>
-                ) : (
-                  <div className="mt-2 text-[11px] text-muted-foreground">
-                    Prompt is read-only after approval.
-                  </div>
-                )}
+                <div className="mt-2 text-[11px] text-muted-foreground">
+                  Moment <span className="text-foreground/80">content</span> and{' '}
+                  <span className="text-foreground/80">prompt</span> are in one field so you can add context. A line
+                  with only <code className="text-[10px]">---</code> separates the two until you edit. Once edited, the
+                  full box is treated as the active prompt for regeneration.
+                </div>
               </div>
               <div className="mt-3 rounded border border-border bg-muted/40 p-2 space-y-1 text-[11px]">
                 <div><span className="text-muted-foreground">Moment:</span> {selectedOverlay?.animationMomentId}</div>

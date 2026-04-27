@@ -71,7 +71,7 @@ function isStillImageAsset(filePath: string): boolean {
 /**
  * Add an overlay as an input. For still images: loop for full timeline.
  * For video (e.g. animation moment): trim to clip.duration only so overlay plays 0→duration in order;
- * the filter chain must apply setpts=PTS-STARTPTS+clip.start/TB so it lines up with timeline
+ * the filter chain applies setpts=PTS-STARTPTS+clip.start/TB so every overlay lines up with timeline
  * without carrying source timestamps that can push the visual later.
  */
 function addOverlayInput(
@@ -94,6 +94,10 @@ function isReplaceOverlayClip(clip: OverlayClip): boolean {
   return clip.displayMode === 'replace' && clip.planStatus !== 'draft';
 }
 
+function isHyperframesAnimationOverlayClip(clip: OverlayClip): boolean {
+  return Boolean(clip.animationMomentId);
+}
+
 function getTopRegionHeight(frameHeight: number): number {
   const subtitleSafeBottomMargin = Math.floor((700 / 1920) * frameHeight);
   return Math.max(1, frameHeight - subtitleSafeBottomMargin);
@@ -102,6 +106,15 @@ function getTopRegionHeight(frameHeight: number): number {
 function buildReplaceOverlayRanges(clips: OverlayClip[]): TimeRange[] {
   return clips
     .filter(isReplaceOverlayClip)
+    .map((clip) => ({
+      start: clip.start,
+      end: clip.start + clip.duration,
+    }));
+}
+
+function buildCharacterHiddenOverlayRanges(clips: OverlayClip[]): TimeRange[] {
+  return clips
+    .filter((clip) => isReplaceOverlayClip(clip) || (isHyperframesAnimationOverlayClip(clip) && clip.planStatus !== 'draft'))
     .map((clip) => ({
       start: clip.start,
       end: clip.start + clip.duration,
@@ -228,7 +241,7 @@ export async function compileTimeline(
       });
     }
 
-    const replaceRangesForCharacterHide = buildReplaceOverlayRanges(overlayClips);
+    const replaceRangesForCharacterHide = buildCharacterHiddenOverlayRanges(overlayClips);
     const characterClipsForExport = expandCharacterClipsExcludingReplaceRanges(
       characterClips,
       replaceRangesForCharacterHide
@@ -312,7 +325,7 @@ export async function compileTimeline(
     if (exportStep >= 3) {
       overlayClips.forEach((clip) => {
         if (clip.planStatus === 'draft') return;
-        const overlayPath = resolveSessionOverlayPath(IMAGE_UPLOAD_DIR, project.audioSessionId, clip.path, clip.assetId);
+        const overlayPath = resolveSessionOverlayPath(IMAGE_UPLOAD_DIR, project.audioSessionId, clip.path, clip.assetId, project.id);
         if (fs.existsSync(overlayPath)) {
           addOverlayInput(command, overlayPath, clip, duration);
           overlayInputs.push({ clip, inputIndex: nextInputIndex++, overlayPath });
@@ -340,7 +353,7 @@ export async function compileTimeline(
       needsAudioMixing,
     });
     const useSimpleVf = exportStep === 1 && !needsAudioMixing;
-    const scaleVf = 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p';
+    const scaleVf = 'setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p';
 
     let filterComplex = `[0:v]${scaleVf}[bg]`;
     let lastLabel = 'bg';
@@ -361,22 +374,29 @@ export async function compileTimeline(
       overlayInputs.forEach(({ clip, inputIndex, overlayPath }, index) => {
         const isReplace = isReplaceOverlayClip(clip);
         const isVideoOverlay = !isStillImageAsset(overlayPath);
-        const setpts = isVideoOverlay ? `setpts=PTS-STARTPTS+${clip.start}/TB,` : '';
+        const setpts = `setpts=PTS-STARTPTS+${clip.start}/TB,${isVideoOverlay ? 'fps=30,' : ''}`;
         const scaledLabel = isReplace ? `replace_scaled_${index}` : `scaled_${index}`;
         const overlayLabel = isReplace ? `with_replace_${index}` : `with_overlay_${index}`;
 
         if (isReplace) {
           // Preserve full overlay frame (no destructive crop) and letterbox/pillarbox into 9:16.
           filterComplex += `;[${inputIndex}:v]${setpts}scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:0x101014[${scaledLabel}]`;
-          filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
+          filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
           lastLabel = overlayLabel;
           return;
         }
 
         if (isVideoOverlay) {
+          if (isHyperframesAnimationOverlayClip(clip)) {
+            filterComplex += `;[${inputIndex}:v]${setpts}scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:0x00000000[${scaledLabel}]`;
+            filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
+            lastLabel = overlayLabel;
+            return;
+          }
+
           const topRegionH = getTopRegionHeight(1920);
           filterComplex += `;[${inputIndex}:v]${setpts}scale=1080:${topRegionH}:force_original_aspect_ratio=decrease,pad=1080:${topRegionH}:(1080-iw)/2:0:0x00000000[${scaledLabel}]`;
-          filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
+          filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
           lastLabel = overlayLabel;
           return;
         }
@@ -390,7 +410,7 @@ export async function compileTimeline(
           OVERLAY_LEGACY_TOP_Y
         );
         filterComplex += `;[${inputIndex}:v]${setpts}scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
-        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})'[${overlayLabel}]`;
+        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
         lastLabel = overlayLabel;
       });
     }
@@ -464,7 +484,7 @@ export async function compileTimeline(
         exists: !!resolveAudioClipPath(clip.path),
       })),
       ...overlayInputs.map(({ clip, inputIndex }) => {
-        const p = resolveSessionOverlayPath(IMAGE_UPLOAD_DIR, project.audioSessionId, clip.path, clip.assetId);
+        const p = resolveSessionOverlayPath(IMAGE_UPLOAD_DIR, project.audioSessionId, clip.path, clip.assetId, project.id);
         return { index: inputIndex, type: 'overlay', path: p, exists: fs.existsSync(p) };
       }),
       ...characterInputs.map(({ clip, inputIndex }) => {

@@ -7,7 +7,7 @@ type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string
  * Bump this (or set PREVIEW_RENDERER_VERSION) when preview rendering behavior changes
  * and old cached preview artifacts should be invalidated.
  */
-const PREVIEW_RENDERER_VERSION = process.env.PREVIEW_RENDERER_VERSION || 'renderer-v2-karaoke-segment';
+const PREVIEW_RENDERER_VERSION = process.env.PREVIEW_RENDERER_VERSION || 'renderer-v5-normalized-all-overlay-timestamps';
 
 function toStableJsonValue(value: unknown): JsonValue {
   if (value === null) return null;

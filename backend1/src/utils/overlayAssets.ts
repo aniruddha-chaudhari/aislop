@@ -64,7 +64,8 @@ export function resolveSessionOverlayPath(
   imageUploadDir: string,
   audioSessionId: string,
   clipPath: string | undefined,
-  assetId: string
+  assetId: string,
+  projectId?: string
 ): string {
   if (clipPath) {
     if (fs.existsSync(clipPath)) return clipPath;
@@ -74,9 +75,19 @@ export function resolveSessionOverlayPath(
     }
   }
   const sessionDir = path.join(imageUploadDir, audioSessionId);
+  if (projectId) {
+    const projectDir = path.join(sessionDir, projectId);
+    for (const ext of OVERLAY_ASSET_EXTENSIONS) {
+      const p = path.join(projectDir, `${assetId}${ext}`);
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) return p;
+    }
+  }
   for (const ext of OVERLAY_ASSET_EXTENSIONS) {
     const p = path.join(sessionDir, `${assetId}${ext}`);
     if (fs.existsSync(p) && fs.statSync(p).isFile()) return p;
+  }
+  if (projectId) {
+    return clipPath ?? path.join(sessionDir, projectId, `${assetId}.png`);
   }
   return clipPath ?? path.join(sessionDir, `${assetId}.png`);
 }

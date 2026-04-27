@@ -68,6 +68,7 @@ export const OverlayClipSchema = z.object({
   animationContextSummary: z.string().optional(),
   fullDialogueContext: z.string().optional(),
   researchContext: z.string().optional(),
+  generationHistory: z.array(z.string()).optional(),
 });
 
 export const CharacterClipSchema = z.object({

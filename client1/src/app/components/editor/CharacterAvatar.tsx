@@ -24,15 +24,16 @@ export default function CharacterAvatar({ project, currentTime, className = '' }
     return null;
   }, [project.tracks, currentTime]);
 
-  /** Full-frame replace B-roll: hide character portrait (matches export/preview). */
-  const isReplaceOverlayActive = useMemo(() => {
+  /** Full-frame replace B-roll and rendered HyperFrames animation clips hide the portrait. */
+  const isCharacterBlockingOverlayActive = useMemo(() => {
     for (const track of project.tracks) {
       if (track.type !== 'overlay') continue;
       for (const clip of track.clips) {
         if (clip.kind !== 'overlay') continue;
         const o = clip as OverlayClip;
-        if (o.displayMode !== 'replace') continue;
         if (o.planStatus === 'draft') continue;
+        const hidesCharacter = o.displayMode === 'replace' || Boolean(o.animationMomentId);
+        if (!hidesCharacter) continue;
         if (clip.start <= currentTime && clip.start + clip.duration > currentTime) return true;
       }
     }
@@ -48,7 +49,7 @@ export default function CharacterAvatar({ project, currentTime, className = '' }
     return `${API_BASE_URL}/api/character-image/${encodeURIComponent(name)}/${encodeURIComponent(emotion)}`;
   }, [currentCharacterClip]);
 
-  if (!currentCharacterClip || !characterImageUrl || isReplaceOverlayActive) {
+  if (!currentCharacterClip || !characterImageUrl || isCharacterBlockingOverlayActive) {
     return (
       <div className={`w-24 h-24 bg-gray-800 rounded-full flex items-center justify-center ${className}`}>
         <span className="text-white text-sm">No Character</span>

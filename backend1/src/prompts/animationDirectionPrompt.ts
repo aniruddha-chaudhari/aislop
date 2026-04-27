@@ -85,17 +85,7 @@ TEXT SIZE — THE ONLY RULE THAT MATTERS FOR READABILITY
 
 This is a phone screen. The viewer has 3-7 seconds. Small text does not exist to them.
 If the text is below 48px, it is decoration, not communication. Do not add decoration.
-
-THE NARRATOR TEXT IS AUDIO ONLY — NOT A RENDERABLE SENTENCE.
-The narratorText field contains what the narrator says. It feeds the audio pipeline.
-The Remotion renderer does NOT read narratorText. It reads displayText only.
-NEVER render narratorText on screen. Not at the bottom. Not anywhere. Not ever.
-displayText is what appears. It is 1-4 words. It is BIG. That is the entire visual text contract.
-
-THE BOTTOM CAPTION STRIP IS BANNED.
-Do not create a translucent card at the bottom of the frame showing the full narration sentence.
-This pattern treats the screen like closed captions. It is unreadable at phone size.
-It is redundant with the audio. It wastes the frame. If you produce it, the output fails.
+Never render full-sentence captions/subtitles as a bottom strip. On-screen text is displayText only.
 
 RULES (every violation fails the output):
 
@@ -568,10 +558,10 @@ After all rows visible: T3 highlight sweep fires across all rows simultaneously.
 
 L6. CORNER-ANCHOR PERIPHERAL
 Main content: absolute center. Small element: absolute corner (top-right or bottom-left).
-Corner element (G8 badge or single G4 pill): opacity 0, scale 0.
+Corner element (icon-only G8 badge or shape-only G4 pill): opacity 0, scale 0.
   At frame main-content-settled + 12: scale 0→1 spring-bouncy.
 Purpose: provides sub-context without competing with center.
-IMPORTANT: Corner element text must still be minimum 48px. If it cannot be 48px+, omit it.
+IMPORTANT: No corner text labels. Keep corner elements non-textual to avoid micro-label clutter.
 
 ════════════════════════════
 PATTERN INTERRUPT TECHNIQUES
@@ -831,6 +821,12 @@ animationPrompt → Detailed natural-language timing spec with NO line limit.
   Line 5: "Colors: [hex → element mapping with contrast-safe surface/text pairings]."
   Line 6: "Icons/assets: [Lucide name, Simple Icons slug, SVG description, or 'none']."
   After Line 6, add any additional frame-by-frame lines needed so the renderer does not have to guess.
+  DETAIL FLOOR (minimum depth, no upper cap):
+  - Under-specified prompts are rejected. "short and energetic" is not direction.
+  - Describe the full clip lifecycle: pre-punch context build, punch lock, post-punch hold, and transition readiness.
+  - For each visible layer (background/context/hero), specify at least one concrete timed behavior with numbers.
+  - Include concrete values whenever possible: frame ranges, durations, scale/offset/opacity ranges, loop period, and easing names.
+  - For 4s+ clips, include enough frame-anchored detail that each major phase is explicitly mapped; do not collapse the clip into 2-3 generic statements.
   The word "frames" must appear at least 3 times in every animationPrompt.
   Complexity requirement: each animationPrompt must describe at least 3 distinct motion actions
   across the clip (e.g., context layer entry, hero text lock, secondary event/exit), not a single fade.
@@ -842,7 +838,7 @@ PRE-OUTPUT CHECKLIST (verify every item before returning JSON):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 □ NO full-sentence bottom caption strip anywhere. narratorText is audio only — never rendered on screen.
 □ displayText is 1-4 words maximum. If longer, cut it now before outputting.
-□ Primary text element renders displayText at 72px+ fontWeight 800-900. Not narratorText. Never narratorText.
+□ Primary text element renders displayText at 72px+ fontWeight 800-900.
 □ Light bg moments (clay-white, ivory-plum): verified card text is light on dark cards, dark on bg. No gray-on-white.
 □ start/duration values match TIMELINE_PLAN_JSON exactly. Not changed.
 □ Total moments ≤ HARD_MOMENT_CAP from ANIMATION_BUDGET.
@@ -856,10 +852,8 @@ PRE-OUTPUT CHECKLIST (verify every item before returning JSON):
 □ No dead backgrounds: Layer 1 uses one explicit B-series pattern with continuous low-contrast motion.
 □ Every moment: beat1.techniques[] lists at least one B* code, at least one G* or L* code, and at least one T* code.
 □ elements[] contains explicit type:value pairs for every visible element.
-□ Every text entry in elements[] has a fontSize annotation (e.g. "— 96px"). No exceptions.
-□ Zero text elements in elements[] below 48px. If found, delete or upsize.
-□ Maximum 2 text elements per moment. Count them. If 3+, delete until 2.
-□ Primary text is displayText-derived (1-4 words from narratorText). No invented labels, sources, or footnotes anywhere.
+□ Every text entry in elements[] has a fontSize annotation and is >=48px. Maximum 2 text elements per moment.
+□ Primary text is displayText-derived (1-4 words from narratorText). No invented labels, sources, footnotes, or caption sentences.
 □ Each moment spotlights the punch in that line (stat/number/name/claim) — not a generic card that could fit any topic.
 □ No two consecutive moments share the same motionCharacter.
 □ start:0 moment has motionCharacter: "punchy".
@@ -868,14 +862,16 @@ PRE-OUTPUT CHECKLIST (verify every item before returning JSON):
 □ NO moment uses "static" as its holdEasing. Animation never fully stops.
 □ beat2OrNull is NULL unless moment duration ≥ 6s AND a genuine second event exists.
 □ animationPrompt includes the 6 required anchor lines, explicit Strike math ([X.X] × 30 = Frame [Y]), and any additional lines needed for full clarity.
+□ animationPrompt is not thin: it fully maps pre-punch, punch, and hold phases with concrete values so renderer interpolation is minimized.
 □ The word "frames" appears at least 3 times in every animationPrompt.
 □ Exa-based style validation applied per moment and reflected in aestheticNotes + animationPrompt.
 □ Layered complexity verified: at least 3 distinct motion actions (background, context anchor, hero lock) before optional secondary/exit.
 □ ALL text elements remain fully inside text-safe box (top>=180, bottom<=1740, left>=120, right<=960 at 1080x1920).
 □ Text remains horizontal/readable only (no vertical stacks, no 90°/diagonal/skewed text, no curved path text).
-□ No top-strip/corner micro-label text (tiny brand labels near top-left/top-right are rejected).
+□ No top-strip text and no corner micro-label text (tiny brand labels near top-left/top-right are rejected).
 □ No text clipping during any keyframe (entry, overshoot, hold, exit); if clipping risk exists, revise layout/scale.
 □ NO 3D. NO isometric. NO z-axis perspective. NO rotateX/rotateY.
 □ NO outdated styles: no card-wobble, no generic lower-third slide, no plain fade-in text.
 □ Return JSON only. No markdown fences. No explanation text outside JSON.`;
 }
+

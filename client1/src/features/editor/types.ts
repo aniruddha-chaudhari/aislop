@@ -54,6 +54,7 @@ export type OverlayClip = BaseClip & {
   animationContextSummary?: string;
   fullDialogueContext?: string;
   researchContext?: string;
+  generationHistory?: string[];
 };
 
 export type CharacterClip = BaseClip & {

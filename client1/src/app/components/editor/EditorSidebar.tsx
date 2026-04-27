@@ -1,11 +1,11 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { FolderOpen, Music, ImageIcon, Users, ChevronRight, Upload, Mic, Film, Volume2, Trash2, Video } from 'lucide-react';
+import { FolderOpen, Music, ImageIcon, Users, ChevronRight, Upload, Mic, Film, Volume2, Trash2, Video, Sparkles } from 'lucide-react';
 import type { EditorProject } from '../../../features/editor/types';
 import { API_ENDPOINTS } from '../../../config/api';
 
-export type SidebarTab = 'audioSession' | 'template' | 'assets' | 'audio' | 'sfx' | 'images' | 'video' | 'chars';
+export type SidebarTab = 'audioSession' | 'template' | 'assets' | 'animation' | 'audio' | 'sfx' | 'images' | 'video' | 'chars';
 
 type TemplateVideo = {
   filename: string;
@@ -66,6 +66,11 @@ type Props = {
   hasAnimationPlan?: boolean;
   /** Disable delete action while request is in progress */
   deletingAnimationPlan?: boolean;
+  /** Current scrub/playhead time for inserting animation clips. */
+  playheadTime?: number;
+  /** Create a draft HyperFrames animation clip at the current scrub position. */
+  onCreateAnimationAtPlayhead?: (prompt: string, duration: number) => Promise<void> | void;
+  creatingAnimationClip?: boolean;
 };
 
 /** Audio Session + Template buttons (in tab bar); Assets kept separate below. */
@@ -76,6 +81,7 @@ const projectButtons: { id: 'audioSession' | 'template'; icon: React.ReactNode; 
 
 const assetTabs: { id: SidebarTab; icon: React.ReactNode; label: string }[] = [
   { id: 'assets', icon: <FolderOpen size={16} />, label: 'Assets' },
+  { id: 'animation', icon: <Sparkles size={16} />, label: 'Animation' },
   { id: 'audio', icon: <Music size={16} />, label: 'Audio' },
   { id: 'sfx', icon: <Volume2 size={16} />, label: 'SFX' },
   { id: 'images', icon: <ImageIcon size={16} />, label: 'Images' },
@@ -101,6 +107,9 @@ export default function EditorSidebar({
   onDeleteAnimationPlan,
   hasAnimationPlan,
   deletingAnimationPlan,
+  playheadTime = 0,
+  onCreateAnimationAtPlayhead,
+  creatingAnimationClip,
 }: Props) {
   const [activeTab, setActiveTab] = useState<SidebarTab>('audioSession');
   const [isOpen, setIsOpen] = useState(true);
@@ -118,6 +127,8 @@ export default function EditorSidebar({
   const [loadingProjectImages, setLoadingProjectImages] = useState(false);
   const [uploadingProjectImage, setUploadingProjectImage] = useState(false);
   const [uploadingLibraryVideo, setUploadingLibraryVideo] = useState(false);
+  const [animationPrompt, setAnimationPrompt] = useState('');
+  const [animationDuration, setAnimationDuration] = useState(3);
 
   // Use parent's lists when provided so UI updates without reload after add/upload
   const audioSessions = audioSessionsProp ?? audioSessionsLocal;
@@ -285,6 +296,13 @@ export default function EditorSidebar({
   const panelLabel = projectButtons.find((b) => b.id === activeTab)?.label
     ?? assetTabs.find((t) => t.id === activeTab)?.label
     ?? '';
+
+  const handleCreateAnimation = async () => {
+    const prompt = animationPrompt.trim();
+    if (!prompt || creatingAnimationClip) return;
+    await onCreateAnimationAtPlayhead?.(prompt, animationDuration);
+    setAnimationPrompt('');
+  };
 
   return (
     <div className="flex h-full">
@@ -468,9 +486,69 @@ export default function EditorSidebar({
           )}
 
           {/* Assets / Audio / SFX / Images / Chars – kept separate */}
-          {(activeTab === 'assets' || activeTab === 'audio' || activeTab === 'sfx' || activeTab === 'images' || activeTab === 'video' || activeTab === 'chars') && (
+          {(activeTab === 'assets' || activeTab === 'animation' || activeTab === 'audio' || activeTab === 'sfx' || activeTab === 'images' || activeTab === 'video' || activeTab === 'chars') && (
             <div className="space-y-3 text-muted-foreground text-xs">
               {activeTab === 'assets' && <p>Project assets and uploaded files. (WIP)</p>}
+              {activeTab === 'animation' && (
+                <div className="space-y-3">
+                  <div className="rounded-xl border border-accent/30 bg-accent/10 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-semibold text-foreground">Add HyperFrames Clip</div>
+                        <div className="mt-0.5 text-[10px] text-muted-foreground">
+                          Punch lands at scrub {playheadTime.toFixed(2)}s.
+                        </div>
+                      </div>
+                      <Sparkles size={16} className="text-accent" />
+                    </div>
+                  </div>
+
+                  <label className="block space-y-1">
+                    <span className="text-[11px] font-semibold text-muted-foreground">Prompt</span>
+                    <textarea
+                      value={animationPrompt}
+                      onChange={(event) => setAnimationPrompt(event.target.value)}
+                      placeholder="Paste the animation idea here, e.g. glowing sandbox breach timed to the word escaped..."
+                      rows={7}
+                      className="w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-xs text-foreground outline-none transition focus:border-accent"
+                    />
+                  </label>
+
+                  <label className="block space-y-1">
+                    <span className="text-[11px] font-semibold text-muted-foreground">Duration</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={8}
+                      step={0.25}
+                      value={animationDuration}
+                      onChange={(event) => {
+                        const value = Number(event.target.value);
+                        setAnimationDuration(Number.isFinite(value) ? Math.max(1, Math.min(8, value)) : 3);
+                      }}
+                      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-xs text-foreground outline-none transition focus:border-accent"
+                    />
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={handleCreateAnimation}
+                    disabled={!animationPrompt.trim() || creatingAnimationClip || !onCreateAnimationAtPlayhead}
+                    className={`flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition ${
+                      !animationPrompt.trim() || creatingAnimationClip || !onCreateAnimationAtPlayhead
+                        ? 'bg-muted text-muted-foreground cursor-not-allowed'
+                        : 'bg-accent text-white hover:bg-accent/90'
+                    }`}
+                  >
+                    <Sparkles size={13} />
+                    {creatingAnimationClip ? 'Adding...' : 'Add Clip'}
+                  </button>
+
+                  <div className="rounded-lg border border-border bg-muted/30 p-2 text-[10px] leading-relaxed text-muted-foreground">
+                    Adds a draft clip with a tiny lead-in so the main animation hits the scrubbed dialogue moment. Use the right sidebar to generate.
+                  </div>
+                </div>
+              )}
               {activeTab === 'audio' && (
                 <div className="space-y-3">
                   <div className="text-xs text-muted-foreground">

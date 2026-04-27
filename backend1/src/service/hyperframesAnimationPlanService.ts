@@ -18,10 +18,13 @@ const OPENCODE_OUTPUT_FILENAME = 'hyperframes-animation-opencode.raw.txt';
 const HYPERFRAMES_FPS = 30;
 const HYPERFRAMES_WIDTH = 1080;
 const HYPERFRAMES_HEIGHT = 1920;
+const HYPERFRAMES_RENDER_FORMAT = 'webm';
 const MAX_MOMENTS = ANIMATION_GLOBAL_MOMENT_CEILING;
 const DEFAULT_OVERLAY_X = 0.5;
 const DEFAULT_OVERLAY_Y = 0.65;
-const DEFAULT_OVERLAY_SCALE = 0.5;
+const DEFAULT_OVERLAY_SCALE = 1;
+const RM_RETRY_ATTEMPTS = 6;
+const RM_RETRY_DELAY_MS = 160;
 
 export type AnimationMoment = {
   animationMomentId?: string;
@@ -89,6 +92,13 @@ type AnimationColorPalette = {
   text: string;
 };
 
+type HyperframesAnimationBudget = {
+  targetMomentCount: number;
+  hardMomentCap: number;
+  maxAnimatedSeconds: number;
+  minGapSeconds: number;
+};
+
 const FALLBACK_ANIMATION_PALETTES: AnimationColorPalette[] = [
   { bg: '#140F0C', primary: '#8E3F2A', accent: '#F0B45A', text: '#F6EEE6' },
   { bg: '#121114', primary: '#6F2E27', accent: '#E7A63C', text: '#F4EEE7' },
@@ -104,8 +114,42 @@ function ensureDir(dirPath: string): void {
   if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
 }
 
+function isTransientWindowsRemoveError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'EBUSY' || code === 'ENOTEMPTY' || code === 'EPERM';
+}
+
+function sleepSync(ms: number): void {
+  if (ms <= 0) return;
+  const sab = new SharedArrayBuffer(4);
+  const i32 = new Int32Array(sab);
+  Atomics.wait(i32, 0, 0, ms);
+}
+
+function removeDirWithRetrySync(dirPath: string): void {
+  if (!fs.existsSync(dirPath)) return;
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt <= RM_RETRY_ATTEMPTS; attempt++) {
+    try {
+      fs.rmSync(dirPath, {
+        recursive: true,
+        force: true,
+        maxRetries: RM_RETRY_ATTEMPTS,
+        retryDelay: RM_RETRY_DELAY_MS,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isTransientWindowsRemoveError(error) || attempt === RM_RETRY_ATTEMPTS) break;
+      sleepSync(RM_RETRY_DELAY_MS * (attempt + 1));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(`Failed to remove directory: ${dirPath}`);
+}
+
 function resetDir(dirPath: string): void {
-  if (fs.existsSync(dirPath)) fs.rmSync(dirPath, { recursive: true, force: true });
+  removeDirWithRetrySync(dirPath);
   fs.mkdirSync(dirPath, { recursive: true });
 }
 
@@ -139,6 +183,26 @@ function toNumber(value: unknown): number | null {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function buildHyperframesAnimationBudget(videoDurationSeconds: number): HyperframesAnimationBudget {
+  const duration = Math.max(1, videoDurationSeconds || 60);
+  // Slightly higher cap so users can remove weaker clips during review.
+  const hardMomentCap = Math.min(MAX_MOMENTS, Math.max(3, Math.ceil(duration / 3)));
+  const targetMomentCount =
+    duration <= 12
+      ? Math.min(3, hardMomentCap)
+      : duration <= 20
+        ? Math.min(5, hardMomentCap)
+        : duration <= 40
+          ? Math.min(7, hardMomentCap)
+          : Math.min(Math.max(6, Math.round(duration / 8)), hardMomentCap);
+  return {
+    targetMomentCount,
+    hardMomentCap,
+    maxAnimatedSeconds: Number((duration * (duration <= 20 ? 0.5 : 0.45)).toFixed(2)),
+    minGapSeconds: duration <= 20 ? 0.7 : 1.0,
+  };
 }
 
 function normalizeHex(value: unknown): string | null {
@@ -248,8 +312,8 @@ export function cleanupHyperframesAnimationCacheForProject(projectId: string): {
   renderedProjectDir: string;
 } {
   const { hyperframesProjectDir, renderedProjectDir } = getHyperframesAnimationProjectDirs(projectId);
-  if (fs.existsSync(hyperframesProjectDir)) fs.rmSync(hyperframesProjectDir, { recursive: true, force: true });
-  if (fs.existsSync(renderedProjectDir)) fs.rmSync(renderedProjectDir, { recursive: true, force: true });
+  removeDirWithRetrySync(hyperframesProjectDir);
+  removeDirWithRetrySync(renderedProjectDir);
   return { hyperframesProjectDir, renderedProjectDir };
 }
 
@@ -285,7 +349,18 @@ export function filterHyperframesAnimationPlanReviewByAllowedMomentIds(
 function buildDialogueContext(subtitleClips: SubtitleClip[]): string {
   return [...subtitleClips]
     .sort((a, b) => a.start - b.start)
-    .map((clip) => `[${clip.start.toFixed(2)}s-${(clip.start + clip.duration).toFixed(2)}s] ${clip.speaker || 'Speaker'}: ${cleanText(clip.text)}`)
+    .map((clip) => {
+      const words = (clip.words ?? [])
+        .map((word) => {
+          const text = cleanText(word.word);
+          if (!text) return '';
+          return `${text}@${(clip.start + word.start).toFixed(2)}-${(clip.start + word.end).toFixed(2)}s`;
+        })
+        .filter(Boolean)
+        .join(' ');
+      const wordContext = words ? `\n  Words: ${words}` : '';
+      return `[${clip.start.toFixed(2)}s-${(clip.start + clip.duration).toFixed(2)}s] ${clip.speaker || 'Speaker'}: ${cleanText(clip.text)}${wordContext}`;
+    })
     .join('\n');
 }
 
@@ -367,6 +442,7 @@ function buildOverlayClipFromMoment(
   }
 ): OverlayClip {
   const animationMomentId = getHyperframesAnimationMomentId(moment, index);
+  const normalizedOutputPath = cleanText(options.outputPath);
   return {
     id: options.status === 'draft' ? `anim_draft_${animationMomentId}` : `anim_${animationMomentId}`,
     kind: 'overlay',
@@ -377,8 +453,8 @@ function buildOverlayClipFromMoment(
     x: DEFAULT_OVERLAY_X,
     y: DEFAULT_OVERLAY_Y,
     scale: DEFAULT_OVERLAY_SCALE,
-    displayMode: 'replace',
-    path: options.outputPath,
+    displayMode: 'overlay',
+    path: normalizedOutputPath || undefined,
     planStatus: options.status,
     promptText: buildMomentPrompt(moment),
     promptEdited: Boolean(moment.promptEdited),
@@ -389,6 +465,7 @@ function buildOverlayClipFromMoment(
     animationContextSummary: cleanText(moment.emphasis || moment.subtitle || moment.content).slice(0, 320),
     fullDialogueContext: options.dialogueContext,
     researchContext: typeof options.researchSummary === 'string' ? options.researchSummary : undefined,
+    generationHistory: options.status === 'approved' && normalizedOutputPath ? [normalizedOutputPath] : undefined,
   };
 }
 
@@ -516,10 +593,43 @@ function normalizePlan(raw: unknown, subtitleClips: SubtitleClip[], videoDuratio
     throw new Error('HyperFrames animation plan has no usable moments.');
   }
 
-  const hardCap = Math.min(MAX_MOMENTS, Math.max(1, Math.ceil(duration / 4)));
-  const sorted = moments.sort((a, b) => a.start - b.start).slice(0, hardCap);
+  const budget = buildHyperframesAnimationBudget(duration);
+  const sorted = moments.sort((a, b) => a.start - b.start).slice(0, budget.hardMomentCap);
+  const spacedMoments: AnimationMoment[] = [];
+  let animatedSeconds = 0;
+  let nextAllowedStart = 0;
+  for (const moment of sorted) {
+    if (spacedMoments.length >= budget.targetMomentCount) break;
+    if (moment.start < nextAllowedStart) continue;
+
+    const remainingBudget = budget.maxAnimatedSeconds - animatedSeconds;
+    if (remainingBudget < 1.2) break;
+    const durationForBudget = Math.min(moment.duration, remainingBudget);
+    if (durationForBudget < 1.2) continue;
+
+    const spacedMoment = {
+      ...moment,
+      duration: Number(durationForBudget.toFixed(3)),
+    };
+    spacedMoments.push(spacedMoment);
+    animatedSeconds += spacedMoment.duration;
+    nextAllowedStart = spacedMoment.start + spacedMoment.duration + budget.minGapSeconds;
+  }
+
+  const selected = spacedMoments.length > 0 ? spacedMoments : sorted.slice(0, 1);
+  if (spacedMoments.length < sorted.length) {
+    console.warn('[HyperFrames Service] normalized dense animation plan into sparse moment plan', {
+      originalMomentCount: sorted.length,
+      selectedMomentCount: selected.length,
+      targetMomentCount: budget.targetMomentCount,
+      maxAnimatedSeconds: budget.maxAnimatedSeconds,
+      minGapSeconds: budget.minGapSeconds,
+      selectedCoverageSeconds: Number(selected.reduce((sum, moment) => sum + moment.duration, 0).toFixed(2)),
+    });
+  }
+
   let previousBg: string | null = null;
-  const finalMoments = sorted.map((moment, index) => {
+  const finalMoments = selected.map((moment, index) => {
     const windowedSubtitle = buildMomentSubtitleWindow(subtitleClips, moment.start, moment.duration);
     const palette = sanitizeColorPalette(moment.colorPalette, index, previousBg);
     previousBg = palette.bg;
@@ -639,6 +749,21 @@ function cleanGeneratedHtml(raw: string): string {
   return (fenced?.[1] || raw).replace(/\r\n/g, '\n').trim();
 }
 
+function extractCompositionIds(html: string): string[] {
+  const ids = new Set<string>();
+  const pattern = /data-composition-id=["']([^"']+)["']/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(html))) {
+    const id = (match[1] || '').trim();
+    if (id) ids.add(id);
+  }
+  return [...ids];
+}
+
+function escapeForRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function validateHyperframesHtml(html: string, expectedDuration: number): void {
   const normalized = html.toLowerCase();
   const banned = [
@@ -646,28 +771,56 @@ function validateHyperframesHtml(html: string, expectedDuration: number): void {
     /\busecurrentframe\b/,
     /\busevideoconfig\b/,
     /\binterpolate\b/,
-    /\bspring\b/,
-    /\bcomposition\b/,
+    // Keep this targeted to the Remotion API call; plain language like "spring" is valid in content/comments.
+    /\bspring\s*\(/,
+    /<\s*composition\b/,
     /\bgeneratedclip\b/,
     /from\s+["']react["']/,
     /from\s+["']remotion["']/,
   ];
   const found = banned.find((pattern) => pattern.test(normalized));
   if (found) throw new Error(`Generated HyperFrames HTML contains banned renderer/API text: ${found}`);
-  if (!/data-composition-id=["']main["']/i.test(html)) throw new Error('Generated HyperFrames HTML must define data-composition-id="main".');
+  const compositionIds = extractCompositionIds(html);
+  if (compositionIds.length === 0) throw new Error('Generated HyperFrames HTML must define data-composition-id on the root composition.');
+  const primaryCompositionId = compositionIds[0];
   if (!/data-width=["']1080["']/i.test(html)) throw new Error('Generated HyperFrames HTML must define data-width="1080".');
   if (!/data-height=["']1920["']/i.test(html)) throw new Error('Generated HyperFrames HTML must define data-height="1920".');
   if (!/window\.__timelines/i.test(html)) throw new Error('Generated HyperFrames HTML must register window.__timelines.');
   if (!/gsap\.timeline\s*\(\s*\{\s*paused\s*:\s*true/i.test(html)) {
     throw new Error('Generated HyperFrames HTML must create gsap.timeline({ paused: true }).');
   }
-  if (!/window\.__timelines\s*\[\s*["']main["']\s*\]/i.test(html)) {
-    throw new Error('Generated HyperFrames HTML must register window.__timelines["main"].');
+  const timelineRegistrationPattern = new RegExp(
+    `window\\.__timelines\\s*(?:\\[\\s*["'](?:main|${escapeForRegExp(primaryCompositionId)})["']\\s*\\]|\\.main\\b)`,
+    'i'
+  );
+  if (!timelineRegistrationPattern.test(html)) {
+    throw new Error(`Generated HyperFrames HTML must register window.__timelines["${primaryCompositionId}"] (or alias "main").`);
   }
   const durationMatch = html.match(/data-duration=["']([^"']+)["']/i);
   const actualDuration = durationMatch ? Number(durationMatch[1]) : NaN;
   if (!Number.isFinite(actualDuration) || Math.abs(actualDuration - expectedDuration) > 0.05) {
     throw new Error(`Generated HyperFrames HTML duration ${durationMatch?.[1] || 'missing'} must match ${expectedDuration}.`);
+  }
+
+  // Soft pacing diagnostics (guidance only, no render rejection).
+  const timelineOpCount =
+    (html.match(/\btl\.(?:to|from|fromTo|set|add)\s*\(/g) || []).length +
+    (html.match(/\bgsap\.(?:to|from|fromTo|set)\s*\(/g) || []).length;
+  const recommendedMaxOps = expectedDuration <= 3.5 ? 9 : expectedDuration <= 5.9 ? 13 : 17;
+  const hasInfiniteLoop = /repeat\s*:\s*-1/i.test(html);
+  const hasIdleWindowHint =
+    /idle window|idle[_-\s]?window|rest gap|no new (?:events|tweens)|hold state/i.test(html);
+
+  if (hasInfiniteLoop || timelineOpCount > recommendedMaxOps || !hasIdleWindowHint) {
+    console.warn('[HyperFrames Service] pacing guidance warning', {
+      expectedDuration,
+      timelineOpCount,
+      recommendedMaxOps,
+      hasInfiniteLoop,
+      hasIdleWindowHint,
+      guidance:
+        'Prefer event-driven beats with readable rest gaps; avoid wall-to-wall micro-tweens and infinite loops unless absolutely necessary.',
+    });
   }
 }
 
@@ -739,7 +892,18 @@ async function renderMomentWithHyperframes(
   await runOptionalHyperframesValidate(momentProjectDir);
   await runCommand(
     getNpxBin(),
-    hyperframesCliArgs(['render', path.join(momentProjectDir, 'index.html'), '--output', outputPath, '--fps', String(HYPERFRAMES_FPS), '--quality', 'standard', '--format', 'mp4']),
+    hyperframesCliArgs([
+      'render',
+      momentProjectDir,
+      '--output',
+      outputPath,
+      '--fps',
+      String(HYPERFRAMES_FPS),
+      '--quality',
+      'standard',
+      '--format',
+      HYPERFRAMES_RENDER_FORMAT,
+    ]),
     momentProjectDir,
     `hyperframes-render-${index}`
   );
@@ -912,7 +1076,8 @@ async function renderHyperframesAnimationPlanFromReview(params: {
   for (let i = 0; i < moments.length; i++) {
     const moment = moments[i];
     const momentToken = sanitizeMomentFileToken(getHyperframesAnimationMomentId(moment, i));
-    const outputPath = path.join(params.renderedProjectDir, `moment_${i}_${momentToken}.mp4`);
+    const outputSuffix = params.resetRenderedDir === false ? `_${Date.now()}` : '';
+    const outputPath = path.join(params.renderedProjectDir, `moment_${i}_${momentToken}${outputSuffix}.${HYPERFRAMES_RENDER_FORMAT}`);
     try {
       await renderMomentWithHyperframes(outputPath, moment, i, params.topic, params.hyperframesProjectDir, environment, {
         ...params.review,
@@ -1049,7 +1214,12 @@ export async function renderSingleHyperframesAnimationMoment(params: {
   renderedProjectDir: string;
 }> {
   let review = loadHyperframesAnimationPlanReview(params.projectId);
-  if (!review) {
+  const requestedMomentId = params.momentId.trim();
+  const reviewHasRequestedMoment = Boolean(review?.animationPlan.moments.some((moment, index) =>
+    getHyperframesAnimationMomentId(moment, index) === requestedMomentId
+  ));
+
+  if (!review || !reviewHasRequestedMoment) {
     review = buildBootstrapReviewFromTimeline({
       projectId: params.projectId,
       topic: params.topic,
@@ -1058,7 +1228,7 @@ export async function renderSingleHyperframesAnimationMoment(params: {
     });
   }
   if (!review) throw new Error('No pending HyperFrames animation plan review found. Create the animation plan first.');
-  const filteredReview = filterHyperframesAnimationPlanReviewByAllowedMomentIds(review, new Set([params.momentId.trim()]));
+  const filteredReview = filterHyperframesAnimationPlanReviewByAllowedMomentIds(review, new Set([requestedMomentId]));
   const { hyperframesProjectDir, renderedProjectDir } = getHyperframesAnimationProjectDirs(params.projectId);
   const rendered = await renderHyperframesAnimationPlanFromReview({
     projectId: params.projectId,

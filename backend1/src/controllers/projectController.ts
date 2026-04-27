@@ -124,6 +124,19 @@ function collectHyperframesAnimationMomentIdsFromTimeline(tracks: Track[]): Set<
   return ids;
 }
 
+function mergeGenerationHistoryPaths(...groups: Array<Array<string | undefined> | undefined>): string[] {
+  const merged: string[] = [];
+  for (const group of groups) {
+    if (!group) continue;
+    for (const value of group) {
+      const normalized = typeof value === 'string' ? value.trim() : '';
+      if (!normalized) continue;
+      if (!merged.includes(normalized)) merged.push(normalized);
+    }
+  }
+  return merged;
+}
+
 function mergeAnimationOverlayTracks(existingTracks: Track[], overlayTracks: Track[]): Track[] {
   const firstAnimIndex = existingTracks.findIndex((t) => isHyperframesAnimationOverlayTrack(t));
   const isImageOverlayTrack = (t: Track) =>
@@ -390,6 +403,62 @@ export async function updateProject(ctx: HttpContext): Promise<HandlerResult> {
 const TEMP_DIR = path.join(process.cwd(), 'storage', 'temp');
 const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
 
+function getSessionOverlayDir(audioSessionId: string): string {
+  return path.join(IMAGE_UPLOAD_DIR, audioSessionId);
+}
+
+function getProjectOverlayDir(audioSessionId: string, projectId: string): string {
+  return path.join(getSessionOverlayDir(audioSessionId), projectId);
+}
+
+function sanitizeOverlayAssetId(rawAssetId: string): string {
+  const safe = rawAssetId.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+  return safe || 'asset';
+}
+
+function makeProjectScopedAssetId(projectId: string, rawAssetId: string): string {
+  const safe = sanitizeOverlayAssetId(rawAssetId);
+  const prefix = `${projectId}__`;
+  return safe.startsWith(prefix) ? safe : `${prefix}${safe}`;
+}
+
+function scopeImagePlanOverlayTracksToProject(projectId: string, audioSessionId: string, tracks: Track[]): Track[] {
+  const sessionMediaPrefix = `/storage/images/${audioSessionId}/`;
+  return tracks.map((track, trackIndex) => ({
+    ...track,
+    clips: track.clips.map((clip, clipIndex) => {
+      if (clip.kind !== 'overlay') return clip;
+      const overlay = clip as OverlayClip;
+      const scopedAssetId = makeProjectScopedAssetId(
+        projectId,
+        overlay.assetId || `img_${trackIndex}_${clipIndex}`
+      );
+      const baseClipId = (overlay.id || `img_${trackIndex}_${clipIndex}`).trim();
+      const scopedClipId = baseClipId.startsWith(`${projectId}__`) ? baseClipId : `${projectId}__${baseClipId}`;
+      const normalizedPath = typeof overlay.path === 'string' ? overlay.path.replace(/\\/g, '/').trim() : '';
+      const shouldKeepPath = Boolean(normalizedPath) && !normalizedPath.includes(sessionMediaPrefix);
+
+      return {
+        ...overlay,
+        id: scopedClipId,
+        assetId: scopedAssetId,
+        path: shouldKeepPath ? overlay.path : undefined,
+      } as OverlayClip;
+    }),
+  }));
+}
+
+function cleanupProjectOverlayFiles(audioSessionId: string, projectId: string): void {
+  if (!audioSessionId || audioSessionId === 'no-session' || !projectId) return;
+  const projectImageDir = getProjectOverlayDir(audioSessionId, projectId);
+  if (!fs.existsSync(projectImageDir)) return;
+  try {
+    fs.rmSync(projectImageDir, { recursive: true, force: true });
+  } catch {
+    // Non-fatal cleanup
+  }
+}
+
 /**
  * Remove session-level clip-plan files and uploaded overlay media when no project uses this session.
  * Call after deleting a project so a new project with the same session gets a fresh plan.
@@ -405,13 +474,9 @@ async function cleanupSessionFilesIfUnused(audioSessionId: string): Promise<void
     if (fs.existsSync(planPath)) {
       fs.unlinkSync(planPath);
     }
-    const sessionImageDir = path.join(IMAGE_UPLOAD_DIR, audioSessionId);
+    const sessionImageDir = getSessionOverlayDir(audioSessionId);
     if (fs.existsSync(sessionImageDir)) {
-      const files = fs.readdirSync(sessionImageDir);
-      for (const file of files) {
-        fs.unlinkSync(path.join(sessionImageDir, file));
-      }
-      fs.rmdirSync(sessionImageDir);
+      fs.rmSync(sessionImageDir, { recursive: true, force: true });
     }
   } catch {
     // Non-fatal: log and continue
@@ -448,6 +513,7 @@ export async function deleteProject(ctx: HttpContext): Promise<HandlerResult> {
       });
     }
 
+    cleanupProjectOverlayFiles(audioSessionId ?? '', projectId);
     await cleanupSessionFilesIfUnused(audioSessionId ?? '');
 
     return jsonResponse(200, {
@@ -579,6 +645,11 @@ export async function generateImagePlanForProject(ctx: HttpContext): Promise<Han
 
     const topic = body.topic || project.name || 'Technical conversation';
     const result = await generateImagePlan(project.audioSessionId, topic);
+    const scopedOverlayTracks = scopeImagePlanOverlayTracksToProject(
+      projectId,
+      project.audioSessionId,
+      result.overlayTracks
+    );
 
     // Merge: replace only image-plan overlay tracks (t_imgs, t_imgs_2, ...). Character/subtitle tracks unchanged.
     const existing = project.timeline;
@@ -591,7 +662,7 @@ export async function generateImagePlanForProject(ctx: HttpContext): Promise<Han
       firstImageIndex >= 0
         ? existingTracks.slice(firstImageIndex).filter((t) => !isImageOverlayTrack(t))
         : [];
-    const tracks: Track[] = [...before, ...result.overlayTracks, ...after];
+    const tracks: Track[] = [...before, ...scopedOverlayTracks, ...after];
     // Keep existing duration if set; otherwise use audio session duration so template stays "cut to audio size"
     const existingDuration = existing?.duration;
     const duration =
@@ -1168,18 +1239,46 @@ export async function generateHyperframesAnimationClipForProject(ctx: HttpContex
         const overlay = clip as OverlayClip;
         if ((overlay.animationMomentId || '').trim() !== momentId.trim()) return clip;
         replaced = true;
-        return single.overlayClip;
+        const generationHistory = mergeGenerationHistoryPaths(
+          [single.overlayClip.path],
+          [overlay.path],
+          overlay.generationHistory
+        ).slice(0, 20);
+        return {
+          ...single.overlayClip,
+          generationHistory: generationHistory.length ? generationHistory : undefined,
+        };
       });
       return { ...track, clips: nextClips };
     });
 
     if (!replaced) {
+      const generationHistory = mergeGenerationHistoryPaths([single.overlayClip.path]).slice(0, 20);
       const firstAnimTrackIndex = nextTracks.findIndex((track) => isHyperframesAnimationOverlayTrack(track));
       if (firstAnimTrackIndex >= 0) {
         const track = nextTracks[firstAnimTrackIndex];
-        nextTracks[firstAnimTrackIndex] = { ...track, clips: [...track.clips, single.overlayClip] };
+        nextTracks[firstAnimTrackIndex] = {
+          ...track,
+          clips: [
+            ...track.clips,
+            {
+              ...single.overlayClip,
+              generationHistory: generationHistory.length ? generationHistory : undefined,
+            },
+          ],
+        };
       } else {
-        nextTracks.push({ id: 't_anim', type: 'overlay', name: 'Animation', clips: [single.overlayClip] } as Track);
+        nextTracks.push({
+          id: 't_anim',
+          type: 'overlay',
+          name: 'Animation',
+          clips: [
+            {
+              ...single.overlayClip,
+              generationHistory: generationHistory.length ? generationHistory : undefined,
+            },
+          ],
+        } as Track);
       }
     }
 
@@ -1605,7 +1704,7 @@ export async function uploadImageForClip(ctx: HttpContext): Promise<HandlerResul
     }
 
     const body = ctx.body as { assetId?: string } | undefined;
-    const assetId = body?.assetId || `asset_${Date.now()}`;
+    const assetId = sanitizeOverlayAssetId(body?.assetId || `asset_${Date.now()}`);
 
     const ext = extensionForOverlayUpload(file.mimetype, file.originalname);
     if (!ext) {
@@ -1615,17 +1714,16 @@ export async function uploadImageForClip(ctx: HttpContext): Promise<HandlerResul
       });
     }
 
-    const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
-    const sessionDir = path.join(IMAGE_UPLOAD_DIR, project.audioSessionId);
+    const projectDir = getProjectOverlayDir(project.audioSessionId, project.id);
 
-    if (!fs.existsSync(sessionDir)) {
-      fs.mkdirSync(sessionDir, { recursive: true });
+    if (!fs.existsSync(projectDir)) {
+      fs.mkdirSync(projectDir, { recursive: true });
     }
 
-    removeExistingOverlayFiles(sessionDir, assetId);
+    removeExistingOverlayFiles(projectDir, assetId);
 
     const filename = `${assetId}${ext}`;
-    const imagePath = path.join(sessionDir, filename);
+    const imagePath = path.join(projectDir, filename);
 
     await fs.promises.copyFile(file.path, imagePath);
 
@@ -1671,33 +1769,68 @@ export async function listProjectImages(ctx: HttpContext): Promise<HandlerResult
       });
     }
 
-    const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
-    const sessionDir = path.join(IMAGE_UPLOAD_DIR, project.audioSessionId);
+    const projectDir = getProjectOverlayDir(project.audioSessionId, project.id);
+    const sessionDir = getSessionOverlayDir(project.audioSessionId);
+    const imagesByAssetId = new Map<string, {
+      assetId: string;
+      filename: string;
+      path: string;
+      size: number;
+      createdAt: string;
+    }>();
 
-    if (!fs.existsSync(sessionDir)) {
-      return jsonResponse(200, {
-        success: true,
-        images: [],
-        count: 0,
+    const addImageRecord = (filePath: string) => {
+      const filename = path.basename(filePath);
+      const assetId = filename.replace(/\.[^.]+$/, '');
+      if (imagesByAssetId.has(assetId)) return;
+      const stats = fs.statSync(filePath);
+      imagesByAssetId.set(assetId, {
+        assetId,
+        filename,
+        path: filePath,
+        size: stats.size,
+        createdAt: stats.birthtime.toISOString(),
       });
+    };
+
+    if (fs.existsSync(projectDir)) {
+      const files = fs.readdirSync(projectDir);
+      files
+        .filter((f) => OVERLAY_ASSET_EXTENSIONS.some((ext) => f.toLowerCase().endsWith(ext)))
+        .forEach((filename) => {
+          const filePath = path.join(projectDir, filename);
+          if (fs.statSync(filePath).isFile()) addImageRecord(filePath);
+        });
     }
 
-    const files = fs.readdirSync(sessionDir);
-    const images = files
-      .filter(f => OVERLAY_ASSET_EXTENSIONS.some(ext => f.toLowerCase().endsWith(ext)))
-      .map(filename => {
-        const filePath = path.join(sessionDir, filename);
-        const stats = fs.statSync(filePath);
-        const assetId = filename.replace(/\.[^.]+$/, '');
+    // Legacy fallback: include only files referenced by this project's overlay clips.
+    if (fs.existsSync(sessionDir)) {
+      const timelineOverlayAssetIds = new Set<string>();
+      const tracks = project.timeline?.tracks ?? [];
+      for (const track of tracks) {
+        if (track.type !== 'overlay') continue;
+        for (const clip of track.clips) {
+          if (clip.kind !== 'overlay') continue;
+          const asset = (clip as OverlayClip).assetId;
+          if (asset) timelineOverlayAssetIds.add(asset);
+        }
+      }
 
-        return {
-          assetId,
-          filename,
-          path: filePath,
-          size: stats.size,
-          createdAt: stats.birthtime.toISOString(),
-        };
-      });
+      for (const assetId of timelineOverlayAssetIds) {
+        if (imagesByAssetId.has(assetId)) continue;
+        for (const ext of OVERLAY_ASSET_EXTENSIONS) {
+          const candidate = path.join(sessionDir, `${assetId}${ext}`);
+          if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+            addImageRecord(candidate);
+            break;
+          }
+        }
+      }
+    }
+
+    const images = Array.from(imagesByAssetId.values()).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
 
     return jsonResponse(200, {
       success: true,
@@ -1737,11 +1870,21 @@ export async function serveProjectImage(ctx: HttpContext): Promise<HandlerResult
       });
     }
 
-    const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
-    const sessionDir = path.join(IMAGE_UPLOAD_DIR, project.audioSessionId);
+    const projectDir = getProjectOverlayDir(project.audioSessionId, project.id);
+    const sessionDir = getSessionOverlayDir(project.audioSessionId);
 
     let filePath: string | null = null;
+
     for (const ext of OVERLAY_ASSET_EXTENSIONS) {
+      const candidate = path.join(projectDir, `${assetId}${ext}`);
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        filePath = candidate;
+        break;
+      }
+    }
+
+    for (const ext of OVERLAY_ASSET_EXTENSIONS) {
+      if (filePath) break;
       const candidate = path.join(sessionDir, `${assetId}${ext}`);
       if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
         filePath = candidate;
@@ -1800,23 +1943,22 @@ export async function deleteProjectImage(ctx: HttpContext): Promise<HandlerResul
       });
     }
 
-    const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
-    const sessionDir = path.join(IMAGE_UPLOAD_DIR, project.audioSessionId);
-
-    if (!fs.existsSync(sessionDir)) {
-      return jsonResponse(200, {
-        success: true,
-        message: 'Image already removed or not found',
-      });
-    }
+    const projectDir = getProjectOverlayDir(project.audioSessionId, project.id);
+    const sessionDir = getSessionOverlayDir(project.audioSessionId);
 
     let removed = false;
+    for (const ext of OVERLAY_ASSET_EXTENSIONS) {
+      const filePath = path.join(projectDir, `${assetId}${ext}`);
+      if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+        fs.unlinkSync(filePath);
+        removed = true;
+      }
+    }
     for (const ext of OVERLAY_ASSET_EXTENSIONS) {
       const filePath = path.join(sessionDir, `${assetId}${ext}`);
       if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
         fs.unlinkSync(filePath);
         removed = true;
-        break;
       }
     }
 
