@@ -48,6 +48,30 @@ function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n));
 }
 
+function isVideoFile(file: File): boolean {
+  return file.type.startsWith('video/') || /\.(mp4|webm|mov|m4v)$/i.test(file.name);
+}
+
+function getVideoDuration(file: File): Promise<number | null> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    const cleanup = () => URL.revokeObjectURL(url);
+
+    video.preload = 'metadata';
+    video.onloadedmetadata = () => {
+      const duration = video.duration;
+      cleanup();
+      resolve(Number.isFinite(duration) && duration > 0 ? duration : null);
+    };
+    video.onerror = () => {
+      cleanup();
+      resolve(null);
+    };
+    video.src = url;
+  });
+}
+
 const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(function TextPropertiesPanel({
   width,
   onWidthChange,
@@ -180,6 +204,7 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
 
     setUploadingImage(true);
     try {
+      const uploadedVideoDuration = isVideoFile(file) ? await getVideoDuration(file) : null;
       const formData = new FormData();
       formData.append('image', file);
       formData.append('assetId', (selected as OverlayClip).assetId);
@@ -196,10 +221,15 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
       const data = await response.json();
       
       if (data.success) {
-        onUpdateClip({ path: data.imagePath } as Partial<Clip>);
         const isVid =
           data.assetKind === 'video' ||
           (typeof data.filename === 'string' && /\.(mp4|webm|mov|m4v)$/i.test(data.filename));
+        const patch: Partial<Clip> = { path: data.imagePath } as Partial<Clip>;
+        if (isVid && uploadedVideoDuration && project?.duration) {
+          const remainingTimeline = Math.max(0.1, project.duration - selected.start);
+          patch.duration = Number(Math.min(uploadedVideoDuration, remainingTimeline).toFixed(3));
+        }
+        onUpdateClip(patch);
         setOverlayPreviewIsVideo(!!isVid);
         setImagePreview(`${API_ENDPOINTS.serveProjectImage(projectId, (selected as OverlayClip).assetId)}?t=${Date.now()}`);
         onProjectUpdate?.();

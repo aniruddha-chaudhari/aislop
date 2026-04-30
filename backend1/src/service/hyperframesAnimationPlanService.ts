@@ -802,24 +802,135 @@ function validateHyperframesHtml(html: string, expectedDuration: number): void {
     throw new Error(`Generated HyperFrames HTML duration ${durationMatch?.[1] || 'missing'} must match ${expectedDuration}.`);
   }
 
-  // Soft pacing diagnostics (guidance only, no render rejection).
-  const timelineOpCount =
-    (html.match(/\btl\.(?:to|from|fromTo|set|add)\s*\(/g) || []).length +
-    (html.match(/\bgsap\.(?:to|from|fromTo|set)\s*\(/g) || []).length;
-  const recommendedMaxOps = expectedDuration <= 3.5 ? 9 : expectedDuration <= 5.9 ? 13 : 17;
+  // Hard pacing validation. Reject the generated HTML when it would render
+  // as either a chaotic flash-storm (sub-frame tweens crammed into the first
+  // 0.35s) or as dead air (no idle/hold window declared).
+  validateHyperframesPacing(html, expectedDuration);
+}
+
+interface TimelineCallInfo {
+  /** Position offset on the timeline (seconds). null if relative or unknown. */
+  positionSeconds: number | null;
+  /** duration: N value passed to the tween, in seconds. null if missing. */
+  durationSeconds: number | null;
+  /** Method name (to, from, fromTo, set). */
+  method: string;
+  /** Raw matched call signature (truncated) for error reporting. */
+  signature: string;
+}
+
+function parseTimelineCalls(html: string): TimelineCallInfo[] {
+  const calls: TimelineCallInfo[] = [];
+  // Match tl.<method>( ...balanced... ) or gsap.<method>( ...balanced... ).
+  // We can't truly balance with regex, so we match the call name and a window
+  // of the next ~600 characters and then look for `duration:` and a trailing
+  // numeric position offset.
+  const callPattern = /\b(?:tl|gsap)\s*\.\s*(to|from|fromTo|set|add)\s*\(/gi;
+  let match: RegExpExecArray | null;
+  while ((match = callPattern.exec(html))) {
+    const method = match[1];
+    const startIdx = match.index;
+    const headWindow = html.slice(startIdx, startIdx + 800);
+    const durationMatch = headWindow.match(/duration\s*:\s*(-?\d+(?:\.\d+)?)/);
+    const durationSeconds = durationMatch ? Number(durationMatch[1]) : null;
+
+    // Position offset is the LAST positional argument of the call. Heuristic:
+    // look for `,\s*<number>\s*\)` near the end of the call's first balanced
+    // parenthesis group. We approximate "end of call" by walking forward until
+    // the parenthesis depth returns to zero, capped at 1500 chars.
+    let depth = 1;
+    let cursor = startIdx + match[0].length;
+    const end = Math.min(html.length, cursor + 1500);
+    while (cursor < end && depth > 0) {
+      const ch = html[cursor];
+      if (ch === '(') depth += 1;
+      else if (ch === ')') depth -= 1;
+      cursor += 1;
+    }
+    const callBody = html.slice(startIdx + match[0].length, Math.max(startIdx + match[0].length, cursor - 1));
+    let positionSeconds: number | null = null;
+    const trailingPositionMatch = callBody.match(/,\s*(-?\d+(?:\.\d+)?)\s*$/);
+    if (trailingPositionMatch) positionSeconds = Number(trailingPositionMatch[1]);
+
+    calls.push({
+      positionSeconds,
+      durationSeconds,
+      method,
+      signature: `${match[0]}${callBody.slice(0, 80).replace(/\s+/g, ' ').trim()})`,
+    });
+  }
+  return calls;
+}
+
+function validateHyperframesPacing(html: string, expectedDuration: number): void {
+  const calls = parseTimelineCalls(html);
   const hasInfiniteLoop = /repeat\s*:\s*-1/i.test(html);
   const hasIdleWindowHint =
-    /idle window|idle[_-\s]?window|rest gap|no new (?:events|tweens)|hold state/i.test(html);
+    /idle window|idle[_-\s]?window|rest gap|no new (?:events|tweens)|hold state|phase map/i.test(html);
 
-  if (hasInfiniteLoop || timelineOpCount > recommendedMaxOps || !hasIdleWindowHint) {
+  if (hasInfiniteLoop) {
+    throw new Error(
+      'Generated HyperFrames HTML uses repeat:-1 (forbidden). Use a finite repeat count tied to the clip duration.'
+    );
+  }
+
+  // Reject sub-frame tween durations. At 30fps anything below ~0.18s renders
+  // as a single-frame flash and reads as "garbage" on playback.
+  const FRAME_FLASH_THRESHOLD = 0.18;
+  const subFrameTweens = calls.filter(
+    (call) =>
+      call.method !== 'set' &&
+      call.method !== 'add' &&
+      call.durationSeconds !== null &&
+      call.durationSeconds > 0 &&
+      call.durationSeconds < FRAME_FLASH_THRESHOLD
+  );
+  if (subFrameTweens.length > 0) {
+    const examples = subFrameTweens
+      .slice(0, 3)
+      .map((call) => `${call.method}(duration: ${call.durationSeconds}s)`)
+      .join(', ');
+    throw new Error(
+      `Generated HyperFrames HTML has ${subFrameTweens.length} sub-frame tween(s) under ${FRAME_FLASH_THRESHOLD}s — these render as one-frame flashes. Examples: ${examples}.`
+    );
+  }
+
+  // Reject crammed-entry pattern. Count distinct keyed entry events
+  // (tl.to/from/fromTo with explicit position) that fire in the first 12% of
+  // the clip. If a majority of all events live there, the entry is chaotic.
+  const earlyWindowEnd = Math.max(0.4, expectedDuration * 0.12);
+  const positioned = calls.filter(
+    (call) =>
+      (call.method === 'to' || call.method === 'from' || call.method === 'fromTo') &&
+      call.positionSeconds !== null
+  );
+  const earlyEvents = positioned.filter((call) => (call.positionSeconds ?? 0) <= earlyWindowEnd);
+  if (
+    expectedDuration >= 2.5 &&
+    earlyEvents.length >= 6 &&
+    earlyEvents.length / Math.max(1, positioned.length) >= 0.7
+  ) {
+    throw new Error(
+      `Generated HyperFrames HTML crams ${earlyEvents.length}/${positioned.length} keyed events into the first ${earlyWindowEnd.toFixed(2)}s of a ${expectedDuration}s clip. Spread the entry across the pre-punch window.`
+    );
+  }
+
+  // Require an explicit hold/idle window comment so pacing is auditable.
+  if (!hasIdleWindowHint) {
+    throw new Error(
+      'Generated HyperFrames HTML must declare an idle/hold window in code (comment containing "idle window", "hold state", or "phase map").'
+    );
+  }
+
+  // Soft warning: timeline op density.
+  const timelineOpCount = calls.length;
+  const recommendedMaxOps = expectedDuration <= 3.5 ? 9 : expectedDuration <= 5.9 ? 13 : 17;
+  if (timelineOpCount > recommendedMaxOps) {
     console.warn('[HyperFrames Service] pacing guidance warning', {
       expectedDuration,
       timelineOpCount,
       recommendedMaxOps,
-      hasInfiniteLoop,
-      hasIdleWindowHint,
-      guidance:
-        'Prefer event-driven beats with readable rest gaps; avoid wall-to-wall micro-tweens and infinite loops unless absolutely necessary.',
+      guidance: 'Prefer event-driven beats with readable rest gaps; avoid wall-to-wall micro-tweens.',
     });
   }
 }

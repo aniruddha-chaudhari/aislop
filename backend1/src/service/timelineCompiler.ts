@@ -100,7 +100,9 @@ function isHyperframesAnimationOverlayClip(clip: OverlayClip): boolean {
 
 function getTopRegionHeight(frameHeight: number): number {
   const subtitleSafeBottomMargin = Math.floor((700 / 1920) * frameHeight);
-  return Math.max(1, frameHeight - subtitleSafeBottomMargin);
+  // Even dimensions are required by libx264/NVENC; also keeps scale ≤ pad target.
+  const raw = Math.max(2, frameHeight - subtitleSafeBottomMargin);
+  return raw % 2 === 0 ? raw : raw - 1;
 }
 
 function buildReplaceOverlayRanges(clips: OverlayClip[]): TimeRange[] {
@@ -353,7 +355,7 @@ export async function compileTimeline(
       needsAudioMixing,
     });
     const useSimpleVf = exportStep === 1 && !needsAudioMixing;
-    const scaleVf = 'setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p';
+    const scaleVf = 'setpts=PTS-STARTPTS,fps=30,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p';
 
     let filterComplex = `[0:v]${scaleVf}[bg]`;
     let lastLabel = 'bg';
@@ -374,13 +376,15 @@ export async function compileTimeline(
       overlayInputs.forEach(({ clip, inputIndex, overlayPath }, index) => {
         const isReplace = isReplaceOverlayClip(clip);
         const isVideoOverlay = !isStillImageAsset(overlayPath);
-        const setpts = `setpts=PTS-STARTPTS+${clip.start}/TB,${isVideoOverlay ? 'fps=30,' : ''}`;
+        const setpts = isVideoOverlay
+          ? `setpts=PTS-STARTPTS,fps=30,tpad=start_duration=${clip.start}:start_mode=add:color=0x00000000@0,`
+          : '';
         const scaledLabel = isReplace ? `replace_scaled_${index}` : `scaled_${index}`;
         const overlayLabel = isReplace ? `with_replace_${index}` : `with_overlay_${index}`;
 
         if (isReplace) {
           // Preserve full overlay frame (no destructive crop) and letterbox/pillarbox into 9:16.
-          filterComplex += `;[${inputIndex}:v]${setpts}scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:0x101014[${scaledLabel}]`;
+          filterComplex += `;[${inputIndex}:v]${setpts}scale=1080:1920:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:0x101014[${scaledLabel}]`;
           filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
           lastLabel = overlayLabel;
           return;
@@ -388,14 +392,14 @@ export async function compileTimeline(
 
         if (isVideoOverlay) {
           if (isHyperframesAnimationOverlayClip(clip)) {
-            filterComplex += `;[${inputIndex}:v]${setpts}scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:0x00000000[${scaledLabel}]`;
+            filterComplex += `;[${inputIndex}:v]${setpts}scale=1080:1920:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:0x00000000[${scaledLabel}]`;
             filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
             lastLabel = overlayLabel;
             return;
           }
 
           const topRegionH = getTopRegionHeight(1920);
-          filterComplex += `;[${inputIndex}:v]${setpts}scale=1080:${topRegionH}:force_original_aspect_ratio=decrease,pad=1080:${topRegionH}:(1080-iw)/2:0:0x00000000[${scaledLabel}]`;
+          filterComplex += `;[${inputIndex}:v]${setpts}scale=1080:${topRegionH}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1080:${topRegionH}:(1080-iw)/2:0:0x00000000[${scaledLabel}]`;
           filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
           lastLabel = overlayLabel;
           return;
@@ -442,7 +446,7 @@ export async function compileTimeline(
       lastLabel = afterChars;
     }
 
-    filterComplex += `;[${lastLabel}]format=yuv420p,setsar=1[final]`;
+    filterComplex += `;[${lastLabel}]fps=30,format=yuv420p,setsar=1[final]`;
 
     const audioMix = needsAudioMixing
       ? buildAudioMixFilter(dialogueInputIndex, musicInputs, sfxInputs)

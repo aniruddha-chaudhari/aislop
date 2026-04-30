@@ -112,7 +112,9 @@ function detectExaUsage(diagnostics: OpenCodeOutputDiagnostics, output: string):
 }
 
 function shouldRequireSkillToolUsage(): boolean {
-  return process.env.OPENCODE_REQUIRE_SKILL_TOOL_USAGE === '1';
+  // Default ON. Skills must be invoked or generation fails — set
+  // OPENCODE_REQUIRE_SKILL_TOOL_USAGE=0 explicitly to opt out (debug only).
+  return process.env.OPENCODE_REQUIRE_SKILL_TOOL_USAGE !== '0';
 }
 
 function hasUsableAnimationPlan(output: string): boolean {
@@ -318,41 +320,70 @@ export async function generateHyperframesClipHtmlWithSkill(
   assertEnvironment(environment);
 
   const model = options?.model || 'animationGemini';
-  const prompt = buildHyperframesClipHtmlPrompt(params);
-  let output = await opencodeRun({ prompt, model, format: 'json', quiet: true, cwd });
-  let diagnostics = summarizeOpenCodeOutput(output);
-  let skillUsage = detectHyperframesSkillUsage(diagnostics, output);
-  console.log('[HyperFrames Agent] clip HTML generation response received', {
-    momentIndex: params.moment.index,
-    outputChars: output.length,
-    toolUseNames: diagnostics.toolUseNames,
-    elapsedMs: Date.now() - startedAt,
-    ...skillUsage,
-  });
+  const basePrompt = buildHyperframesClipHtmlPrompt(params);
+  const strictEnforcement = shouldRequireSkillToolUsage();
+  const maxAttempts = strictEnforcement ? 3 : 2;
+  let output = '';
+  let diagnostics = summarizeOpenCodeOutput('');
+  let skillUsage: HyperframesSkillDiagnostics = {
+    usedHyperframesSkill: false,
+    usedHyperframesCliSkill: false,
+    usedGsapSkill: false,
+  };
 
-  if (!skillUsage.usedHyperframesSkill || !skillUsage.usedHyperframesCliSkill || !skillUsage.usedGsapSkill) {
-    console.warn('[HyperFrames Agent] clip HTML missing required skill usage markers; retrying once', {
-      momentIndex: params.moment.index,
-      ...skillUsage,
-    });
-    const retryPrompt = `${prompt}
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const prompt = attempt === 1
+      ? basePrompt
+      : `${basePrompt}
 
-HARD RETRY REQUIREMENT:
-Before final JSON, call the "skill" tool for "hyperframes", "hyperframes-cli", and "gsap".`;
-    output = await opencodeRun({ prompt: retryPrompt, model, format: 'json', quiet: true, cwd });
+HARD RETRY REQUIREMENT (attempt ${attempt} of ${maxAttempts}):
+Your previous attempt did not invoke the required skill tools. Before producing any HTML, call the "skill" tool THREE separate times, once each for:
+  1) name: "hyperframes"
+  2) name: "hyperframes-cli"
+  3) name: "gsap"
+Do not collapse them into one call. Do not paraphrase the skill content. After all three calls succeed, write the HTML.`;
+
+    output = await opencodeRun({ prompt, model, format: 'json', quiet: true, cwd });
     diagnostics = summarizeOpenCodeOutput(output);
     skillUsage = detectHyperframesSkillUsage(diagnostics, output);
+    console.log('[HyperFrames Agent] clip HTML generation response received', {
+      momentIndex: params.moment.index,
+      attempt,
+      outputChars: output.length,
+      toolUseNames: diagnostics.toolUseNames,
+      elapsedMs: Date.now() - startedAt,
+      ...skillUsage,
+    });
+
+    if (skillUsage.usedHyperframesSkill && skillUsage.usedHyperframesCliSkill && skillUsage.usedGsapSkill) {
+      break;
+    }
+
+    if (attempt < maxAttempts) {
+      console.warn('[HyperFrames Agent] clip HTML missing required skill usage markers; retrying', {
+        momentIndex: params.moment.index,
+        attempt,
+        nextAttempt: attempt + 1,
+        ...skillUsage,
+      });
+    }
   }
 
-  let html = extractHtmlFromOutput(output);
-  if (!skillUsage.usedHyperframesSkill || !skillUsage.usedHyperframesCliSkill || !skillUsage.usedGsapSkill) {
-    const strictEnforcement = shouldRequireSkillToolUsage();
-    if (strictEnforcement || !html) {
-      throw new Error('OpenCode did not use the required HyperFrames skills for clip HTML generation.');
+  const html = extractHtmlFromOutput(output);
+  const allSkillsInvoked =
+    skillUsage.usedHyperframesSkill && skillUsage.usedHyperframesCliSkill && skillUsage.usedGsapSkill;
+
+  if (!allSkillsInvoked) {
+    if (strictEnforcement) {
+      throw new Error(
+        `OpenCode did not invoke the required HyperFrames skills (hyperframes=${skillUsage.usedHyperframesSkill}, hyperframes-cli=${skillUsage.usedHyperframesCliSkill}, gsap=${skillUsage.usedGsapSkill}) after ${maxAttempts} attempts. Set OPENCODE_REQUIRE_SKILL_TOOL_USAGE=0 to disable this enforcement (debug only).`
+      );
     }
-    console.warn('[HyperFrames Agent] accepting clip HTML without explicit skill tool markers', {
+    if (!html) {
+      throw new Error('OpenCode did not use the required HyperFrames skills for clip HTML generation, and produced no HTML.');
+    }
+    console.warn('[HyperFrames Agent] accepting clip HTML without explicit skill tool markers (strict enforcement disabled)', {
       momentIndex: params.moment.index,
-      strictEnforcement,
       htmlChars: html.length,
       toolUseNames: diagnostics.toolUseNames,
       ...skillUsage,
@@ -363,6 +394,7 @@ Before final JSON, call the "skill" tool for "hyperframes", "hyperframes-cli", a
     momentIndex: params.moment.index,
     htmlChars: html?.length ?? 0,
     elapsedMs: Date.now() - startedAt,
+    allSkillsInvoked,
   });
   return {
     output,

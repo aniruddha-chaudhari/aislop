@@ -8,7 +8,6 @@ import { compileTimeline } from '../service/timelineCompiler';
 import {
   buildSegmentPreviewOutputPath,
   buildTimelinePreviewOutputPath,
-  generatePreview,
   generateTimelinePreview,
   generateTimelineSegmentPreview,
   generateTimelinePreviewHls,
@@ -17,6 +16,7 @@ import { getPreviewVersion } from '../service/previewVersion';
 import { ProjectSchema, TimelineSchema } from '../schema/project';
 import fs from 'fs';
 import path from 'path';
+import { Readable } from 'stream';
 import { generateSfxTrack } from '../service/sfxService';
 import {
   approveAnimationPlanRender,
@@ -42,6 +42,69 @@ import {
 } from '../utils/overlayAssets';
 
 const ANIMATION_DEBUG_ENABLED = process.env.ANIMATION_DEBUG === '1';
+
+function streamFileResponse(
+  filePath: string,
+  headers: Record<string, string>,
+  status: number = 200,
+  range?: { start: number; end: number }
+): Response {
+  const stream = range
+    ? fs.createReadStream(filePath, { start: range.start, end: range.end })
+    : fs.createReadStream(filePath);
+  return new Response(Readable.toWeb(stream) as unknown as BodyInit, {
+    status,
+    headers,
+  });
+}
+
+function readForceFlag(ctx: HttpContext): boolean {
+  const body = (ctx.body as any) || {};
+  if (body && (body.force === true || body.force === 'true' || body.force === 1 || body.force === '1')) {
+    return true;
+  }
+  const query = (ctx.query ?? {}) as Record<string, string | undefined>;
+  const q = query.force;
+  return q === '1' || q === 'true';
+}
+
+function safeRemovePath(targetPath: string): void {
+  try {
+    if (fs.existsSync(targetPath)) {
+      const stat = fs.statSync(targetPath);
+      if (stat.isDirectory()) {
+        fs.rmSync(targetPath, { recursive: true, force: true });
+      } else {
+        fs.unlinkSync(targetPath);
+      }
+    }
+  } catch (err) {
+    console.warn('[Preview] failed to remove stale artifact', { targetPath, err: err instanceof Error ? err.message : err });
+  }
+}
+
+/**
+ * Remove sibling preview directories for a project that don't match the current version.
+ * Keeps disk usage bounded and prevents stale files from being accidentally served.
+ */
+function pruneStalePreviewVersions(projectId: string, currentShortVersion: string, kind: 'timeline' | 'segments' | 'hls'): void {
+  const root = path.join(process.cwd(), 'storage', 'previews', kind, projectId);
+  if (!fs.existsSync(root)) return;
+  let entries: string[] = [];
+  try {
+    entries = fs.readdirSync(root);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (entry === currentShortVersion) continue;
+    safeRemovePath(path.join(root, entry));
+  }
+}
+
+function buildFullPreviewUrl(projectId: string, shortVersion: string): string {
+  return `/api/project/${projectId}/preview?version=${encodeURIComponent(shortVersion)}`;
+}
 
 function hasDraftAnimationClip(track: Track): boolean {
   if (!isAnimationOverlayTrack(track)) return false;
@@ -1550,9 +1613,25 @@ export async function saveTimeline(ctx: HttpContext): Promise<HandlerResult> {
       });
     }
 
+    // Compute the new preview version up front so the frontend can immediately
+    // reuse it when triggering preview regeneration / fetching the latest video.
+    const { timelineHash, shortVersion } = getPreviewVersion(project);
+
+    // Drop any stale per-version preview directories that don't match this hash.
+    // This is a low-cost cleanup that keeps disk bounded and prevents old artifacts
+    // from being served if the version dir is later somehow consulted.
+    pruneStalePreviewVersions(projectId, shortVersion, 'timeline');
+    pruneStalePreviewVersions(projectId, shortVersion, 'segments');
+    pruneStalePreviewVersions(projectId, shortVersion, 'hls');
+
     return jsonResponse(200, {
       success: true,
       project,
+      preview: {
+        version: shortVersion,
+        timelineHash,
+        url: buildFullPreviewUrl(projectId, shortVersion),
+      },
       message: 'Timeline saved successfully',
     });
   } catch (error) {
@@ -1729,12 +1808,25 @@ export async function uploadImageForClip(ctx: HttpContext): Promise<HandlerResul
 
     const assetKind = /^\.(mp4|webm|mov|m4v)$/i.test(ext) ? 'video' : 'image';
 
+    // Replacing an asset under an existing assetId does NOT mutate timeline JSON,
+    // but the preview hash now also fingerprints file mtime+size, so it changes.
+    // Eagerly drop stale preview directories so the next playback always renders fresh.
+    const { timelineHash, shortVersion } = getPreviewVersion(project);
+    pruneStalePreviewVersions(projectId, shortVersion, 'timeline');
+    pruneStalePreviewVersions(projectId, shortVersion, 'segments');
+    pruneStalePreviewVersions(projectId, shortVersion, 'hls');
+
     return jsonResponse(200, {
       success: true,
       assetId,
       imagePath,
       filename,
       assetKind,
+      preview: {
+        version: shortVersion,
+        timelineHash,
+        url: buildFullPreviewUrl(projectId, shortVersion),
+      },
       message: assetKind === 'video' ? 'Video uploaded successfully' : 'Image uploaded successfully',
     });
   } catch (error) {
@@ -1962,9 +2054,20 @@ export async function deleteProjectImage(ctx: HttpContext): Promise<HandlerResul
       }
     }
 
+    // Asset deletion changes the asset fingerprint → preview hash. Drop stale dirs.
+    const { timelineHash, shortVersion } = getPreviewVersion(project);
+    pruneStalePreviewVersions(projectId, shortVersion, 'timeline');
+    pruneStalePreviewVersions(projectId, shortVersion, 'segments');
+    pruneStalePreviewVersions(projectId, shortVersion, 'hls');
+
     return jsonResponse(200, {
       success: true,
       message: removed ? 'Overlay media removed' : 'Already removed or not found',
+      preview: {
+        version: shortVersion,
+        timelineHash,
+        url: buildFullPreviewUrl(projectId, shortVersion),
+      },
     });
   } catch (error) {
     return jsonResponse(500, {
@@ -2020,13 +2123,45 @@ export async function generateProjectPreview(ctx: HttpContext): Promise<HandlerR
         ? body.playheadTime
         : undefined;
     const mode = playheadTime !== undefined ? 'segment' : 'timeline';
+    const force = readForceFlag(ctx);
     const { timelineHash, shortVersion } = getPreviewVersion(project);
+    const outputPath = playheadTime !== undefined
+      ? buildSegmentPreviewOutputPath(projectId, playheadTime, 3, shortVersion)
+      : buildTimelinePreviewOutputPath(projectId, shortVersion);
+    const previewUrl = playheadTime !== undefined
+      ? `/api/project/${projectId}/preview?mode=segment&version=${encodeURIComponent(shortVersion)}&playheadTime=${encodeURIComponent(String(playheadTime))}&windowSeconds=3`
+      : buildFullPreviewUrl(projectId, shortVersion);
     logPreviewTelemetry('generate_preview_start', {
       projectId,
       mode,
       playheadTime,
       timelineHash,
+      force,
     });
+
+    if (force) {
+      // Force regen: drop the cached file for this exact version so the encoder runs again.
+      safeRemovePath(outputPath);
+    }
+
+    if (!force && fs.existsSync(outputPath)) {
+      logPreviewTelemetry('generate_preview_cache_hit', {
+        projectId,
+        mode,
+        timelineHash,
+        duration_ms: Date.now() - startedAt,
+        outputPath,
+      });
+      return jsonResponse(200, {
+        success: true,
+        previewPath: outputPath,
+        url: previewUrl,
+        version: shortVersion,
+        timelineHash,
+        cached: true,
+        message: 'Preview already ready',
+      });
+    }
 
     // If client provides a playheadTime, generate a short segment preview starting there.
     // Otherwise, fall back to the full-length timeline-aware preview.
@@ -2054,13 +2189,18 @@ export async function generateProjectPreview(ctx: HttpContext): Promise<HandlerR
       timelineHash,
       duration_ms: Date.now() - startedAt,
       outputPath: result.outputPath,
+      force,
     });
+
+    pruneStalePreviewVersions(projectId, shortVersion, mode === 'segment' ? 'segments' : 'timeline');
 
     return jsonResponse(200, {
       success: true,
       previewPath: result.outputPath,
+      url: previewUrl,
       version: shortVersion,
       timelineHash,
+      cached: false,
       message: 'Preview generated successfully',
     });
   } catch (error) {
@@ -2102,11 +2242,16 @@ export async function generateProjectPreviewSegment(ctx: HttpContext): Promise<H
     const windowSecondsRaw = Number(body?.windowSeconds);
     const windowSeconds = Number.isFinite(windowSecondsRaw) && windowSecondsRaw > 0 ? windowSecondsRaw : 3;
 
+    const force = readForceFlag(ctx);
     const { timelineHash, shortVersion } = getPreviewVersion(project);
     const outputPath = buildSegmentPreviewOutputPath(projectId, playheadTime, windowSeconds, shortVersion);
     const url = `/api/project/${projectId}/preview?mode=segment&version=${encodeURIComponent(shortVersion)}&playheadTime=${encodeURIComponent(String(playheadTime))}&windowSeconds=${encodeURIComponent(String(windowSeconds))}`;
 
-    if (fs.existsSync(outputPath)) {
+    if (force) {
+      safeRemovePath(outputPath);
+    }
+
+    if (!force && fs.existsSync(outputPath)) {
       setPreviewJob({
         projectId,
         timelineHash,
@@ -2122,6 +2267,7 @@ export async function generateProjectPreviewSegment(ctx: HttpContext): Promise<H
         timelineHash,
         version: shortVersion,
         url,
+        cached: true,
       });
     }
 
@@ -2179,6 +2325,7 @@ export async function generateProjectPreviewSegment(ctx: HttpContext): Promise<H
             windowSeconds,
             status: { mode: 'segment', state: 'ready', timelineHash, progress: 100, url },
           });
+          pruneStalePreviewVersions(projectId, shortVersion, 'segments');
         } finally {
           previewJobPromises.delete(jobKey);
         }
@@ -2314,15 +2461,22 @@ export async function generateProjectPreviewHls(ctx: HttpContext): Promise<Handl
     }
 
     // Version preview assets by timeline hash so unchanged timelines are identifiable.
+    const force = readForceFlag(ctx);
     const { timelineHash, shortVersion } = getPreviewVersion(project);
     const safeVersion = shortVersion;
 
-    console.info('[HLS Preview] requested', { projectId, version: safeVersion });
-    logPreviewTelemetry('generate_hls_preview_start', { projectId, version: safeVersion, timelineHash });
+    console.info('[HLS Preview] requested', { projectId, version: safeVersion, force });
+    logPreviewTelemetry('generate_hls_preview_start', { projectId, version: safeVersion, timelineHash, force });
 
     const playlistUrl = `/api/project/${projectId}/preview/hls/${encodeURIComponent(safeVersion)}/index.m3u8`;
-    const manifestPath = path.join(process.cwd(), 'storage', 'previews', 'hls', projectId, safeVersion, 'index.m3u8');
-    if (fs.existsSync(manifestPath)) {
+    const hlsVersionDir = path.join(process.cwd(), 'storage', 'previews', 'hls', projectId, safeVersion);
+    const manifestPath = path.join(hlsVersionDir, 'index.m3u8');
+
+    if (force) {
+      safeRemovePath(hlsVersionDir);
+    }
+
+    if (!force && fs.existsSync(manifestPath)) {
       setPreviewJob({
         projectId,
         timelineHash,
@@ -2336,6 +2490,7 @@ export async function generateProjectPreviewHls(ctx: HttpContext): Promise<Handl
         version: safeVersion,
         timelineHash,
         playlistUrl,
+        cached: true,
         message: 'HLS preview ready',
       });
     }
@@ -2379,6 +2534,7 @@ export async function generateProjectPreviewHls(ctx: HttpContext): Promise<Handl
             mode: 'hls',
             status: { mode: 'hls', state: 'ready', timelineHash, progress: 100, url: playlistUrl },
           });
+          pruneStalePreviewVersions(projectId, safeVersion, 'hls');
           logPreviewTelemetry('generate_hls_preview_success', {
             projectId,
             version: safeVersion,
@@ -2571,13 +2727,11 @@ export async function serveProjectPreviewHlsSegment(ctx: HttpContext): Promise<H
       });
     }
 
-    const buf = await fs.promises.readFile(segmentPath);
-    return new Response(new Blob([buf]), {
-      status: 200,
-      headers: {
-        'Content-Type': 'video/mp2t',
-        'Cache-Control': 'no-store',
-      },
+    const stat = await fs.promises.stat(segmentPath);
+    return streamFileResponse(segmentPath, {
+      'Content-Type': 'video/mp2t',
+      'Content-Length': String(stat.size),
+      'Cache-Control': 'no-store',
     });
   } catch (error) {
     return jsonResponse(500, {
@@ -2650,51 +2804,48 @@ export async function serveProjectPreview(ctx: HttpContext): Promise<HandlerResu
 
     // No range requested - send entire file
     if (!rangeHeader) {
-      const buf = await fs.promises.readFile(previewPath);
-      return new Response(new Blob([buf]), {
-        status: 200,
-        headers: {
-          'Content-Type': 'video/mp4',
-          'Content-Length': String(fileSize),
-          'Accept-Ranges': 'bytes',
-          'Cache-Control': 'no-store',
-        },
+      return streamFileResponse(previewPath, {
+        'Content-Type': 'video/mp4',
+        'Content-Length': String(fileSize),
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'no-store',
       });
     }
 
     // Parse range header
     const parts = rangeHeader.replace(/bytes=/, '').split('-');
-    const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    const suffixLength = parts[0] === '' && parts[1] ? parseInt(parts[1], 10) : NaN;
+    const start = Number.isFinite(suffixLength)
+      ? Math.max(fileSize - suffixLength, 0)
+      : parseInt(parts[0], 10);
+    const end = Number.isFinite(suffixLength)
+      ? fileSize - 1
+      : parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
 
     // CRITICAL FIX: Calculate chunk size correctly
     const chunkSize = (end - start) + 1;
 
     // Validate range
-    if (start >= fileSize || end >= fileSize || start > end) {
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start >= fileSize || end >= fileSize || start > end) {
       return jsonResponse(416, {
         success: false,
         error: 'Range not satisfiable',
       });
     }
 
-    // Read the requested chunk
-    const fileHandle = await fs.promises.open(previewPath, 'r');
-    const buffer = Buffer.alloc(chunkSize);
-    await fileHandle.read(buffer, 0, chunkSize, start);
-    await fileHandle.close();
-
     // Return 206 Partial Content with correct headers
-    return new Response(new Blob([buffer]), {
-      status: 206,
-      headers: {
+    return streamFileResponse(
+      previewPath,
+      {
         'Content-Type': 'video/mp4',
         'Content-Length': String(chunkSize),
         'Content-Range': `bytes ${start}-${end}/${fileSize}`,
         'Accept-Ranges': 'bytes',
         'Cache-Control': 'no-store',
       },
-    });
+      206,
+      { start, end }
+    );
   } catch (error) {
     return jsonResponse(500, {
       success: false,

@@ -21,14 +21,14 @@ export function buildHyperframesPrompt({
   const hardMomentCap = Math.max(1, Math.min(16, Math.floor(maxMoments || 8)));
   const targetMoments =
     duration <= 12
-      ? Math.min(3, hardMomentCap)
+      ? Math.min(4, hardMomentCap)
       : duration <= 20
-        ? Math.min(5, hardMomentCap)
+        ? Math.min(6, hardMomentCap)
         : duration <= 40
-          ? Math.min(7, hardMomentCap)
-          : Math.min(Math.max(6, Math.round(duration / 8)), hardMomentCap);
-  const maxAnimatedSeconds = Number((duration * (duration <= 20 ? 0.5 : 0.45)).toFixed(2));
-  const minGapSeconds = duration <= 20 ? 0.7 : 1.0;
+          ? Math.min(10, hardMomentCap)
+          : Math.min(Math.max(9, Math.round(duration / 5.5)), hardMomentCap);
+  const maxAnimatedSeconds = Number((duration * (duration <= 20 ? 0.68 : 0.62)).toFixed(2));
+  const minGapSeconds = duration <= 20 ? 0.3 : 0.5;
 
   return `You are the HyperFrames animation planning, direction, and research agent for SHORT-FORM VERTICAL VIDEO (9:16).
 Target platforms: TikTok, Instagram Reels, YouTube Shorts.
@@ -95,22 +95,31 @@ DIALOGUE_CONTEXT:
 ${dialogueContext || 'No subtitle context provided.'}
 
 Planning rules:
-- Choose around ${targetMoments} moments. Only exceed this when the script has truly distinct, high-value beats.
+- Choose around ${targetMoments} moments. When in doubt, include a moment for each meaningful semantic beat instead of collapsing multiple beats into one generic moment.
 - Never exceed HARD_MOMENT_CAP (${hardMomentCap}).
 - Total sum of moment durations should stay under MAX_ANIMATED_SECONDS (${maxAnimatedSeconds}s).
 - Leave at least MIN_GAP_SECONDS (${minGapSeconds}s) between the end of one animation moment and the start of the next.
-- Do not create a moment for every dialogue segment. Most dialogue should have no animation overlay.
+- Build a beat candidate list from dialogue first, then choose moments from it:
+  - hook claims / bold statements
+  - numeric facts, percentages, rankings, deltas, or time markers
+  - contrasts and turns ("but", "however", "instead", "until", "then")
+  - actions and state changes ("broke", "escaped", "sent", "launched", "failed", "fixed")
+  - quoted phrases and memorable punch lines
+- Coverage target: animate at least 70% of high-signal beat candidates, unless that would violate HARD_MOMENT_CAP.
+- Avoid skipping back-to-back key beats just because they are close in time; if both matter, create separate short moments with clean transitions.
 - Each moment duration must be 2.0 to 7.0 seconds.
 - Align starts to dialogue timing using the word timestamps when provided.
 - For a hook phrase, set moment.start about 0.15-0.35 seconds before the first hook word so the animation can build in and the hero lock lands exactly on the spoken word. Do not start after the hook word.
-- Keep pulse-and-rest pacing. Do NOT animate wall-to-wall.
+- Keep pulse-and-rest pacing, but prefer denser moment coverage over long inactive stretches when dialogue is information-rich.
 - Use event-driven motion only: animate when meaning changes, not continuously across the whole clip.
 - Insert intentional idle windows between motion bursts so viewers can read:
   - Minimum one idle window of 0.6s+ in every moment >= 3.0s.
   - For 2.0-3.5s moments: at most one primary motion burst + settle.
   - For 3.6-5.9s moments: at most two bursts total (entry/punch + optional micro-accent).
   - For 6.0-7.0s moments: two bursts by default; third burst only if dialogue has a true second semantic beat.
-- displayText is the only thing rendered on screen: 1-4 words maximum.
+- displayText stays short and punchy: 1-4 words maximum.
+- Moments must include non-text visual storytelling tied to meaning (for example: UI card, chart arc, badge, path line, icon, diagram node, sandbox/container box, signal pulse, object motion), not text-only animation.
+- Use text as the semantic lock while shape/UI/object layers carry setup and impact.
 - narratorText is audio pipeline context only — it is NEVER rendered visually.
 
 MOMENT TYPE TAXONOMY (choose one per moment):
@@ -181,6 +190,11 @@ PUNCH LOCK WORKFLOW:
 Show your punch math explicitly in animationPrompt:
   "Hook word '[WORD]' spoken at [X.Xs] into clip.
    tl.from('#hero', { ... }, [X.X]) — hard lock at punch time."
+
+Storyboard structure requirement for animationPrompt:
+- Use explicit second ranges for four phases: Pre-punch context build, Punch-sync event, Post-punch readable hold, Exit/transition.
+- In every phase, describe both text behavior AND non-text layer behavior (background + context object/UI/shape).
+- Reject plans where only text appears or only text animates.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 6 — DIRECTION SYSTEM
@@ -630,7 +644,7 @@ OUTPUT JSON ONLY
         "exitEasing": "power2.in"
       },
       "emphasis": "single key takeaway this moment spotlights",
-      "animationPrompt": "Detailed second-by-second HyperFrames/GSAP storyboard. Required anchor lines:\\nLine 1: 'Seconds 0-[punchTime]: [B-series bg behavior] + [G/L context entry], hero text hidden.'\\nLine 2: 'Seconds [punchTime]-[clipEnd]: [hold easing behavior] with amplitude and loop timing.'\\nLine 3: 'Punch sync: Hook word [WORD] spoken at [X.X]s into clip; tl.from(#hero, { ... }, [X.X]) — locks at punch time via [T-technique].'\\nLine 4: 'At [Xs]: [beat2 description or explicitly: beat2 is null, no second event fires].'\\nLine 5: 'Idle window: Seconds [A]-[B] hold readable state with no new keyframed events (ambient drift only).'\\nLine 6: 'Colors: [hex→element with contrast-safe pairings].'\\nLine 7: 'Icons/assets: [Lucide name, Simple Icons slug, SVG description, or none].'\\nThen add additional second-anchored lines for full lifecycle clarity. All values in GSAP seconds. No frame numbers. No Remotion APIs. Prefer fewer, meaningful motion bursts over continuous animation."
+      "animationPrompt": "Detailed second-by-second HyperFrames/GSAP storyboard. Required anchor lines:\\nLine 0: 'Phase map: Pre-punch [0-A], Punch-sync [A-B], Hold [B-C], Exit [C-D].'\\nLine 1: 'Seconds 0-[punchTime]: [B-series bg behavior] + [G/L context entry], hero text hidden.'\\nLine 2: 'Punch sync [A-B]: hook-aligned event where context object reacts and hero text locks together.'\\nLine 3: 'Seconds [punchTime]-[clipEnd]: [hold easing behavior] with amplitude and loop timing.'\\nLine 4: 'At [Xs]: [beat2 description or explicitly: beat2 is null, no second event fires].'\\nLine 5: 'Idle window: Seconds [A]-[B] hold readable state with no new keyframed events (ambient drift only).'\\nLine 6: 'Colors: [hex→element with contrast-safe pairings].'\\nLine 7: 'Icons/assets: [Lucide name, Simple Icons slug, SVG description, or none].'\\nLine 8: 'Non-text layers: explicitly list object/UI/shape behavior per phase; text-only choreography is invalid.'\\nThen add additional second-anchored lines for full lifecycle clarity. All values in GSAP seconds. No frame numbers. No Remotion APIs. Prefer fewer, meaningful motion bursts over continuous animation."
     }
   ]
 }`;
@@ -639,303 +653,3 @@ OUTPUT JSON ONLY
 // Backward-compatible exports used by the existing HyperFrames agent integration.
 export type HyperframesAnimationPlanPromptParams = HyperframesPromptParams;
 export const buildHyperframesAnimationPlanPrompt = buildHyperframesPrompt;
-
-// =============================================================================
-// HyperFrames Background Designer Prompt Builder
-// Generates a full-composition designer background layer as a standalone
-// HyperFrames HTML clip — sits behind all foreground content.
-// Renderer: HeyGen HyperFrames (HTML + GSAP + WebGL/Canvas + data-* attributes)
-// Canvas: 1080x1920 (9:16 vertical video)
-// =============================================================================
-
-export interface HyperframesBackgroundPromptParams {
-  topic: string;
-  videoDurationSeconds: number;
-  colorPalette: {
-    bg: string;
-    primary: string;
-    accent: string;
-    text: string;
-  };
-  aestheticSystem:
-    | "deep-glow"
-    | "bezier-flow"
-    | "kinetic-max"
-    | "warm-minimal"
-    | "grain-retro"
-    | "ui-native"
-    | "soft-brutalist"
-    | "data-editorial";
-  motionEnergy: "calm" | "moderate" | "high";
-  backgroundStyle?: string;
-}
-
-export function buildHyperframesBackgroundPrompt({
-  topic,
-  videoDurationSeconds,
-  colorPalette,
-  aestheticSystem,
-  motionEnergy,
-  backgroundStyle,
-}: HyperframesBackgroundPromptParams): string {
-  const duration = Math.max(1, Number(videoDurationSeconds || 30));
-
-  return `You are the HyperFrames Designer Background agent for SHORT-FORM VERTICAL VIDEO (9:16).
-Your sole job: design and implement ONE full-composition designer background layer as valid HyperFrames HTML.
-This background sits at z-index 0, behind all foreground text and graphic clips.
-It must be visually rich, professionally designed, and non-distracting.
-
-RENDERER CONTRACT (NON-NEGOTIABLE):
-- Output is a complete, self-contained HTML document with HyperFrames data-* attributes.
-- Root element: <div id="bg-root" data-composition-id="background" data-start="0"
-    data-width="1080" data-height="1920">
-- Background is ONE clip covering the full video: class="clip" data-start="0"
-    data-duration="${duration}" data-track-index="0"
-- All timing in GSAP seconds. No Remotion APIs. No frame numbers. No React/JSX.
-- GSAP timeline must be { paused: true }, registered on window.__timelines["background"].
-- Allowed runtimes: GSAP 3, CSS animations/keyframes, WebGL (canvas element), Three.js
-    (2D canvas only — no z-axis), SVG filters (feTurbulence, feDisplacementMap, feBlend).
-- Forbidden: rotateX, rotateY, perspective CSS, any 3D transform.
-- CDN sources allowed: cdn.jsdelivr.net, cdnjs.cloudflare.com.
-
-DESIGN BRIEF:
-  TOPIC: "${topic}"
-  DURATION: ${duration}s
-  AESTHETIC SYSTEM: ${aestheticSystem}
-  MOTION ENERGY: ${motionEnergy}
-  COLOR PALETTE:
-    bg:      ${colorPalette.bg}   (dominant fill — 60% of frame)
-    primary: ${colorPalette.primary}   (secondary elements — 30%)
-    accent:  ${colorPalette.accent}   (single emphasis — 10%)
-    text:    ${colorPalette.text}   (NOT used in background — reserved for foreground)
-  BACKGROUND STYLE HINT: ${backgroundStyle || "agent chooses best fit for aesthetic + topic"}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 1 — RESEARCH (MANDATORY)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Before writing any code, use Exa MCP to research:
-1. Current (2025-2026) short-form video background aesthetics matching the topic and aesthetic system.
-2. CSS/WebGL/GSAP techniques that achieve the target look deterministically in headless Chrome.
-3. At least 2 specific visual references (real videos, codepens, design portfolios) for the chosen style.
-4. Performance guardrails: techniques that render correctly frame-by-frame in Puppeteer (no RAF-only
-   loops, no wall-clock timing, no requestAnimationFrame without GSAP driving the timeline).
-
-Document findings in the "researchNotes" field of your JSON output.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 2 — BACKGROUND STYLE TAXONOMY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Choose exactly ONE primary style. Layer ONE optional texture overlay on top (or none).
-
-PRIMARY STYLES — pick the best fit for the aesthetic + topic:
-
-BG-1. AURORA SHADER (WebGL canvas)
-  A smooth flowing gradient field driven by a GLSL fragment shader.
-  Noise function (simplex or value noise) warps 2-3 color bands across the canvas.
-  Colors derive strictly from palette: bg fills 60%, primary blooms 30%, accent = narrow luminous band.
-  Time uniform drives motion: slow undulation at 0.08-0.12 units/sec.
-  No sharp edges. No strobe. Opacity of light bands: 0.4-0.7.
-  Implementation: <canvas> full 1080x1920, WebGL context.
-  GSAP drives the time uniform via a progress object tween with onUpdate hook.
-  Example GLSL fragment (minimal):
-    uniform float uTime; varying vec2 vUv;
-    float noise(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-    void main() {
-      vec2 uv = vUv;
-      float n = noise(uv * 2.0 + uTime * 0.08);
-      vec3 colA = vec3(PRIMARY_RGB);
-      vec3 colB = vec3(BG_RGB);
-      gl_FragColor = vec4(mix(colB, colA, n * 0.6), 1.0);
-    }
-  Best for: deep-glow, warm-minimal, cinematic. Avoid for: kinetic-max (too soft).
-
-BG-2. ANIMATED MESH GRADIENT (CSS + GSAP)
-  4-6 radial gradient orbs: absolute-positioned divs, filter:blur(120-200px), borderRadius:50%.
-  Each orb background = one palette color, opacity 0.5-0.8.
-  GSAP drives each orb on its own independent slow looping tween:
-    gsap.to("#orb1", { x: 80, y: -60, duration: 8, repeat: -1, yoyo: true, ease: "sine.inOut" })
-  Orb sizes: 400-700px diameter. Positions staggered to partially overlap.
-  Base div: solid bg color. Orbs sit above, mix-blend-mode: normal or screen.
-  Total amplitude: ±50-120px per orb. Motion is ambient, never fast.
-  Best for: warm-minimal, soft-brutalist, data-editorial. Avoid for: kinetic-max (too soft).
-
-BG-3. GEOMETRIC GRID / ARCHITECTURAL FIELD (CSS + SVG + GSAP)
-  Sub-styles (pick one):
-  3a. Hard Grid      — 1px lines, primary at 8-14% opacity. GSAP slow vertical pan (repeat:-1).
-                       Optional: accent nodes at intersections, opacity 0.15, scale pulse.
-  3b. Dot Matrix     — CSS radial-gradient pattern, 20-30px spacing, primary at 12% opacity. GSAP pan.
-  3c. Diagonal Stripes — repeating-linear-gradient 45°, 2px stripe / 40px gap, primary 6% opacity.
-                         GSAP animates background-position for drift.
-  Neo-brutalist: use 3a with accent-colored accent line only.
-  Data-editorial: use 3a + 3b combined.
-  Best for: bezier-flow, data-editorial, ui-native, kinetic-max.
-
-BG-4. PARTICLE FIELD (Canvas 2D + GSAP)
-  50-150 small particles (2-4px circles) on <canvas> element, full 1080x1920.
-  Colors: palette-tinted. All at 0.15-0.4 opacity.
-  CRITICAL: ALL motion driven by GSAP timeline progress object — not RAF:
-    const state = { t: 0 };
-    tl.to(state, { t: ${duration}, duration: ${duration}, ease: "none",
-      onUpdate: () => { drawParticles(state.t); }
-    }, 0);
-  Per particle position is a pure function of state.t + seeded values:
-    x = x0 + Math.sin(state.t * freq + phase) * amplitude;
-    y = (y0 + state.t * speed) % 1920;
-  Best for: deep-glow, data-editorial, tech/AI topics.
-
-BG-5. FILM GRAIN + COLOR WASH (SVG Filter + CSS + GSAP)
-  Base: solid bg color.
-  Color wash: 2-3 large radial-gradient CSS divs (no filter blur — use CSS radial-gradient directly).
-  GSAP slow wash drift: gsap.to("#wash1", { x: 40, y: -30, duration: 12, repeat: -1, yoyo: true, ease: "sine.inOut" })
-  Grain: SVG feTurbulence overlay div. CSS @keyframes can cycle grain seeds for animated texture.
-    <filter id="grain">
-      <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch"/>
-      <feColorMatrix type="saturate" values="0"/>
-    </filter>
-  Grain div: position:absolute, inset:0, filter:url(#grain), opacity:0.13, mix-blend-mode:overlay.
-  Best for: grain-retro, warm-minimal, espresso/mocha palettes.
-
-BG-6. LIGHT RAYS / CREPUSCULAR GLOW (CSS + GSAP)
-  Central radial bloom: radial-gradient from accent to transparent, filter:blur(80px), opacity 0.5.
-  3-5 ray divs: width 2-4px, height 60-80% frame height, rotated at varied angles.
-  Color: accent at 0.06-0.12 opacity. Container slow rotation via GSAP:
-    gsap.to("#rays", { rotation: 360, duration: 40, repeat: -1, ease: "none" })
-  Bloom pulse: gsap.to("#bloom", { scale: 1.15, opacity: 0.5, duration: 4, repeat: -1, yoyo: true, ease: "sine.inOut" })
-  WARNING: rotation is CSS 2D only (transform: rotate()). No perspective.
-  Best for: deep-glow, quote-punch, dramatic cinematic holds.
-
-BG-7. TOPOGRAPHIC / CONTOUR LINES (SVG + GSAP)
-  Full-frame SVG. 6-10 closed organic paths, concentric scale variations.
-  stroke: primary, strokeWidth: 1px, fill: none, opacity: 0.08-0.18.
-  GSAP slow scale: gsap.to("#topo", { scale: 1.05, duration: 8, repeat: -1, yoyo: true, ease: "sine.inOut" })
-  Optional lateral drift: gsap.to("#topo", { x: 20, duration: 12, repeat: -1, yoyo: true })
-  Best for: warm-minimal, data-editorial, tech/science topics.
-
-BG-8. ANIMATED BEZIER CURVES (SVG + GSAP MotionPathPlugin)
-  Full-frame SVG with 4-7 cubic bezier path elements (stroke only, fill: none).
-  Each path defined with explicit C (cubic) or S (smooth cubic) commands for organic flow.
-  Stroke widths: mix of thin (1-2px) and medium (3-5px) for depth hierarchy.
-  Colors: primary at 0.12-0.25 opacity for thin paths; accent at 0.35-0.5 opacity for one hero curve.
-  GSAP morphs path control points over time using MorphSVGPlugin or attr tween on 'd' attribute:
-    gsap.to("#curve1", { attr: { d: targetPathD }, duration: 8, repeat: -1, yoyo: true, ease: "sine.inOut" })
-  Each path animates independently with offset delays (stagger: 1-2s) creating flowing wave effect.
-  Optional: a small circle element travels along the hero curve via MotionPathPlugin:
-    gsap.to("#dot", { motionPath: { path: "#hero-curve", align: "#hero-curve" },
-                      duration: ${duration}, repeat: -1, ease: "none" })
-  Dot color: accent, size 6-10px, opacity 0.6. One dot maximum.
-  Best for: bezier-flow, warm-minimal, data-editorial, soft-brutalist.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 3 — TEXTURE OVERLAYS (add at most ONE, or none)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-OV-1. Film Grain      — SVG feTurbulence, opacity 0.12-0.18, pointer-events:none.
-OV-2. Vignette        — radial-gradient(transparent 50%, bg-color 100%), opacity 0.6.
-                        Recommended for ALL dark-bg aesthetics. Focuses eye to center.
-OV-3. Scanlines       — repeating-linear-gradient(transparent 49%, primary 50%), 0.08 opacity,
-                        background-size: 100% 4px. Retro feel.
-OV-4. Noise Dither    — CSS conic-gradient pattern at 4% opacity. Fine texture.
-OV-5. Edge Bloom      — radial-gradient accent color at outermost edges only, 3% opacity. Frame glow.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 4 — MOTION ENERGY TABLE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CALM     → Duration: 8-15s. Amplitude: small. Viewer barely notices motion consciously.
-MODERATE → Duration: 4-8s. Amplitude: medium. Gentle visual rhythm without competing.
-HIGH     → Duration: 2-4s. Amplitude: larger but still looping/contained. Never chaotic.
-
-ENERGY LEVEL FOR THIS BACKGROUND: ${motionEnergy.toUpperCase()}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 5 — HYPERFRAMES DETERMINISM RULES (CRITICAL FOR RENDERING)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-HyperFrames renders by SEEKING the GSAP timeline to each frame position. Rules:
-
-1. ALL motion must be driven by the GSAP paused timeline.
-   No standalone requestAnimationFrame loops. No setInterval. No Date.now() timing.
-
-2. WebGL canvas time uniforms must hook into GSAP:
-   const prog = { t: 0 };
-   const uniformTween = gsap.to(prog, {
-     t: ${duration}, duration: ${duration}, ease: "none",
-     onUpdate: () => { gl.uniform1f(uTimeLoc, prog.t); renderFrame(); }
-   });
-   tl.add(uniformTween, 0);
-
-3. CSS @keyframes allowed ONLY for decorative grain cycling (OV-1). Nothing else.
-   Drive all other animated properties via GSAP CSSPlugin or GSAP vars.
-
-4. Looping ambient tweens: use repeat:-1 with yoyo:true, OR modulo-based progress functions.
-
-5. Register BEFORE compositions start:
-   window.__timelines = window.__timelines || {};
-   window.__timelines["background"] = tl;
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 6 — DESIGN QUALITY RULES
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-□ Background feels intentional and designed — not a stock gradient or generic dark fill.
-□ Colors strictly from provided palette. Zero invented colors.
-□ Background NEVER competes with foreground text. It is the stage, not the performer.
-□ Maximum 3 distinct animated layers (primary style + optional overlay + optional accent element).
-□ Zero text in the background layer.
-□ No cyan, electric teal, or aqua in any color value (hex, GLSL vec3, or CSS named color).
-□ No pure #000000 or #FFFFFF — always palette-derived tones.
-□ Motion is seamlessly loopable (clip end connects visually to clip start).
-□ Looks strong on mobile OLED (high contrast, no washed-out pastels).
-□ Passes: npx hyperframes lint
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 7 — PRE-OUTPUT CHECKLIST
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-□ Root element: data-composition-id="background" data-width="1080" data-height="1920".
-□ Background clip: class="clip" data-start="0" data-duration="${duration}" data-track-index="0".
-□ GSAP timeline: { paused: true }, registered on window.__timelines["background"].
-□ ALL animation via GSAP timeline — no standalone RAF/setInterval/setTimeout.
-□ WebGL time uniform (if used): driven by GSAP onUpdate hook added to timeline.
-□ CSS @keyframes only for OV-1 grain — nothing else.
-□ Colors from palette only. No extras.
-□ No text elements in background HTML.
-□ No 3D transforms (no perspective, rotateX/Y, translateZ).
-□ Motion energy matches: ${motionEnergy}.
-□ At most 3 animated layers.
-□ At most 1 texture overlay (or none).
-□ Vignette (OV-2) included for dark-bg aesthetics.
-□ No cyan/teal/aqua anywhere.
-□ Background is loopable and designed.
-□ researchNotes: at least 2 specific Exa-sourced style references.
-□ JSON only. No markdown. No explanation outside JSON.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-OUTPUT JSON ONLY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-{
-  "compositionId": "background",
-  "videoDurationSeconds": ${duration},
-  "topic": "${topic}",
-  "aestheticSystem": "${aestheticSystem}",
-  "motionEnergy": "${motionEnergy}",
-  "researchNotes": "2+ specific style references from Exa, and how each informed the design.",
-  "backgroundStyle": {
-    "primaryStyle": "BG-N code + name",
-    "textureOverlay": "OV-N code + name, or null",
-    "designRationale": "2-3 sentences: why this combination fits the topic, aesthetic, and palette."
-  },
-  "colorMapping": {
-    "bg": "${colorPalette.bg} — base canvas fill",
-    "primary": "${colorPalette.primary} — which elements",
-    "accent": "${colorPalette.accent} — the single accent element",
-    "overlayOpacities": "each layer with its opacity"
-  },
-  "layers": [
-    {
-      "id": "e.g. aurora-canvas | orb-field | grid-lines | particle-canvas",
-      "type": "webgl-canvas | css-divs | svg | gsap-canvas-2d | css-filter",
-      "zIndex": 0,
-      "description": "What this layer looks like and does visually.",
-      "gsapBehavior": "Exact GSAP tween: property, from/to values, duration, repeat, yoyo, ease.",
-      "implementation": "Essential HTML/CSS/JS snippet showing the core technique."
-    }
-  ],
-  "htmlComposition": "COMPLETE valid HyperFrames HTML as a single string. Includes: root div with data-* attributes, all layer elements with class=clip and data-*, GSAP CDN script, timeline registration on window.__timelines['background']. All motion tied to GSAP timeline. Self-contained — CDN scripts only, no local asset dependencies."
-}`;
-}
