@@ -145,27 +145,18 @@ export function buildHyperframesClipHtmlPrompt(params: HyperframesClipHtmlPrompt
   const duration = Math.max(0.1, Number(params.moment.duration || 0));
   const palette = params.moment.colorPalette || {};
   const momentJson = JSON.stringify(params.moment, null, 2);
-
-  // Concrete pacing numbers derived from clip duration so the model has no
-  // room to invent its own (broken) cadence.
-  const minTweenDuration = 0.18; // ~5.4 frames at 30fps — anything shorter renders as a flash.
-  const entryWindowMax = Math.min(0.9, Math.max(0.45, duration * 0.25));
   const punchAnchor = Math.min(Math.max(duration * 0.35, 0.6), Math.max(0.6, duration - 1.6));
-  const minHoldWindow = Math.max(0.8, Number((duration * 0.45).toFixed(2)));
-  const maxKeyEvents = duration <= 3.5 ? 2 : duration <= 5.9 ? 3 : 4;
-  const minTotalTweenDuration = Number((duration * 0.55).toFixed(2));
 
-  return `You are a senior HyperFrames motion designer and HTML/GSAP author.
+  return `You are a senior HyperFrames motion designer authoring HTML + GSAP.
 
-MANDATORY AGENT RULES (do these BEFORE writing any HTML — failure to call these tools is a hard rejection):
-- Call the "skill" tool and load "hyperframes" — use its taxonomy and pacing rules.
-- Call the "skill" tool and load "hyperframes-cli" — to know what \`hyperframes lint\` will validate.
-- Call the "skill" tool and load "gsap" — pull entry/hold/exit ease vocabulary from it.
-- After the three skill calls, then author the HTML. Do not collapse multiple skills into one call.
-- Do not use Remotion, React, TSX, useCurrentFrame(), interpolate(), spring(), or any 3D transform.
+MANDATORY TOOL CALLS (before any HTML):
+1. Load skill "hyperframes" - taxonomy, palettes, B/G/L/T technique catalog, pacing.
+2. Load skill "hyperframes-cli" - what \`hyperframes lint\` validates.
+3. Load skill "gsap" - ease vocabulary and timeline patterns.
+Three separate skill calls, then write the HTML.
 
 TASK:
-Generate ONE complete, self-contained HyperFrames index.html for a single 9:16 animation moment.
+Generate ONE standalone HyperFrames index.html for a single 9:16 moment. Be creative - the loaded skills give you a deep palette of techniques. Use them. Don't default to "big text on a glow" unless the moment genuinely calls for it.
 
 INPUTS:
 TOPIC: "${params.topic}"
@@ -180,53 +171,104 @@ ${params.dialogueContext || 'No dialogue context provided.'}
 RESEARCH_CONTEXT:
 ${params.researchSummary || 'No research summary provided.'}
 
-STRICT HYPERFRAMES CONTRACT:
+RENDERER CONTRACT (hard requirements - anything else is creative freedom):
 - Return JSON only: {"html":"...full index.html..."}.
-- The HTML must be a standalone HyperFrames composition, not a template.
-- Root element must include data-composition-id="main", data-start="0", data-duration="${duration}", data-width="1080", data-height="1920".
-- Use data-track-index on timed media/clip elements where relevant.
-- Include GSAP from CDN: https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js
-- Create a timeline synchronously: const tl = gsap.timeline({ paused: true });
-- Register it synchronously: window.__timelines["main"] = tl;
-- Use only deterministic logic. No Math.random(), Date.now(), timers, async, await, Promises, or external fetches.
-- No repeat:-1. If ambient loops are needed, use a finite repeat count based on DURATION_SECONDS.
-- Do not call play(), pause(), or seek() on media.
-- Do not animate display or visibility. Animate opacity and transforms.
-- Build the final layout in CSS first, then use gsap.from() entrance animations into those positions.
-- Use the provided palette. Do not use generic default colors.
-- Treat MOMENT_JSON.animationPrompt as the primary storyboard: preserve its timing intent and implement all specified beats.
-- Keep implementation detail-rich in natural language terms from the plan (no simplification to generic effects).
-- This composition is rendered as a transparent WebM overlay on top of the source video. The page, body, root, and any full-canvas wrappers must use transparent backgrounds.
-- Do not author an opaque full-frame background, solid canvas fill, or full-screen card that hides the video. Use the palette only for foreground text, strokes, glows, partial shapes, badges, and translucent accents.
-- Ambient visual treatment is mandatory but must be overlay-safe:
-  1) Ambient accent layer active from 0s using translucent glows, outlines, particles, sweeps, or partial shapes only; keep it low-energy and non-distracting.
-  2) Context anchor layer that appears before hero text.
-  3) Hero text/primary focal layer that locks on the punch timing.
-- Keep animated elements visually above the source video but out of the subtitle-safe bottom area unless MOMENT_JSON explicitly requires otherwise.
-- Text must be large, readable, and inside the safe box: left/right >= 120px, top/bottom >= 180px.
-- Do not render full subtitles or narrator sentences. Use only short display text from MOMENT_JSON.
+- MUST be a complete HTML document (HyperFrames lint rejects fragments): <!DOCTYPE html>, <html lang="en">, <head> with <meta charset="UTF-8">, then <body> wrapping ALL content including scripts. Never output only the composition div — preview and bundler require the document shell.
+- Root composition stays inside <body>: <div data-composition-id="main" data-start="0" data-duration="${duration}" data-width="1080" data-height="1920">.
+- Include GSAP via https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js.
+- Synchronously: const tl = gsap.timeline({ paused: true }); window.__timelines["main"] = tl;
+- Deterministic only. No Math.random / Date.now / timers / async / fetches / repeat:-1.
+- No Remotion / React / TSX / useCurrentFrame / interpolate / spring() / 3D transforms.
+- TRANSPARENT overlay: html, body, root, and full-frame wrappers all transparent. No opaque full-frame card or solid background fill - the source video shows through.
+- Animate opacity / transforms / colors / strokes. Don't animate display or visibility.
+- Use the provided palette. If MOMENT_JSON.animationPrompt names a specific hex, prefer that.
 
-PACING CONTRACT (HARD NUMBERS — derived from this clip's ${duration}s duration):
-- Minimum duration of any single tl.to/tl.from/tl.fromTo/gsap.to call: ${minTweenDuration}s. Anything shorter renders as a one-frame flash and is a hard rejection.
-- Use tl.set(...) ONLY for instant style snaps that are NOT meant to look like motion (e.g. setting an initial transform). Never use tl.set as a stand-in for a fast tween.
-- Pre-punch entry stack must finish by ${entryWindowMax.toFixed(2)}s. Stagger entries naturally inside that window — do not cram every element into the first 0.35s.
-- The hero text "punch" lock should land at approximately ${punchAnchor.toFixed(2)}s (±0.25s). Never punch before 0.45s, never punch in the last 1.0s of the clip.
-- After the punch, a continuous readable hold of at least ${minHoldWindow.toFixed(2)}s with NO new keyframed entry/exit events. Subtle ambient breathe/drift on existing elements is allowed (sine.inOut yoyo, amplitude <= 4% scale or <= 8px translate).
-- Total animated time across all tweens (sum of durations on the timeline, not wall-clock) should be at least ${minTotalTweenDuration}s — empty space is bad too. Aim for "few but well-paced events" rather than "lots of micro-flashes" or "dead static frame".
-- Maximum number of distinct key events (entries, exits, emphasis hits) total: ${maxKeyEvents}. Ambient yoyo/drift loops do NOT count toward this limit.
-- Group tweens by labels in code: tl.addLabel('entry', 0); tl.addLabel('punch', ${punchAnchor.toFixed(2)}); tl.addLabel('hold', ${(punchAnchor + 0.5).toFixed(2)}); — this makes pacing auditable.
-- Add an HTML comment block above the timeline summarising phases, e.g.:
-    // Phase map: entry 0-${entryWindowMax.toFixed(2)}s | punch ${punchAnchor.toFixed(2)}s | hold ${(punchAnchor + 0.5).toFixed(2)}-${duration.toFixed(2)}s | idle window
-  The phrase "idle window" or "hold state" must literally appear in code comments.
-- Forbidden patterns (will be rejected):
-    × duration: 0.0X with X < 18 (sub-frame flashes)
-    × all entries packed into the first 12% of the clip
-    × punch before 0.45s
-    × no labels and no phase comment
-    × repeat:-1 anywhere
+VISUAL CONTRACT (the validator enforces this - failures get rejected and retried):
+- HTML must contain at least 3 distinct visual layer types as separate DOM nodes:
+    ambient backdrop (bloom / grain / scrim / particles / soft topo) +
+    context anchor (non-text graphic - shape, icon SVG, chart fragment, UI mock, badge, divider, diagram node) +
+    hero text (1-4 words, >=72px, weight 800-900).
+  Text + a single bloom is rejected as visually empty.
+- MOMENT_JSON.animationPrompt is the storyboard. Honor named technique codes (B/G/L/T/I) and named scene objects. If it says "stat counter spins to 27", build a counter; don't substitute with generic text.
+- Text inside safe zone (left/right >=120px, top/bottom >=180px). No full subtitles - short display text only.
+
+PACING CONTRACT (validator enforces):
+- No tween shorter than 0.18s (renders as a flash).
+- Punch around ${punchAnchor.toFixed(2)}s (+/-0.25s). Not before 0.45s, not in the last 1.0s.
+- After punch, give the viewer a real hold window - at least ~${(duration * 0.4).toFixed(1)}s with no new keyframed entries/exits. Subtle ambient breathe/drift only.
+- Code must include either a "// Phase map: ..." comment or a "// hold state" / "// idle window" comment so pacing is auditable.
+- Use tl.addLabel('entry'/'punch'/'hold'/'exit', seconds) for clarity.
 
 OUTPUT JSON ONLY:
 {
   "html": "full standalone index.html string"
 }`;
 }
+
+// =============================================================================
+// PREVIOUS PROMPT VERSION — kept for reference. Do not delete without replacing.
+// =============================================================================
+/*
+export function buildHyperframesClipHtmlPrompt_v1(params: HyperframesClipHtmlPromptParams): string {
+  const duration = Math.max(0.1, Number(params.moment.duration || 0));
+  const palette = params.moment.colorPalette || {};
+  const momentJson = JSON.stringify(params.moment, null, 2);
+  const punchAnchor = Math.min(Math.max(duration * 0.35, 0.6), Math.max(0.6, duration - 1.6));
+
+  return `You are a senior HyperFrames motion designer authoring HTML + GSAP.
+
+MANDATORY TOOL CALLS (before any HTML):
+1. Load skill "hyperframes" — taxonomy, palettes, B/G/L/T technique catalog, pacing.
+2. Load skill "hyperframes-cli" — what \`hyperframes lint\` validates.
+3. Load skill "gsap" — ease vocabulary and timeline patterns.
+Three separate skill calls, then write the HTML.
+
+TASK:
+Generate ONE standalone HyperFrames index.html for a single 9:16 moment. Be creative — the loaded skills give you a deep palette of techniques. Use them. Don't default to "big text on a glow" unless the moment genuinely calls for it.
+
+INPUTS:
+TOPIC: "${params.topic}"
+DURATION_SECONDS: ${duration}
+CANVAS: 1080x1920
+COLOR_PALETTE:
+${JSON.stringify(palette, null, 2)}
+MOMENT_JSON:
+${momentJson}
+DIALOGUE_CONTEXT:
+${params.dialogueContext || 'No dialogue context provided.'}
+RESEARCH_CONTEXT:
+${params.researchSummary || 'No research summary provided.'}
+
+RENDERER CONTRACT (hard requirements — anything else is creative freedom):
+- Return JSON only: {"html":"...full index.html..."}.
+- Root: <div data-composition-id="main" data-start="0" data-duration="${duration}" data-width="1080" data-height="1920">.
+- Include GSAP via https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js.
+- Synchronously: const tl = gsap.timeline({ paused: true }); window.__timelines["main"] = tl;
+- Deterministic only. No Math.random / Date.now / timers / async / fetches / repeat:-1.
+- No Remotion / React / TSX / useCurrentFrame / interpolate / spring() / 3D transforms.
+- TRANSPARENT overlay: html, body, root, and full-frame wrappers all transparent. No opaque full-frame card or solid background fill — the source video shows through.
+- Animate opacity / transforms / colors / strokes. Don't animate display or visibility.
+- Use the provided palette. If MOMENT_JSON.animationPrompt names a specific hex, prefer that.
+
+VISUAL CONTRACT (the validator enforces this — failures get rejected and retried):
+- HTML must contain at least 3 distinct visual layer types as separate DOM nodes:
+    ambient backdrop (bloom / grain / scrim / particles / soft topo) +
+    context anchor (non-text graphic — shape, icon SVG, chart fragment, UI mock, badge, divider, diagram node) +
+    hero text (1-4 words, ≥72px, weight 800-900).
+  Text + a single bloom is rejected as visually empty.
+- MOMENT_JSON.animationPrompt is the storyboard. Honor named technique codes (B/G/L/T/I) and named scene objects. If it says "stat counter spins to 27", build a counter; don't substitute with generic text.
+- Text inside safe zone (left/right ≥120px, top/bottom ≥180px). No full subtitles — short display text only.
+
+PACING CONTRACT (validator enforces):
+- No tween shorter than 0.18s (renders as a flash).
+- Punch around ${punchAnchor.toFixed(2)}s (±0.25s). Not before 0.45s, not in the last 1.0s.
+- After punch, give the viewer a real hold window — at least ~${(duration * 0.4).toFixed(1)}s with no new keyframed entries/exits. Subtle ambient breathe/drift only.
+- Code must include either a "// Phase map: ..." comment or a "// hold state" / "// idle window" comment so pacing is auditable.
+- Use tl.addLabel('entry'/'punch'/'hold'/'exit', seconds) for clarity.
+
+OUTPUT JSON ONLY:
+{
+  "html": "full standalone index.html string"
+}`;
+}
+*/

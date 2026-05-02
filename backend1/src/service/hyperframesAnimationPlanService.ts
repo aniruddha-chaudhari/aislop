@@ -749,6 +749,30 @@ function cleanGeneratedHtml(raw: string): string {
   return (fenced?.[1] || raw).replace(/\r\n/g, '\n').trim();
 }
 
+/** HyperFrames CLI rejects index.html that has data-composition-id but no document shell. */
+function ensureHyperframesFullDocument(html: string): string {
+  const out = html.trim();
+  const hasDoctype = /<!doctype\s+html/i.test(out);
+  const hasHtml = /<html\b/i.test(out);
+  const hasBody = /<body\b/i.test(out);
+  if (hasDoctype && hasHtml && hasBody) return out;
+  if (!hasDoctype && hasHtml && hasBody) {
+    return `<!DOCTYPE html>\n${out}`;
+  }
+  const inner = out.replace(/^<!doctype\s+html>\s*/i, '').trim();
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HyperFrames moment</title>
+</head>
+<body>
+${inner}
+</body>
+</html>`;
+}
+
 function extractCompositionIds(html: string): string[] {
   const ids = new Set<string>();
   const pattern = /data-composition-id=["']([^"']+)["']/gi;
@@ -806,6 +830,107 @@ function validateHyperframesHtml(html: string, expectedDuration: number): void {
   // as either a chaotic flash-storm (sub-frame tweens crammed into the first
   // 0.35s) or as dead air (no idle/hold window declared).
   validateHyperframesPacing(html, expectedDuration);
+
+  // Hard visual-richness validation. Reject "text + bloom only" output where
+  // the model collapsed the 3-layer ambient/context/hero contract into a
+  // text-only scene. A clip with no distinct context anchor reads as empty.
+  validateHyperframesVisualRichness(html);
+}
+
+/**
+ * Detect and reject visually-empty clips. A valid HyperFrames composition
+ * should have at least 3 distinct visual layer types:
+ *  - ambient backdrop (bloom, grain, gradient, scrim, particle)
+ *  - context anchor (a non-text DOM node: shape, icon SVG, card, chart, badge)
+ *  - hero text
+ * If we only see text + at most one ambient div, the clip is rejected.
+ */
+function validateHyperframesVisualRichness(html: string): void {
+  const bodyMatch = html.match(/<body[\s\S]*?<\/body>/i);
+  const body = bodyMatch ? bodyMatch[0] : html;
+
+  // Strip <script>/<style> blocks; they don't contribute visual layers.
+  const visualBody = body
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '');
+
+  // Count concrete visual elements:
+  //  - non-trivial SVG (shape, icon, chart, line, path, circle, etc.)
+  //  - <canvas> elements
+  //  - <img> elements
+  //  - distinct top-level decorative divs (we approximate via class/id keywords)
+  const svgCount = (visualBody.match(/<svg\b/gi) || []).length;
+  const canvasCount = (visualBody.match(/<canvas\b/gi) || []).length;
+  const imgCount = (visualBody.match(/<img\b/gi) || []).length;
+
+  // Count <div> elements that look like dedicated graphic/UI layers (have
+  // class or id naming a non-text concept). This is a heuristic but avoids
+  // counting plain wrappers and text containers.
+  const graphicalKeywords = [
+    'card',
+    'badge',
+    'pill',
+    'arc',
+    'chart',
+    'bar',
+    'progress',
+    'icon',
+    'node',
+    'arrow',
+    'line',
+    'sweep',
+    'underline',
+    'highlight',
+    'divider',
+    'rule',
+    'topograph',
+    'grid',
+    'scrim',
+    'particle',
+    'orb',
+    'glow',
+    'bloom',
+    'wash',
+    'grain',
+    'noise',
+    'shape',
+    'badge',
+    'pulse',
+    'ring',
+    'dot',
+    'splat',
+    'mark',
+    'tag',
+    'chip',
+    'ray',
+  ];
+  const keywordPattern = new RegExp(
+    `\\b(?:class|id)\\s*=\\s*["'][^"']*\\b(?:${graphicalKeywords.join('|')})\\b[^"']*["']`,
+    'gi'
+  );
+  const namedGraphicalDivs = new Set<string>();
+  const matches = visualBody.match(keywordPattern) || [];
+  for (const m of matches) {
+    namedGraphicalDivs.add(m.toLowerCase());
+  }
+  const decorativeCount = namedGraphicalDivs.size;
+
+  const visualLayerCount = svgCount + canvasCount + imgCount + decorativeCount;
+
+  // Detect text-bearing nodes so we can require something *besides* text.
+  // We only reject when there's clearly a hero text but ≤1 distinct visual layer.
+  const hasTextLayer =
+    /class\s*=\s*["'][^"']*\b(?:hero|word|headline|text|title|display|caption)\b[^"']*["']/i.test(
+      visualBody
+    ) ||
+    /<h[1-6]\b/i.test(visualBody) ||
+    /<p\b[^>]*>[\s\S]*?[A-Za-z]{3}/i.test(visualBody);
+
+  if (hasTextLayer && visualLayerCount < 2) {
+    throw new Error(
+      `Generated HyperFrames HTML is visually empty: only ${visualLayerCount} non-text visual layer(s) detected (need ≥2 distinct ambient + context elements). Found svg=${svgCount}, canvas=${canvasCount}, img=${imgCount}, decorativeDivs=${decorativeCount}. Add a real context anchor (shape/icon/card/chart/badge) — text + a single bloom is not enough.`
+    );
+  }
 }
 
 interface TimelineCallInfo {
@@ -985,7 +1110,7 @@ async function renderMomentWithHyperframes(
   });
   fs.writeFileSync(path.join(momentProjectDir, `clip-html-output-${index}.raw.txt`), result.output, 'utf8');
 
-  const html = cleanGeneratedHtml(result.html || '');
+  const html = ensureHyperframesFullDocument(cleanGeneratedHtml(result.html || ''));
   if (!html) throw new Error(`Generated HyperFrames HTML for moment ${index} was empty.`);
   console.log('[HyperFrames Service] validating generated HTML', {
     index,
