@@ -246,6 +246,7 @@ type PreviewJobStatus = {
 
 const previewJobs = new Map<string, PreviewJobStatus>();
 const previewJobPromises = new Map<string, Promise<void>>();
+const loggedReadyHlsStatus = new Set<string>();
 
 function makePreviewJobKey(args: {
   projectId: string;
@@ -258,6 +259,10 @@ function makePreviewJobKey(args: {
   const playhead = Number.isFinite(args.playheadTime) ? Number(args.playheadTime) : 0;
   const window = Number.isFinite(args.windowSeconds) ? Number(args.windowSeconds) : 3;
   return `segment:${args.projectId}:${args.timelineHash}:${playhead.toFixed(3)}:${window.toFixed(3)}`;
+}
+
+function makeHlsReadyTelemetryKey(projectId: string, timelineHash: string): string {
+  return `${projectId}:${timelineHash}`;
 }
 
 function getExistingPreviewJob(args: {
@@ -1621,7 +1626,11 @@ export async function saveTimeline(ctx: HttpContext): Promise<HandlerResult> {
     // This is a low-cost cleanup that keeps disk bounded and prevents old artifacts
     // from being served if the version dir is later somehow consulted.
     pruneStalePreviewVersions(projectId, shortVersion, 'timeline');
-    pruneStalePreviewVersions(projectId, shortVersion, 'segments');
+    // Do not prune segment previews on save:
+    // On Windows, the currently displayed segment MP4 can remain file-locked by
+    // the browser/video element while the user trims/scrubs quickly. Deleting
+    // those version dirs during save can race with active reads and leave the
+    // preview UI in a broken gray state until process restart.
     pruneStalePreviewVersions(projectId, shortVersion, 'hls');
 
     return jsonResponse(200, {
@@ -2498,6 +2507,8 @@ export async function generateProjectPreviewHls(ctx: HttpContext): Promise<Handl
     const jobKey = makePreviewJobKey({ projectId, timelineHash, mode: 'hls' });
     const running = previewJobPromises.get(jobKey);
     if (!running) {
+      // Allow exactly one "ready" telemetry emission for each newly queued HLS version.
+      loggedReadyHlsStatus.delete(makeHlsReadyTelemetryKey(projectId, timelineHash));
       setPreviewJob({
         projectId,
         timelineHash,
@@ -2620,12 +2631,16 @@ export async function getProjectPreviewHlsStatus(ctx: HttpContext): Promise<Hand
     const state: PreviewJobState = current?.state ?? (fs.existsSync(manifestPath) ? 'ready' : 'idle');
     const ready = state === 'ready';
     if (ready) {
-      logPreviewTelemetry('hls_status_ready', {
-        projectId,
-        version: safeVersion,
-        timelineHash,
-        duration_ms: Date.now() - startedAt,
-      });
+      const telemetryKey = makeHlsReadyTelemetryKey(projectId, timelineHash);
+      if (!loggedReadyHlsStatus.has(telemetryKey)) {
+        loggedReadyHlsStatus.add(telemetryKey);
+        logPreviewTelemetry('hls_status_ready', {
+          projectId,
+          version: safeVersion,
+          timelineHash,
+          duration_ms: Date.now() - startedAt,
+        });
+      }
     }
 
     return jsonResponse(200, {

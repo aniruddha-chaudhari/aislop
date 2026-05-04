@@ -901,7 +901,7 @@ export async function generateTimelinePreview(
       const isReplace = isReplaceOverlayClip(clip);
       const isVideoOverlay = !isStillImageAsset(overlayPath);
       const setpts = isVideoOverlay
-        ? `setpts=PTS-STARTPTS,fps=30,tpad=start_duration=${clip.start}:start_mode=add:color=0x00000000@0,`
+        ? `setpts=PTS-STARTPTS,tpad=start_duration=${clip.start}:start_mode=add:color=0x00000000@0,`
         : '';
       const scaledLabel = isReplace ? `ov_replace_${index}` : `ov${index}`;
       const overlayLabel = isReplace ? `vr${index}` : `vo${index}`;
@@ -1269,7 +1269,7 @@ export async function generateTimelinePreviewHls(
       const isReplace = isReplaceOverlayClip(clip);
       const isVideoOverlay = !isStillImageAsset(overlayPath);
       const setpts = isVideoOverlay
-        ? `setpts=PTS-STARTPTS,fps=30,tpad=start_duration=${clip.start}:start_mode=add:color=0x00000000@0,`
+        ? `setpts=PTS-STARTPTS,tpad=start_duration=${clip.start}:start_mode=add:color=0x00000000@0,`
         : '';
       const scaledLabel = isReplace ? `ov_replace_${index}` : `ov${index}`;
       const overlayLabel = isReplace ? `vr${index}` : `vo${index}`;
@@ -1773,7 +1773,7 @@ export async function generateTimelineSegmentPreview(
       const isReplace = isReplaceOverlayClip(clip);
       const isVideoOverlay = !isStillImageAsset(overlayPath);
       const setpts = isVideoOverlay
-        ? `setpts=PTS-STARTPTS,fps=30,tpad=start_duration=${clip.start}:start_mode=add:color=0x00000000@0,`
+        ? `setpts=PTS-STARTPTS,tpad=start_duration=${clip.start}:start_mode=add:color=0x00000000@0,`
         : '';
       const scaledLabel = isReplace ? `ov_replace_${index}` : `ov${index}`;
       const overlayLabel = isReplace ? `vr${index}` : `vo${index}`;

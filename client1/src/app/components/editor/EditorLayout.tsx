@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Clip, ClipRef, EditorProject, Track } from '../../../features/editor/types';
+import type { Clip, ClipRef, EditorProject, OverlayClip, SubtitleClip, Track, WordTimestamp } from '../../../features/editor/types';
 import { useRouter } from 'next/navigation';
 import EditorSidebar from './EditorSidebar';
 import CanvasPreview, { type PreviewPlayerApi } from './CanvasPreview';
@@ -9,6 +9,63 @@ import TextPropertiesPanel, { type TextPropertiesPanelHandle } from './TextPrope
 import VideoTimelinePanel from './VideoTimelinePanel';
 import { API_ENDPOINTS, API_BASE_URL } from '../../../config/api';
 import { editorProjectFromApi, sortEditorTracks as sortTracks } from '../../../features/editor/mapApiProject';
+
+const TEMPLATE_OVERLAY_TRACK_ID = 't_overlay_template';
+/** Smallest segment length (seconds) allowed when splitting — avoids zero-length clips */
+const MIN_SPLIT_SEGMENT_SEC = 0.05;
+
+function partitionSubtitleWordsAtRelativeTime(
+  words: WordTimestamp[],
+  splitRel: number
+): { left: WordTimestamp[] | undefined; right: WordTimestamp[] | undefined } {
+  const left: WordTimestamp[] = [];
+  const right: WordTimestamp[] = [];
+  for (const w of words) {
+    const mid = (w.start + w.end) / 2;
+    if (mid <= splitRel) left.push(w);
+    else
+      right.push({
+        ...w,
+        start: Math.max(0, w.start - splitRel),
+        end: Math.max(0, w.end - splitRel),
+      });
+  }
+  return {
+    left: left.length ? left : undefined,
+    right: right.length ? right : undefined,
+  };
+}
+
+function newSplitClipRightId(): string {
+  return `clip_${crypto.randomUUID?.() ?? Date.now()}`;
+}
+
+/** Split at absolute timeline time into [left, right] or null if playhead isn't strictly inside clip. */
+function splitClipIntoPairAtAbsoluteTime(clip: Clip, tPlay: number): [Clip, Clip] | null {
+  const cStart = clip.start;
+  const cEnd = cStart + clip.duration;
+  if (tPlay <= cStart + MIN_SPLIT_SEGMENT_SEC || tPlay >= cEnd - MIN_SPLIT_SEGMENT_SEC) return null;
+
+  const leftDuration = tPlay - cStart;
+  const rightClipId = newSplitClipRightId();
+  const leftClip = JSON.parse(JSON.stringify(clip)) as Clip;
+  leftClip.duration = leftDuration;
+  const rightClip = JSON.parse(JSON.stringify(clip)) as Clip;
+  rightClip.id = rightClipId;
+  rightClip.start = tPlay;
+  rightClip.duration = cEnd - tPlay;
+
+  if (clip.kind === 'subtitle') {
+    const sub = clip as SubtitleClip;
+    if (sub.words?.length) {
+      const splitRel = leftDuration;
+      const { left: lw, right: rw } = partitionSubtitleWordsAtRelativeTime(sub.words, splitRel);
+      (leftClip as SubtitleClip).words = lw;
+      (rightClip as SubtitleClip).words = rw;
+    }
+  }
+  return [leftClip, rightClip];
+}
 
 function findFirstDraftAnimationClip(project: EditorProject): ClipRef | null {
   for (const track of project.tracks) {
@@ -1113,6 +1170,48 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     setIsDirty(true);
   }, [selected]);
 
+  /**
+   * Split at current playhead. With `ref` — one clip only. With `null` — every clip intersecting playhead,
+   * on every unlocked non-template track (descending clip index within each track so indices stay valid).
+   */
+  const splitClipAtPlayhead = useCallback((ref: ClipRef | null) => {
+    const tPlay = playheadTime;
+    setDraftProject((p) => {
+      if (ref) {
+        const track = p.tracks.find((tr) => tr.id === ref.trackId);
+        if (!track || track.locked || track.id === TEMPLATE_OVERLAY_TRACK_ID) return p;
+        const idx = track.clips.findIndex((c) => c.id === ref.clipId);
+        if (idx === -1) return p;
+        const clip = track.clips[idx];
+        const pair = splitClipIntoPairAtAbsoluteTime(clip, tPlay);
+        if (!pair) return p;
+        const [leftClip, rightClip] = pair;
+        const newClips = [...track.clips.slice(0, idx), leftClip, rightClip, ...track.clips.slice(idx + 1)];
+        const tracks = p.tracks.map((tr) => (tr.id !== ref.trackId ? tr : { ...tr, clips: newClips }));
+        queueMicrotask(() => setSelected({ trackId: ref.trackId, clipId: rightClip.id }));
+        return { ...p, tracks: sortTracks(tracks) };
+      }
+
+      let anySplit = false;
+      const tracks = p.tracks.map((track) => {
+        if (track.locked || track.id === TEMPLATE_OVERLAY_TRACK_ID) return track;
+        const clips = [...track.clips];
+        for (let i = clips.length - 1; i >= 0; i--) {
+          const pair = splitClipIntoPairAtAbsoluteTime(clips[i], tPlay);
+          if (pair) {
+            clips.splice(i, 1, pair[0], pair[1]);
+            anySplit = true;
+          }
+        }
+        return { ...track, clips };
+      });
+      if (!anySplit) return p;
+      queueMicrotask(() => setSelected(null));
+      return { ...p, tracks: sortTracks(tracks) };
+    });
+    setIsDirty(true);
+  }, [playheadTime]);
+
   const deleteTrack = (trackId: string) => {
     setDraftProject((p) => ({
       ...p,
@@ -1247,18 +1346,29 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   }, [isPlaying, draftProject.duration]);
 
   useEffect(() => {
+    const isEditableTarget = (target: EventTarget | null) => {
+      const el = target as HTMLElement | null;
+      const tag = el?.tagName?.toLowerCase();
+      return tag === 'input' || tag === 'textarea' || Boolean(el?.isContentEditable);
+    };
+
     const onKeyDown = (e: KeyboardEvent) => {
+      if (isEditableTarget(e.target)) return;
+      const mod = e.ctrlKey || e.metaKey;
+      const k = e.key.toLowerCase();
+      if (mod && e.shiftKey && k === 's') {
+        e.preventDefault();
+        splitClipAtPlayhead(selected);
+        return;
+      }
       if (!selected) return;
       if (e.key !== 'Delete' && e.key !== 'Backspace') return;
-      const target = e.target as HTMLElement | null;
-      const tag = target?.tagName?.toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || target?.isContentEditable) return;
       e.preventDefault();
       deleteClip(selected);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [selected, deleteClip]);
+  }, [selected, deleteClip, splitClipAtPlayhead]);
 
   // Subtitles & characters generated (t_subs or t_chars have clips)
   const hasSubtitlesAndChars = draftProject.tracks.some(t =>
@@ -1954,6 +2064,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
           onAddTrack={addTrack}
           onDeleteTrack={deleteTrack}
           onDeleteClip={deleteClip}
+          onSplitClip={splitClipAtPlayhead}
           onMoveClipToNewTrack={moveClipToNewTrack}
           onMoveClipBackToTrack={moveClipBackToTrack}
           onMoveClipToTrack={moveClipToTrack}

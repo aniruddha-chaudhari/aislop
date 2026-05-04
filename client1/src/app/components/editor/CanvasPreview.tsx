@@ -103,10 +103,11 @@ export default function CanvasPreview({
     [previewVideoSrc, project.template.src]
   );
   const hasVideoSrc = Boolean(videoSrc);
-  const isHlsSrc = useMemo(
-    () => Boolean(previewVideoSrc && previewVideoSrc.endsWith('.m3u8')),
-    [previewVideoSrc]
-  );
+  const isHlsSrc = useMemo(() => {
+    if (!previewVideoSrc) return false;
+    // Support cache-busted playlist URLs like ".../index.m3u8?t=123".
+    return /\.m3u8(?:$|[?#])/i.test(previewVideoSrc);
+  }, [previewVideoSrc]);
 
   const lastSeekedRef = useRef<number>(0);
   const videoReadyRef = useRef(false);

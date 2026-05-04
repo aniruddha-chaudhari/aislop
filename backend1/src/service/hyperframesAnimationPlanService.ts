@@ -16,9 +16,12 @@ const PLAN_FILENAME = 'hyperframes-animation-plan.json';
 const REVIEW_FILENAME = 'hyperframes-animation-plan-review.json';
 const OPENCODE_OUTPUT_FILENAME = 'hyperframes-animation-opencode.raw.txt';
 const HYPERFRAMES_FPS = 30;
+/** GSAP tweens shorter than this fail validateHyperframesPacing (30fps flash artifacts). */
+const HYPERFRAMES_MIN_TWEEN_DURATION_SEC = 0.18;
 const HYPERFRAMES_WIDTH = 1080;
 const HYPERFRAMES_HEIGHT = 1920;
-const HYPERFRAMES_RENDER_FORMAT = 'webm';
+/** MP4 is opaque (yuv420p). WebM/MOV from `hyperframes render` carry alpha — bad for full-frame replace overlays. */
+const HYPERFRAMES_RENDER_FORMAT = 'mp4';
 const MAX_MOMENTS = ANIMATION_GLOBAL_MOMENT_CEILING;
 const DEFAULT_OVERLAY_X = 0.5;
 const DEFAULT_OVERLAY_Y = 0.65;
@@ -788,6 +791,30 @@ function escapeForRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** Reject compositions that leave full-frame roots transparent — VP9 then carries alpha and looks wrong vs opaque playback. */
+function validateHyperframesOpaqueStage(html: string): void {
+  const styleBlocks = html.match(/<style[\s\S]*?<\/style>/gi) || [];
+  for (const block of styleBlocks) {
+    const selectors: Array<{ name: string; re: RegExp }> = [
+      { name: 'body', re: /\bbody\s*\{([^}]*)\}/gi },
+      { name: 'html', re: /\bhtml\s*\{([^}]*)\}/gi },
+      { name: '.scene-root', re: /\.scene-root\s*\{([^}]*)\}/gi },
+    ];
+    for (const { name, re } of selectors) {
+      let m: RegExpExecArray | null;
+      const r = new RegExp(re.source, re.flags);
+      while ((m = r.exec(block))) {
+        const inner = m[1] || '';
+        if (/\bbackground(?:-color)?\s*:\s*transparent\b/i.test(inner)) {
+          throw new Error(
+            `HyperFrames HTML must use an opaque full-frame background on ${name}, not background:transparent (use colorPalette.bg / #14171a).`
+          );
+        }
+      }
+    }
+  }
+}
+
 function validateHyperframesHtml(html: string, expectedDuration: number): void {
   const normalized = html.toLowerCase();
   const banned = [
@@ -835,6 +862,8 @@ function validateHyperframesHtml(html: string, expectedDuration: number): void {
   // the model collapsed the 3-layer ambient/context/hero contract into a
   // text-only scene. A clip with no distinct context anchor reads as empty.
   validateHyperframesVisualRichness(html);
+
+  validateHyperframesOpaqueStage(html);
 }
 
 /**
@@ -987,6 +1016,26 @@ function parseTimelineCalls(html: string): TimelineCallInfo[] {
   return calls;
 }
 
+/**
+ * Models often emit stagger micro-steps (duration: 0.05) that violate our pacing guard.
+ * Clamp positive `duration:` values inside <script> only (avoid touching markup strings).
+ */
+function clampFlashTweenDurationsInScripts(html: string, minSec: number): { html: string; clampedCount: number } {
+  let clampedCount = 0;
+  const next = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, (scriptBlock) =>
+    scriptBlock.replace(/duration\s*:\s*(\d+(?:\.\d+)?)/gi, (_m, raw) => {
+      const v = Number(raw);
+      if (!Number.isFinite(v) || v <= 0) return `duration: ${raw}`;
+      if (v < minSec) {
+        clampedCount += 1;
+        return `duration: ${minSec}`;
+      }
+      return `duration: ${raw}`;
+    })
+  );
+  return { html: next, clampedCount };
+}
+
 function validateHyperframesPacing(html: string, expectedDuration: number): void {
   const calls = parseTimelineCalls(html);
   const hasInfiniteLoop = /repeat\s*:\s*-1/i.test(html);
@@ -1001,7 +1050,7 @@ function validateHyperframesPacing(html: string, expectedDuration: number): void
 
   // Reject sub-frame tween durations. At 30fps anything below ~0.18s renders
   // as a single-frame flash and reads as "garbage" on playback.
-  const FRAME_FLASH_THRESHOLD = 0.18;
+  const FRAME_FLASH_THRESHOLD = HYPERFRAMES_MIN_TWEEN_DURATION_SEC;
   const subFrameTweens = calls.filter(
     (call) =>
       call.method !== 'set' &&
@@ -1110,8 +1159,16 @@ async function renderMomentWithHyperframes(
   });
   fs.writeFileSync(path.join(momentProjectDir, `clip-html-output-${index}.raw.txt`), result.output, 'utf8');
 
-  const html = ensureHyperframesFullDocument(cleanGeneratedHtml(result.html || ''));
-  if (!html) throw new Error(`Generated HyperFrames HTML for moment ${index} was empty.`);
+  const htmlPrepared = ensureHyperframesFullDocument(cleanGeneratedHtml(result.html || ''));
+  if (!htmlPrepared) throw new Error(`Generated HyperFrames HTML for moment ${index} was empty.`);
+  const { html, clampedCount } = clampFlashTweenDurationsInScripts(htmlPrepared, HYPERFRAMES_MIN_TWEEN_DURATION_SEC);
+  if (clampedCount > 0) {
+    console.log('[HyperFrames Service] clamped short GSAP tween durations to minimum', {
+      index,
+      clampedCount,
+      minSec: HYPERFRAMES_MIN_TWEEN_DURATION_SEC,
+    });
+  }
   console.log('[HyperFrames Service] validating generated HTML', {
     index,
     htmlChars: html.length,

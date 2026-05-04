@@ -377,7 +377,7 @@ export async function compileTimeline(
         const isReplace = isReplaceOverlayClip(clip);
         const isVideoOverlay = !isStillImageAsset(overlayPath);
         const setpts = isVideoOverlay
-          ? `setpts=PTS-STARTPTS,fps=30,tpad=start_duration=${clip.start}:start_mode=add:color=0x00000000@0,`
+          ? `setpts=PTS-STARTPTS,tpad=start_duration=${clip.start}:start_mode=add:color=0x00000000@0,`
           : '';
         const scaledLabel = isReplace ? `replace_scaled_${index}` : `scaled_${index}`;
         const overlayLabel = isReplace ? `with_replace_${index}` : `with_overlay_${index}`;

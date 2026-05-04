@@ -83,6 +83,8 @@ COLOR PALETTE (pick one, adjust for dialogue):
 - "grain-retro": bg:#0c0a05 primary:#d4820a accent:#f5c842 text:#fefaf0
 
 CONSTRAINTS:
+- Exported clips must be visually opaque (solid stage): html, body, and main 1080x1920 wrapper use colorPalette.bg — never background:transparent on those roots.
+- HyperFrames clip HTML must avoid CSS translate centering on GSAP-driven layers (use px layout or GSAP xPercent/yPercent only); \`hyperframes lint\` rejects translate + GSAP transform conflicts.
 - bg/text contrast >= 4.5:1. No cyan/teal/aqua hex. No pure #000/#fff bg.
 - Max 2 text elements per moment, both >=48px. Primary >=72px, fontWeight 800-900.
 - Safe zone: left/right >=120px, top/bottom >=180px. Text horizontal only.
@@ -179,7 +181,16 @@ RENDERER CONTRACT (hard requirements - anything else is creative freedom):
 - Synchronously: const tl = gsap.timeline({ paused: true }); window.__timelines["main"] = tl;
 - Deterministic only. No Math.random / Date.now / timers / async / fetches / repeat:-1.
 - No Remotion / React / TSX / useCurrentFrame / interpolate / spring() / 3D transforms.
-- TRANSPARENT overlay: html, body, root, and full-frame wrappers all transparent. No opaque full-frame card or solid background fill - the source video shows through.
+- GSAP vs CSS transform (hyperframes lint — failures block render): Do NOT use CSS \`transform: translate(...)\`, \`translateX(-50%)\`, or \`translate(-50%, -50%)\` on any element that GSAP animates with x/y/scale/rotation/transform — GSAP owns \`transform\` and overwrites CSS; lint rejects this mix. Center with explicit \`left\`/\`top\` in px (half-width/half-height math) OR put \`left\`/\`top\` at the focal pixel and use GSAP \`xPercent: -50, yPercent: -50\` consistently on tweens for that selector (lint allows \`tl.fromTo\` with percent centering). Same for layers only scaled by GSAP (e.g. ambient disks): no CSS translate there either — position with px or margin, or animate transform entirely in GSAP.
+- Centered headline / caption rows (HyperFrames lint does NOT catch layout bugs — bad HTML still exports off-center typography):
+  - Any \`position: absolute\` block that should read as full-width inside the 1080×1920 stage MUST bind horizontal geometry explicitly: prefer \`left: 0; right: 0; width: 100%\` with \`max-width: 1080px\` if needed — never omit both \`left\` and \`right\` and rely on the static-position hack (engine-dependent; headings drift horizontally).
+  - For stacked poster lines or multi-word heroes, prefer a flex stack on the grouping wrapper (\`display: flex; flex-direction: column; align-items: center\`) and, when centering that stack in a band, an outer flex row with \`justify-content: center\` — do not rely on \`text-align: center\` + \`display: inline-block\` alone; line lengths often differ and the wrapper shrinks oddly.
+  - Positive \`letter-spacing\` can make centered type feel off; prefer each line as \`width: max-content\` with \`margin-left/right: auto\` inside a flex column, rather than \`padding-left\` hacks that often skew exports.
+  - Vertical clearance (lint does not catch): if hero type sits below a diagram, grid, card, or glow, compute the graphic's bottom edge in px (including \`top\` + \`height\`, GSAP max scale, and \`box-shadow\`/\`filter\` blur reach). Place the hero band so there is at least ~120–180px empty space between that visual extent and the first baseline — never a token gap like 20–40px when headline size is >=72px and glow is present, or the text will overlap the context layer in MP4.
+  - Horizontal lock (lint does not catch): when a fixed-width diagram/grid sits above a full-width hero row, do not independently \`left: Npx\` the grid and separately center the text — wrap both in one column flex (\`align-items: center\` on the stage) or one absolutely positioned column so the grid's midpoint and the headline stack share the same vertical centerline.
+  - CSS Grid + GSAP size tweens: if dots/cells animate \`width\`/\`height\`, use \`grid-template-columns/rows: repeat(N, minmax(0, 1fr))\` and \`min-width:0; min-height:0\` on grid items — otherwise \`min-width:auto\` lets enlarged cells inflate tracks asymmetrically (layout looks shifted left/right after the tween).
+  - Vertical lock for poster / L3-style stacks: when the moment is mostly grid + hero type with large negative space, vertically center that combined stack in the 1920px stage using the **stage as a column flex** (\`.scene-root { display:flex; flex-direction:column; justify-content:center; align-items:center }\`) and the stack as an in-flow flex child — avoid \`translateY(-50%)\` on a parent of GSAP-scaled or \`filter\`-blurred children; compositing + export often introduces subpixel vertical drift with the translate pattern. If the cluster still reads **low** in frame (heavy graphic above lighter type), use \`box-sizing:border-box\` on the stage and modest **asymmetric** \`padding-bottom\` (e.g. 96–140px) so optical balance matches geometric centering — pure \`justify-content:center\` on the raw 1920 box often looks bottom-heavy.
+- FULL-FRAME OPAQUE BASE (required): Moments are exported as replace-mode 1080x1920 clips. Apply solid COLOR_PALETTE.bg on html AND body AND the main stage (.scene-root or equivalent full-canvas wrapper) so nothing shows transparent/clear checkerboard — use colorPalette.bg from MOMENT_JSON; if bg is missing use #14171a. Do NOT leave background: transparent on body or the outermost full-frame composition wrapper. Optional translucent blooms/scrims/grain sit ON TOP of that solid base — middle layers may use rgba fades, but the bottom layer fills the canvas opaquely.
 - Animate opacity / transforms / colors / strokes. Don't animate display or visibility.
 - Use the provided palette. If MOMENT_JSON.animationPrompt names a specific hex, prefer that.
 
@@ -190,7 +201,7 @@ VISUAL CONTRACT (the validator enforces this - failures get rejected and retried
     hero text (1-4 words, >=72px, weight 800-900).
   Text + a single bloom is rejected as visually empty.
 - MOMENT_JSON.animationPrompt is the storyboard. Honor named technique codes (B/G/L/T/I) and named scene objects. If it says "stat counter spins to 27", build a counter; don't substitute with generic text.
-- Text inside safe zone (left/right >=120px, top/bottom >=180px). No full subtitles - short display text only.
+- Text inside safe zone (left/right >=120px, top/bottom >=180px). No full subtitles - short display text only. Centered heroes must satisfy the anchored + flex typography rules above so safe-zone framing is predictable.
 
 PACING CONTRACT (validator enforces):
 - No tween shorter than 0.18s (renders as a flash).
@@ -246,7 +257,7 @@ RENDERER CONTRACT (hard requirements — anything else is creative freedom):
 - Synchronously: const tl = gsap.timeline({ paused: true }); window.__timelines["main"] = tl;
 - Deterministic only. No Math.random / Date.now / timers / async / fetches / repeat:-1.
 - No Remotion / React / TSX / useCurrentFrame / interpolate / spring() / 3D transforms.
-- TRANSPARENT overlay: html, body, root, and full-frame wrappers all transparent. No opaque full-frame card or solid background fill — the source video shows through.
+- FULL-FRAME OPAQUE BASE (required): Solid colorPalette.bg on html/body/stage wrapper; no transparent full-frame gutters.
 - Animate opacity / transforms / colors / strokes. Don't animate display or visibility.
 - Use the provided palette. If MOMENT_JSON.animationPrompt names a specific hex, prefer that.
 

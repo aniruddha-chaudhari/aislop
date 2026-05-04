@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useMemo, useRef, useState, useEffect } from 'react';
-import { ArrowLeft, Download, Play, Pause, Plus, Settings, Trash2, Eye, EyeOff } from 'lucide-react';
+import { ArrowLeft, Download, Play, Pause, Plus, Scissors, Settings, Trash2, Eye, EyeOff } from 'lucide-react';
 import type { Clip, ClipRef, EditorProject, Track } from '../../../features/editor/types';
 import { voiceDisplayName } from '../../../features/editor/voiceDisplayName';
 
@@ -64,6 +64,11 @@ type Props = {
   onAddTrack?: () => void;
   onDeleteTrack?: (trackId: string) => void;
   onDeleteClip?: (ref: ClipRef) => void;
+  /**
+   * Split at playhead. Pass a clip ref to split only that clip; pass `selected` including `null`
+   * to split every clip intersecting playhead across eligible tracks when nothing selected.
+   */
+  onSplitClip?: (target: ClipRef | null) => void;
   onMoveClipToNewTrack?: (ref: ClipRef, start: number, onNewRef: (newRef: ClipRef) => void) => void;
   onMoveClipBackToTrack?: (
     ref: ClipRef,
@@ -226,6 +231,7 @@ export default function VideoTimelinePanel({
   onAddTrack,
   onDeleteTrack,
   onDeleteClip,
+  onSplitClip,
   onMoveClipToNewTrack,
   onMoveClipBackToTrack,
   onMoveClipToTrack,
@@ -818,6 +824,22 @@ export default function VideoTimelinePanel({
           <div className="px-2 py-1 text-[11px] text-muted-foreground truncate">
             {contextMenu.label}
           </div>
+          {onSplitClip && (
+            <button
+              type="button"
+              onClick={() => {
+                onSplitClip(contextMenu.ref);
+                setContextMenu(null);
+              }}
+              className="w-full rounded px-2 py-1.5 text-left text-xs font-medium hover:bg-accent inline-flex items-center gap-2"
+            >
+              <Scissors size={14} className="opacity-70" />
+              Split at playhead
+              <span className="ml-auto text-[10px] text-muted-foreground shrink-0 text-right max-w-[5.5rem] leading-tight">
+                Ctrl+Shift+S
+              </span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => {
@@ -850,6 +872,21 @@ export default function VideoTimelinePanel({
             <Plus size={16} />
             <span className="text-xs font-medium">Add Track</span>
           </button>
+          {onSplitClip && (
+            <button
+              type="button"
+              onClick={() => onSplitClip(selected)}
+              className="p-1.5 rounded hover:bg-accent transition text-foreground inline-flex items-center gap-1.5"
+              title={
+                selected
+                  ? 'Split selected clip at playhead (Ctrl+Shift+S)'
+                  : 'Split all clips at playhead across tracks (Ctrl+Shift+S)'
+              }
+            >
+              <Scissors size={16} />
+              <span className="text-xs font-medium">{selected ? 'Split' : 'Split all'}</span>
+            </button>
+          )}
           {onToggleShowSubtitlesInTimeline && (
             <button
               type="button"
