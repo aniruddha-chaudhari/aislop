@@ -7,6 +7,7 @@ import { appendCharacterClipsToFilterComplex, expandCharacterClipsExcludingRepla
 import { enrichSubtitleClipsWithWords } from './previewGenerator';
 import {
   fixSubtitleClipsTimelineNonOverlap,
+  clampSubtitleClipsToTimelineDuration,
   clampAssEventToClip,
   getSubtitleWordText,
 } from './subtitleClipNormalize';
@@ -151,9 +152,16 @@ function buildAudioMixFilter(
     const duration = typeof clip.duration === 'number' && clip.duration > 0 ? clip.duration : null;
     const volume = typeof clip.volume === 'number' && Number.isFinite(clip.volume) ? Math.max(0, clip.volume) : 1;
     const delayMs = Math.max(0, Math.round((clip.start || 0) * 1000));
+    const sourceOffset =
+      typeof clip.sourceOffset === 'number' && Number.isFinite(clip.sourceOffset) ? Math.max(0, clip.sourceOffset) : 0;
 
     const chain: string[] = [];
-    if (duration) chain.push(`atrim=0:${duration}`);
+    if (duration != null) {
+      if (sourceOffset > 0) chain.push(`atrim=start=${sourceOffset}:duration=${duration}`);
+      else chain.push(`atrim=0:${duration}`);
+    } else if (sourceOffset > 0) {
+      chain.push(`atrim=start=${sourceOffset}`);
+    }
     chain.push('asetpts=PTS-STARTPTS');
     if (volume !== 1) chain.push(`volume=${volume}`);
     if (delayMs > 0) chain.push(`adelay=${delayMs}|${delayMs}`);
@@ -249,22 +257,6 @@ export async function compileTimeline(
       replaceRangesForCharacterHide
     );
 
-    let assPath: string | null = null;
-    const subtitleTrack = project.timeline?.tracks.find(t => t.type === 'subtitle');
-    let subtitleClips = (subtitleTrack?.clips.filter(c => c.kind === 'subtitle') as SubtitleClip[] || []).map(c => ({ ...c }));
-
-    if (subtitleClips.length > 0 && exportStep >= 2) {
-      const replaceOverlayRanges = buildReplaceOverlayRanges(overlayClips);
-      subtitleClips = excludeSubtitlesInRanges(subtitleClips, replaceOverlayRanges);
-      const session = await loadSessionForExport(project.audioSessionId);
-      if (session && subtitleClips.length > 0) {
-        subtitleClips = await enrichSubtitleClipsWithWords(session, subtitleClips);
-      }
-      if (subtitleClips.length > 0) {
-        assPath = await generateKaraokeAssSubtitles(subtitleClips, project.id);
-      }
-    }
-
     const templatePath = resolveTemplatePath(project.template.path);
     if (!fs.existsSync(templatePath)) {
       throw new Error(`Template not found: ${templatePath} (original: ${project.template.path})`);
@@ -290,6 +282,26 @@ export async function compileTimeline(
       // Do not trim dialogue input at input level; keep full tail and trim only at output level.
       command.input(audioPath);
       nextInputIndex++;
+    }
+
+    // Subtitles: generate ASS only after final duration is known, and clamp to that duration.
+    let assPath: string | null = null;
+    const subtitleTrack = project.timeline?.tracks.find((t) => t.type === 'subtitle');
+    let subtitleClips = (subtitleTrack?.clips.filter((c) => c.kind === 'subtitle') as SubtitleClip[] | undefined)?.map(
+      (c) => ({ ...c })
+    ) ?? [];
+
+    if (subtitleClips.length > 0 && exportStep >= 2) {
+      const replaceOverlayRanges = buildReplaceOverlayRanges(overlayClips);
+      subtitleClips = excludeSubtitlesInRanges(subtitleClips, replaceOverlayRanges);
+      const session = await loadSessionForExport(project.audioSessionId);
+      if (session && subtitleClips.length > 0) {
+        subtitleClips = await enrichSubtitleClipsWithWords(session, subtitleClips);
+      }
+      subtitleClips = clampSubtitleClipsToTimelineDuration(subtitleClips, duration);
+      if (subtitleClips.length > 0) {
+        assPath = await generateKaraokeAssSubtitles(subtitleClips, project.id);
+      }
     }
 
     const musicInputs: AudioInputRef[] = [];
@@ -355,18 +367,14 @@ export async function compileTimeline(
       needsAudioMixing,
     });
     const useSimpleVf = exportStep === 1 && !needsAudioMixing;
-    const scaleVf = 'setpts=PTS-STARTPTS,fps=30,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p';
+    // One CFR pass at the end of the graph; avoid fps=30 twice (before + after overlays), which can
+    // worsen A/V and ASS sync when many overlay inputs are present.
+    const scaleVfCore =
+      'setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p';
+    const scaleVf = `${scaleVfCore},fps=30`;
 
-    let filterComplex = `[0:v]${scaleVf}[bg]`;
+    let filterComplex = `[0:v]${scaleVfCore}[bg]`;
     let lastLabel = 'bg';
-
-    if (exportStep >= 2 && assPath && fs.existsSync(assPath)) {
-      // Escape for FFmpeg subtitles filter (match previewGenerator)
-      const escapedAssPath = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
-      const forceStyle = 'Fontname=Arial-Black,FontSize=48,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H80000000,Bold=1,BorderStyle=1,Outline=3,Shadow=2,Alignment=2,MarginV=700';
-      filterComplex += `;[${lastLabel}]subtitles='${escapedAssPath}':force_style='${forceStyle}'[with_subs]`;
-      lastLabel = 'with_subs';
-    }
 
     // Overlay base size (legacy default scale=0.5) and legacy top offset.
     const OVERLAY_BASE_W = 960;
@@ -444,6 +452,15 @@ export async function compileTimeline(
       });
       filterComplex += extraFilter;
       lastLabel = afterChars;
+    }
+
+    // Burn subtitles after all compositing so timeline `t` matches the final video PTS (avoids drift vs audio when overlays are stacked).
+    if (exportStep >= 2 && assPath && fs.existsSync(assPath)) {
+      const escapedAssPath = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+      const forceStyle =
+        'Fontname=Arial-Black,FontSize=48,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H80000000,Bold=1,BorderStyle=1,Outline=3,Shadow=2,Alignment=2,MarginV=700';
+      filterComplex += `;[${lastLabel}]subtitles='${escapedAssPath}':force_style='${forceStyle}'[with_subs]`;
+      lastLabel = 'with_subs';
     }
 
     filterComplex += `;[${lastLabel}]fps=30,format=yuv420p,setsar=1[final]`;

@@ -18,6 +18,8 @@ export const MusicClipSchema = z.object({
   start: z.number(),
   duration: z.number(),
   volume: z.number().optional(),
+  /** Seconds into the source asset where this clip begins (for left-trim). */
+  sourceOffset: z.number().min(0).optional(),
 });
 
 export const SfxClipSchema = z.object({
@@ -27,6 +29,8 @@ export const SfxClipSchema = z.object({
   start: z.number(),
   duration: z.number().optional(),
   volume: z.number().optional(),
+  /** Seconds into the source asset where this clip begins (for left-trim). */
+  sourceOffset: z.number().min(0).optional(),
 });
 
 export const WordTimestampSchema = z.object({

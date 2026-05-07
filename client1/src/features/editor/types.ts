@@ -15,12 +15,16 @@ export type MusicClip = BaseClip & {
   kind: 'music';
   path: string;
   volume?: number;
+  /** Seconds into the source asset where this clip begins (for left-trim). */
+  sourceOffset?: number;
 };
 
 export type SfxClip = BaseClip & {
   kind: 'sfx';
   path: string;
   volume?: number;
+  /** Seconds into the source asset where this clip begins (for left-trim). */
+  sourceOffset?: number;
 };
 
 export type WordTimestamp = { word: string; start: number; end: number };

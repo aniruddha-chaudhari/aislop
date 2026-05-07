@@ -1814,6 +1814,14 @@ export async function uploadImageForClip(ctx: HttpContext): Promise<HandlerResul
     const imagePath = path.join(projectDir, filename);
 
     await fs.promises.copyFile(file.path, imagePath);
+    // Ensure the overlay file fingerprint changes across platforms/filesystems.
+    // Some copy paths can preserve coarse timestamps; preview versioning relies on mtime+size.
+    try {
+      const now = new Date();
+      await fs.promises.utimes(imagePath, now, now);
+    } catch {
+      // Non-fatal: preview versioning will still include size and best-effort mtime.
+    }
 
     const assetKind = /^\.(mp4|webm|mov|m4v)$/i.test(ext) ? 'video' : 'image';
 
@@ -2008,7 +2016,8 @@ export async function serveProjectImage(ctx: HttpContext): Promise<HandlerResult
       headers: {
         'Content-Type': contentType,
         'Content-Length': String(buf.length),
-        'Cache-Control': 'public, max-age=3600',
+        // Avoid stale overlay media after re-uploading into the same assetId.
+        'Cache-Control': 'no-store',
       },
     });
   } catch (error) {

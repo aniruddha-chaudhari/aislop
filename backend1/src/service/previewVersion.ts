@@ -16,7 +16,7 @@ type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string
  * Bump this (or set PREVIEW_RENDERER_VERSION) when preview rendering behavior changes
  * and old cached preview artifacts should be invalidated.
  */
-const PREVIEW_RENDERER_VERSION = process.env.PREVIEW_RENDERER_VERSION || 'renderer-v9-main-cfr-overlay-tpad';
+const PREVIEW_RENDERER_VERSION = process.env.PREVIEW_RENDERER_VERSION || 'renderer-v11-subs-after-composite-single-fps';
 const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
 
 function toStableJsonValue(value: unknown): JsonValue {

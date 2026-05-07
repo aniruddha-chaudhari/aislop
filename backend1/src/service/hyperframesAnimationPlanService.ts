@@ -28,6 +28,13 @@ const DEFAULT_OVERLAY_Y = 0.65;
 const DEFAULT_OVERLAY_SCALE = 1;
 const RM_RETRY_ATTEMPTS = 6;
 const RM_RETRY_DELAY_MS = 160;
+const HF_DEBUG = process.env.HYPERFRAMES_DEBUG === '1';
+
+function hfDebug(message: string, data?: Record<string, unknown>): void {
+  if (!HF_DEBUG) return;
+  if (data) console.debug(message, data);
+  else console.debug(message);
+}
 
 export type AnimationMoment = {
   animationMomentId?: string;
@@ -159,6 +166,11 @@ function resetDir(dirPath: string): void {
 function summarizeForLog(text: string, max = 220): string {
   const compact = text.replace(/\s+/g, ' ').trim();
   return compact.length <= max ? compact : `${compact.slice(0, max)}...`;
+}
+
+function extractDurationAttribute(html: string): string | null {
+  const m = html.match(/data-duration=["']([^"']+)["']/i);
+  return m?.[1]?.trim() || null;
 }
 
 function cleanText(text: unknown): string {
@@ -672,12 +684,7 @@ function hyperframesCliArgs(args: string[]): string[] {
 function runCommand(bin: string, args: string[], cwd: string, label: string): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
-    console.log('[HyperFrames Service] command start', {
-      label,
-      bin,
-      cwd,
-      args: args.join(' '),
-    });
+    hfDebug('[HyperFrames Service] command start', { label, bin, cwd, args: args.join(' ') });
     const proc = spawn(bin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let stdout = '';
     let stderr = '';
@@ -693,7 +700,7 @@ function runCommand(bin: string, args: string[], cwd: string, label: string): Pr
     proc.on('close', (code) => {
       const elapsedMs = Date.now() - startedAt;
       if (code === 0) {
-        console.log('[HyperFrames Service] command complete', {
+        hfDebug('[HyperFrames Service] command complete', {
           label,
           elapsedMs,
           stdoutChars: stdout.length,
@@ -774,6 +781,47 @@ function ensureHyperframesFullDocument(html: string): string {
 ${inner}
 </body>
 </html>`;
+}
+
+function ensureHyperframesRootCompositionAttributes(html: string, expectedDuration: number): string {
+  const expectedDurationStr = String(expectedDuration);
+
+  // Insert attributes on the first real element inside <body>.
+  // We skip leading whitespace/comments and ignore <script>/<style>.
+  const bodyOpen = html.match(/<body\b[^>]*>/i);
+  if (!bodyOpen || bodyOpen.index == null) return html;
+  const bodyStartIdx = bodyOpen.index + bodyOpen[0].length;
+  const afterBody = html.slice(bodyStartIdx);
+  const firstTagMatch = afterBody.match(/^[\s\r\n]*(?:<!--[\s\S]*?-->[\s\r\n]*)*(<([a-zA-Z][\w:-]*)\b[^>]*>)/);
+  if (!firstTagMatch) return html;
+
+  const fullTag = firstTagMatch[1];
+  const tagName = (firstTagMatch[2] || '').toLowerCase();
+  if (tagName === 'script' || tagName === 'style') return html;
+
+  const ensureAttr = (tag: string, name: string, value: string): string => {
+    const re = new RegExp(`\\s${escapeForRegExp(name)}\\s*=\\s*(["'])([^"']*)\\1`, 'i');
+    if (re.test(tag)) {
+      return tag.replace(re, ` ${name}="${
+        value
+      }"`);
+    }
+    return tag.replace(/>$/, ` ${name}="${value}">`);
+  };
+
+  // Always ensure required runtime attrs on the root composition element. We keep any
+  // existing data-composition-id but still enforce duration/size so validation can't
+  // fail when the model hard-codes the wrong data-duration.
+  let patchedTag = fullTag;
+  if (!/data-composition-id\s*=\s*["'][^"']+["']/i.test(patchedTag)) {
+    patchedTag = ensureAttr(patchedTag, 'data-composition-id', 'main');
+  }
+  patchedTag = ensureAttr(patchedTag, 'data-start', '0');
+  patchedTag = ensureAttr(patchedTag, 'data-duration', expectedDurationStr);
+  patchedTag = ensureAttr(patchedTag, 'data-width', '1080');
+  patchedTag = ensureAttr(patchedTag, 'data-height', '1920');
+
+  return html.slice(0, bodyStartIdx) + afterBody.replace(fullTag, patchedTag);
 }
 
 function extractCompositionIds(html: string): string[] {
@@ -1036,6 +1084,70 @@ function clampFlashTweenDurationsInScripts(html: string, minSec: number): { html
   return { html: next, clampedCount };
 }
 
+/**
+ * Models sometimes emit infinite loops (repeat:-1 / tl.repeat(-1)), which are forbidden because
+ * clips must be deterministic and finite for export. We sanitize only inside <script> blocks
+ * to avoid touching markup strings.
+ */
+function rewriteInfiniteRepeatsInScripts(html: string): { html: string; rewrites: number } {
+  let rewrites = 0;
+  const next = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, (scriptBlock) => {
+    let block = scriptBlock;
+    // Object-literal GSAP config: repeat:-1 or repeat: -1
+    block = block.replace(/\brepeat\s*:\s*-1\b/g, () => {
+      rewrites += 1;
+      return 'repeat: 0';
+    });
+    // Method call style: .repeat(-1)
+    block = block.replace(/\.repeat\s*\(\s*-1\s*\)/g, () => {
+      rewrites += 1;
+      return '.repeat(0)';
+    });
+    // Less common: gsap.set(..., {repeat:-1}) already handled; keep simple.
+    return block;
+  });
+  return { html: next, rewrites };
+}
+
+function fnv1a32(input: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    // 32-bit FNV_prime = 16777619
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+/**
+ * HyperFrames lint forbids non-determinism (Math.random). We rewrite Math.random()
+ * calls inside <script> blocks to use a seeded mulberry32 PRNG instead.
+ */
+function rewriteMathRandomInScripts(html: string, seedSource: string): { html: string; rewrites: number } {
+  let rewrites = 0;
+  const seed = fnv1a32(seedSource || 'hyperframes');
+  let injected = false;
+  const prngPrelude = `\n// Deterministic PRNG (mulberry32) to satisfy hyperframes lint\nfunction __hfMulberry32(a){return function(){let t=a+=0x6D2B79F5;t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return((t^(t>>>14))>>>0)/4294967296;};}\nconst __hfSeed=${seed};\nconst __hfRand=__hfMulberry32(__hfSeed);\n`;
+
+  const next = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, (scriptBlock) => {
+    let block = scriptBlock;
+    const hasMathRandom = /\bMath\.random\s*\(/.test(block);
+    if (!hasMathRandom) return block;
+    if (!injected) {
+      // Inject prelude right after the opening <script ...> tag.
+      block = block.replace(/<script([^>]*)>/i, (m) => `${m}${prngPrelude}`);
+      injected = true;
+    }
+    block = block.replace(/\bMath\.random\s*\(\s*\)/g, () => {
+      rewrites += 1;
+      return '__hfRand()';
+    });
+    return block;
+  });
+
+  return { html: next, rewrites };
+}
+
 function validateHyperframesPacing(html: string, expectedDuration: number): void {
   const calls = parseTimelineCalls(html);
   const hasInfiniteLoop = /repeat\s*:\s*-1/i.test(html);
@@ -1132,10 +1244,6 @@ async function renderMomentWithHyperframes(
   resetDir(momentProjectDir);
   writeDesignFile(momentProjectDir, moment);
 
-  console.log('[HyperFrames Service] generating clip HTML', {
-    index,
-    momentId: getHyperframesAnimationMomentId(moment, index),
-  });
   const result = await generateHyperframesClipHtmlWithSkill(
     {
       topic,
@@ -1147,9 +1255,9 @@ async function renderMomentWithHyperframes(
         ...moment,
       },
     },
-    { environment }
+    { environment, targetIndexHtmlPath: path.join(momentProjectDir, 'index.html') }
   );
-  console.log('[HyperFrames Service] clip HTML generation complete', {
+  hfDebug('[HyperFrames Service] clip HTML generation complete', {
     index,
     outputChars: result.output.length,
     htmlChars: result.html?.length ?? 0,
@@ -1159,24 +1267,69 @@ async function renderMomentWithHyperframes(
   });
   fs.writeFileSync(path.join(momentProjectDir, `clip-html-output-${index}.raw.txt`), result.output, 'utf8');
 
-  const htmlPrepared = ensureHyperframesFullDocument(cleanGeneratedHtml(result.html || ''));
+  // We only inject root attributes when the model did NOT provide any composition ids.
+  // This helps preserve "main" composition selection when present, but also means
+  // duration mismatches can slip through if the model hard-coded the wrong value.
+  const hadAnyCompositionId = /data-composition-id\s*=\s*["'][^"']+["']/i.test(result.html || '');
+  const htmlPrepared = ensureHyperframesRootCompositionAttributes(
+    ensureHyperframesFullDocument(cleanGeneratedHtml(result.html || '')),
+    moment.duration
+  );
   if (!htmlPrepared) throw new Error(`Generated HyperFrames HTML for moment ${index} was empty.`);
   const { html, clampedCount } = clampFlashTweenDurationsInScripts(htmlPrepared, HYPERFRAMES_MIN_TWEEN_DURATION_SEC);
   if (clampedCount > 0) {
-    console.log('[HyperFrames Service] clamped short GSAP tween durations to minimum', {
+    console.warn('[HyperFrames Service] clamped short GSAP tween durations to minimum', {
       index,
       clampedCount,
       minSec: HYPERFRAMES_MIN_TWEEN_DURATION_SEC,
     });
   }
-  console.log('[HyperFrames Service] validating generated HTML', {
-    index,
-    htmlChars: html.length,
-    expectedDuration: moment.duration,
-  });
-  validateHyperframesHtml(html, moment.duration);
-  fs.writeFileSync(path.join(momentProjectDir, 'index.html'), html, 'utf8');
-  console.log('[HyperFrames Service] generated HTML written', {
+  const repeatRewrite = rewriteInfiniteRepeatsInScripts(html);
+  if (repeatRewrite.rewrites > 0) {
+    console.warn('[HyperFrames Service] rewrote infinite GSAP repeats to finite', {
+      index,
+      rewrites: repeatRewrite.rewrites,
+    });
+  }
+  const randomRewrite = rewriteMathRandomInScripts(
+    repeatRewrite.html,
+    `${review.projectId}:${getHyperframesAnimationMomentId(moment, index)}:${index}`
+  );
+  if (randomRewrite.rewrites > 0) {
+    console.warn('[HyperFrames Service] rewrote Math.random() to deterministic PRNG', {
+      index,
+      rewrites: randomRewrite.rewrites,
+    });
+  }
+  try {
+    validateHyperframesHtml(randomRewrite.html, moment.duration);
+  } catch (error) {
+    const actualDurationRaw = extractDurationAttribute(randomRewrite.html);
+    const diag = {
+      projectId: review.projectId,
+      index,
+      momentId: getHyperframesAnimationMomentId(moment, index),
+      expectedDuration: moment.duration,
+      actualDurationRaw,
+      hadAnyCompositionId,
+      compositionIds: extractCompositionIds(randomRewrite.html),
+      htmlChars: randomRewrite.html.length,
+      clampedTweenCount: clampedCount,
+      infiniteRepeatRewrites: repeatRewrite.rewrites,
+      mathRandomRewrites: randomRewrite.rewrites,
+      error: error instanceof Error ? error.message : String(error),
+      debugEnabled: HF_DEBUG,
+    };
+    console.error('[HyperFrames Service] generated HTML validation failed', diag);
+    try {
+      fs.writeFileSync(path.join(momentProjectDir, 'validation-debug.json'), JSON.stringify(diag, null, 2), 'utf8');
+    } catch {
+      // ignore
+    }
+    throw error;
+  }
+  fs.writeFileSync(path.join(momentProjectDir, 'index.html'), randomRewrite.html, 'utf8');
+  hfDebug('[HyperFrames Service] generated HTML written', {
     index,
     indexPath: path.join(momentProjectDir, 'index.html'),
   });
@@ -1217,7 +1370,6 @@ async function prepareHyperframesAnimationPlanReview(params: {
   const startedAt = Date.now();
   console.log('[HyperFrames Service] prepare draft start', {
     projectId: params.projectId,
-    topic: params.topic,
     subtitleClipCount: params.subtitleClips.length,
     videoDurationSeconds: params.videoDurationSeconds,
   });
@@ -1228,11 +1380,9 @@ async function prepareHyperframesAnimationPlanReview(params: {
   resetDir(renderedProjectDir);
 
   const dialogueContext = buildDialogueContext(params.subtitleClips);
-  console.log('[HyperFrames Service] inspecting OpenCode/skills environment', {
-    projectId: params.projectId,
-  });
+  hfDebug('[HyperFrames Service] inspecting OpenCode/skills environment', { projectId: params.projectId });
   const environment = await inspectHyperframesOpenCodeEnvironment(process.cwd());
-  console.log('[HyperFrames Service] environment check result', {
+  hfDebug('[HyperFrames Service] environment check result', {
     projectId: params.projectId,
     opencodeAvailable: environment.opencodeAvailable,
     exaConnected: environment.exaConnected,
@@ -1254,12 +1404,8 @@ async function prepareHyperframesAnimationPlanReview(params: {
     projectId: params.projectId,
     parsedMomentCount,
     normalizedMomentCount: animationPlan.moments.length,
-    outputChars: aiResult.output.length,
     usedExaResearch: aiResult.usedExaResearch,
     usedExaDirection: aiResult.usedExaDirection,
-    usedHyperframesSkill: aiResult.usedHyperframesSkill,
-    usedHyperframesCliSkill: aiResult.usedHyperframesCliSkill,
-    usedGsapSkill: aiResult.usedGsapSkill,
   });
 
   const review: HyperframesAnimationPlanReviewPayload = {
@@ -1325,11 +1471,8 @@ async function renderHyperframesAnimationPlanFromReview(params: {
   const startedAt = Date.now();
   console.log('[HyperFrames Service] render review start', {
     projectId: params.projectId,
-    topic: params.topic,
     reviewMomentCount: params.review.animationPlan.moments.length,
     promptOverrideCount: Object.keys(params.promptOverrides || {}).length,
-    hyperframesProjectDir: params.hyperframesProjectDir,
-    renderedProjectDir: params.renderedProjectDir,
   });
   ensureDir(params.hyperframesProjectDir);
   if (params.resetRenderedDir ?? true) resetDir(params.renderedProjectDir);
@@ -1355,7 +1498,7 @@ async function renderHyperframesAnimationPlanFromReview(params: {
 
   if (moments.length === 0) throw new Error('HyperFrames animation plan has no usable moments.');
   const environment = await inspectHyperframesOpenCodeEnvironment(process.cwd());
-  console.log('[HyperFrames Service] render environment check result', {
+  hfDebug('[HyperFrames Service] render environment check result', {
     projectId: params.projectId,
     opencodeAvailable: environment.opencodeAvailable,
     exaConnected: environment.exaConnected,

@@ -2,7 +2,8 @@ import type { SubtitleClip } from '../schema/project';
 
 const MIN_WORD_SEC = 0.02;
 const MIN_GAP_SEC = 0.001;
-const DEFAULT_KARAOKE_SYNC_DELAY_SEC = 0.05;
+/** Small delay so karaoke highlight does not flash before the waveform; keep tiny to avoid visible lag. */
+const DEFAULT_KARAOKE_SYNC_DELAY_SEC = 0.02;
 
 /** Minimum clip length (seconds); exported for subtitle draft generation */
 export const MIN_SUBTITLE_CLIP_DURATION = 0.05;
@@ -68,6 +69,49 @@ export function fixSubtitleClipsTimelineNonOverlap(clips: SubtitleClip[]): Subti
     prevEnd = newStart + newDuration;
   }
   return result;
+}
+
+/**
+ * Clamp subtitle clips (and their word timings) to a total timeline duration.
+ * This prevents ASS events beyond the rendered audio/video length, which can
+ * manifest as "skipped" subtitles depending on the player/filter.
+ */
+export function clampSubtitleClipsToTimelineDuration(
+  clips: SubtitleClip[],
+  timelineDuration: number
+): SubtitleClip[] {
+  if (!clips.length) return clips;
+  if (!Number.isFinite(timelineDuration) || timelineDuration <= 0) return clips;
+
+  const out: SubtitleClip[] = [];
+  for (const clip of clips) {
+    if (!Number.isFinite(clip.start) || !Number.isFinite(clip.duration)) continue;
+    if (clip.start >= timelineDuration) continue;
+
+    const maxDur = Math.max(0, timelineDuration - clip.start);
+    const newDuration = Math.min(clip.duration, maxDur);
+    if (newDuration < MIN_SUBTITLE_CLIP_DURATION) continue;
+
+    let words = clip.words;
+    if (words && words.length > 0) {
+      words = words.filter((w) => w.end > 0 && w.start < newDuration + 1e-6);
+      words = words.map((w) => ({
+        word: w.word,
+        start: Math.max(0, Math.min(w.start, newDuration)),
+        end: Math.max(0, Math.min(w.end, newDuration)),
+      }));
+      words = normalizeWordsInClip(words, newDuration);
+      if (!words.length) words = undefined;
+    }
+
+    out.push({
+      ...clip,
+      duration: newDuration,
+      ...(words ? { words } : {}),
+    });
+  }
+
+  return out;
 }
 
 /** Keep one karaoke Dialogue line inside its subtitle clip so it cannot bleed into the next clip. */

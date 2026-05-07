@@ -9,6 +9,7 @@ import { appendCharacterClipsToFilterComplex, expandCharacterClipsExcludingRepla
 import { computeOverlayPlacement } from './overlayTransform';
 import {
   fixSubtitleClipsTimelineNonOverlap,
+  clampSubtitleClipsToTimelineDuration,
   clampAssEventToClip,
   getSubtitleWordText,
 } from './subtitleClipNormalize';
@@ -39,8 +40,17 @@ const SEGMENT_ROOT_DIR = path.join(PREVIEW_DIR, 'segments');
 const PREVIEW_WIDTH = 360;
 const PREVIEW_HEIGHT = 640;
 const SCALE = PREVIEW_HEIGHT / 1920; // Same proportion as timelineCompiler 1080x1920
+/** Scale template to preview canvas; fps is applied once at the end of the filter graph. */
+const PREVIEW_TEMPLATE_TO_BG = `setpts=PTS-STARTPTS,scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=increase,crop=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT},format=yuv420p`;
 const PREVIEW_BITRATE = '500k'; // Low bitrate for fast generation
 const AUDIO_TAIL_BUFFER_SEC = 1.2;
+const PREVIEW_DEBUG = process.env.PREVIEW_DEBUG === '1';
+
+function previewDebug(message: string, data?: Record<string, unknown>): void {
+  if (!PREVIEW_DEBUG) return;
+  if (data) console.debug(message, data);
+  else console.debug(message);
+}
 
 // Overlay base size (legacy default scale=0.5) and legacy top offset.
 const OVERLAY_BASE_W = Math.floor(960 * (PREVIEW_WIDTH / 1080)); // 320 at 360px width
@@ -76,6 +86,11 @@ function logPreviewServiceTelemetry(event: string, data: Record<string, unknown>
     timestamp: new Date().toISOString(),
     ...data,
   });
+}
+
+function summarizeFfmpegError(err: unknown): { message: string; stack?: string } {
+  if (err instanceof Error) return { message: err.message, stack: err.stack };
+  return { message: String(err) };
 }
 
 function createPreviewAudioTempPaths(projectId: string, purpose: string): { audioListPath: string; concatenatedAudioPath: string } {
@@ -283,6 +298,7 @@ export async function generatePreview(
     const totalDuration = session.totalDuration || 60; // Fallback to 60s
 
     const outputPath = path.join(PREVIEW_DIR, `preview_${projectId}.mp4`);
+    const outputPathFfmpeg = outputPath.replace(/\\/g, '/');
 
     if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
@@ -354,7 +370,7 @@ export async function generatePreview(
         '-shortest', // End when shortest input ends
         '-y' // Overwrite
       ]);
-    command.output(outputPath);
+    command.output(outputPathFfmpeg);
 
     // Track progress
     command.on('progress', (progress: any) => {
@@ -660,9 +676,16 @@ function buildAudioMixFilter(
     const duration = typeof clip.duration === 'number' && clip.duration > 0 ? clip.duration : null;
     const volume = typeof clip.volume === 'number' && Number.isFinite(clip.volume) ? Math.max(0, clip.volume) : 1;
     const delayMs = Math.max(0, Math.round((clip.start || 0) * 1000));
+    const sourceOffset =
+      typeof clip.sourceOffset === 'number' && Number.isFinite(clip.sourceOffset) ? Math.max(0, clip.sourceOffset) : 0;
 
     const chain: string[] = [];
-    if (duration) chain.push(`atrim=0:${duration}`);
+    if (duration != null) {
+      if (sourceOffset > 0) chain.push(`atrim=start=${sourceOffset}:duration=${duration}`);
+      else chain.push(`atrim=0:${duration}`);
+    } else if (sourceOffset > 0) {
+      chain.push(`atrim=start=${sourceOffset}`);
+    }
     chain.push('asetpts=PTS-STARTPTS');
     if (volume !== 1) chain.push(`volume=${volume}`);
     if (delayMs > 0) chain.push(`adelay=${delayMs}|${delayMs}`);
@@ -682,7 +705,7 @@ function buildAudioMixFilter(
   return { filter: filters.join(';'), outputLabel: '[a_mix]' };
 }
 
-function sliceAudioClipsToWindow<T extends { start: number; duration?: number }>(
+function sliceAudioClipsToWindow<T extends { start: number; duration?: number; sourceOffset?: number }>(
   clips: T[],
   segmentStart: number,
   segmentEnd: number
@@ -699,11 +722,14 @@ function sliceAudioClipsToWindow<T extends { start: number; duration?: number }>
     const localStart = Math.max(0, clip.start - segmentStart);
     const remaining = Math.max(0.05, segmentEnd - Math.max(clip.start, segmentStart));
     const localDuration = clipDuration ? Math.max(0.05, Math.min(clipDuration, remaining)) : remaining;
+    const trimLeftTimeline = Math.max(0, segmentStart - clip.start);
+    const baseOffset = typeof clip.sourceOffset === 'number' && Number.isFinite(clip.sourceOffset) ? clip.sourceOffset : 0;
 
     result.push({
       ...clip,
       start: localStart,
       duration: localDuration,
+      sourceOffset: baseOffset + trimLeftTimeline,
     });
   }
   return result;
@@ -752,6 +778,7 @@ export async function generateTimelinePreview(
     }
 
     const outputPath = buildTimelinePreviewOutputPath(projectId, options?.versionTag);
+    const outputPathFfmpeg = outputPath.replace(/\\/g, '/');
     const outputDir = path.dirname(outputPath);
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
@@ -806,6 +833,7 @@ export async function generateTimelinePreview(
     if (subtitleClips.length > 0) {
       subtitleClips = await enrichSubtitleClipsWithWords(session, subtitleClips);
     }
+    subtitleClips = clampSubtitleClipsToTimelineDuration(subtitleClips, duration);
 
     let assPath: string | null = null;
     if (subtitleClips.length > 0) {
@@ -887,15 +915,8 @@ export async function generateTimelinePreview(
     const fontSize = Math.floor(48 * SCALE);
     const marginV = Math.floor(700 * SCALE);
 
-    filterComplex = `[0:v]setpts=PTS-STARTPTS,fps=30,scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=increase,crop=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT},format=yuv420p[bg]`;
+    filterComplex = `[0:v]${PREVIEW_TEMPLATE_TO_BG}[bg]`;
     lastLabel = 'bg';
-
-    if (assPath && fs.existsSync(assPath)) {
-      const assPathFixed = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
-      const forceStyle = `Fontname=Arial-Black,FontSize=${fontSize},PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H80000000,Bold=1,BorderStyle=1,Outline=3,Shadow=2,Alignment=2,MarginV=${marginV}`;
-      filterComplex += `;[${lastLabel}]subtitles='${assPathFixed}':force_style='${forceStyle}'[with_subs]`;
-      lastLabel = 'with_subs';
-    }
 
     overlayInputs.forEach(({ clip, inputIndex, overlayPath }, index) => {
       const isReplace = isReplaceOverlayClip(clip);
@@ -964,6 +985,13 @@ export async function generateTimelinePreview(
       lastLabel = afterChars;
     }
 
+    if (assPath && fs.existsSync(assPath)) {
+      const assPathFixed = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+      const forceStyle = `Fontname=Arial-Black,FontSize=${fontSize},PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H80000000,Bold=1,BorderStyle=1,Outline=3,Shadow=2,Alignment=2,MarginV=${marginV}`;
+      filterComplex += `;[${lastLabel}]subtitles='${assPathFixed}':force_style='${forceStyle}'[with_subs]`;
+      lastLabel = 'with_subs';
+    }
+
     onProgress?.(50, 'Encoding preview...');
 
     filterComplex += `;[${lastLabel}]fps=30,format=yuv420p,setsar=1[out]`;
@@ -1027,7 +1055,7 @@ export async function generateTimelinePreview(
         ...PREVIEW_MP4_MUX_OPTIONS,
         '-y'
       ]);
-    command.output(outputPath);
+    command.output(outputPathFfmpeg);
 
     command.on('progress', (p: any) => {
       if (p.percent) onProgress?.(Math.min(95, 50 + (p.percent / 100) * 45), `Encoding: ${Math.round(p.percent)}%`);
@@ -1083,7 +1111,7 @@ export async function generateTimelinePreviewHls(
 ): Promise<{ success: boolean; playlistPath?: string; error?: string }> {
   const startedAt = Date.now();
   logPreviewServiceTelemetry('generate_hls_preview_start', { projectId: project.id, version });
-  console.log('[HLS Preview] start', { projectId: project.id, version });
+  previewDebug('[HLS Preview] start', { projectId: project.id, version });
   const { id: projectId, template, audioSessionId, timeline } = project;
 
   try {
@@ -1175,6 +1203,7 @@ export async function generateTimelinePreviewHls(
     if (subtitleClips.length > 0) {
       subtitleClips = await enrichSubtitleClipsWithWords(session, subtitleClips);
     }
+    subtitleClips = clampSubtitleClipsToTimelineDuration(subtitleClips, duration);
 
     let assPath: string | null = null;
     if (subtitleClips.length > 0) {
@@ -1255,15 +1284,8 @@ export async function generateTimelinePreviewHls(
     const fontSize = Math.floor(48 * SCALE);
     const marginV = Math.floor(700 * SCALE);
 
-    filterComplex = `[0:v]setpts=PTS-STARTPTS,fps=30,scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=increase,crop=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT},format=yuv420p[bg]`;
+    filterComplex = `[0:v]${PREVIEW_TEMPLATE_TO_BG}[bg]`;
     lastLabel = 'bg';
-
-    if (assPath && fs.existsSync(assPath)) {
-      const assPathFixed = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
-      const forceStyle = `Fontname=Arial-Black,FontSize=${fontSize},PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H80000000,Bold=1,BorderStyle=1,Outline=3,Shadow=2,Alignment=2,MarginV=${marginV}`;
-      filterComplex += `;[${lastLabel}]subtitles='${assPathFixed}':force_style='${forceStyle}'[with_subs]`;
-      lastLabel = 'with_subs';
-    }
 
     overlayInputs.forEach(({ clip, inputIndex, overlayPath }, index) => {
       const isReplace = isReplaceOverlayClip(clip);
@@ -1332,6 +1354,13 @@ export async function generateTimelinePreviewHls(
       lastLabel = afterChars;
     }
 
+    if (assPath && fs.existsSync(assPath)) {
+      const assPathFixed = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+      const forceStyle = `Fontname=Arial-Black,FontSize=${fontSize},PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H80000000,Bold=1,BorderStyle=1,Outline=3,Shadow=2,Alignment=2,MarginV=${marginV}`;
+      filterComplex += `;[${lastLabel}]subtitles='${assPathFixed}':force_style='${forceStyle}'[with_subs]`;
+      lastLabel = 'with_subs';
+    }
+
     onProgress?.(50, 'Encoding HLS preview...');
 
     filterComplex += `;[${lastLabel}]fps=30,format=yuv420p,setsar=1[out]`;
@@ -1351,11 +1380,11 @@ export async function generateTimelinePreviewHls(
     const timeout = setTimeout(() => {}, 600000);
 
     command.on('start', (cmdLine: string) => {
-      console.log('[HLS Preview] ffmpeg start', cmdLine);
+      previewDebug('[HLS Preview] ffmpeg start', { cmdLine });
     });
     command.on('stderr', (line: string) => {
-      // Log ffmpeg diagnostics for easier debugging of Windows codec/filter issues.
-      console.log('[HLS Preview] ffmpeg stderr:', line);
+      // Extremely noisy; keep only when PREVIEW_DEBUG=1.
+      previewDebug('[HLS Preview] ffmpeg stderr', { line });
     });
 
     // GOP=fps*hls_time so each HLS segment starts on a keyframe → fast scrubbing.
@@ -1431,11 +1460,7 @@ export async function generateTimelinePreviewHls(
       duration_ms: Date.now() - startedAt,
       error: error instanceof Error ? error.message : String(error),
     });
-    console.error('[HLS Preview] generate error', {
-      projectId: project.id,
-      message: error instanceof Error ? error.message : error,
-      stack: error instanceof Error ? error.stack : undefined,
-    });
+    console.error('[HLS Preview] generate error', { projectId: project.id, ...summarizeFfmpegError(error) });
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'
@@ -1517,10 +1542,23 @@ export async function generateTimelineSegmentPreview(
       segmentDuration,
       options?.versionTag
     );
+    const outputPathFfmpeg = outputPath.replace(/\\/g, '/');
     const outputDir = path.dirname(outputPath);
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
     }
+    // High-signal telemetry for debugging "Error opening output file ... No such file or directory".
+    logPreviewServiceTelemetry('generate_segment_preview_output_path', {
+      projectId,
+      centerTime,
+      windowSeconds,
+      segmentStart,
+      segmentDuration,
+      versionTag: sanitizePreviewVersion(options?.versionTag),
+      outputPath,
+      outputDir,
+      outputDirExists: fs.existsSync(outputDir),
+    });
 
     if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
@@ -1645,6 +1683,8 @@ export async function generateTimelineSegmentPreview(
     const subtitleClipsAfterFilter = subtitleClips.length;
     if (subtitleClips.length > 0) {
       subtitleClips = await enrichSubtitleClipsWithWords(session, subtitleClips);
+      // Safety: ensure subtitles never exceed the known full timeline duration before slicing.
+      subtitleClips = clampSubtitleClipsToTimelineDuration(subtitleClips, fullDuration);
       subtitleClips = sliceSubtitleClipsToWindow(subtitleClips);
       subtitleClips = excludeSubtitlesInRanges(subtitleClips, buildReplaceOverlayRanges(overlayClips));
     }
@@ -1747,26 +1787,8 @@ export async function generateTimelineSegmentPreview(
 
     // For images, we already constrained the duration using -t on the input.
     // For videos, we already sought to fileStart and took segmentDuration; just scale/crop (no trim).
-    if (isImage) {
-      filterComplex =
-        `[0:v]setpts=PTS-STARTPTS,fps=30,scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=increase,` +
-        `crop=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT},format=yuv420p[bg]`;
-    } else {
-      filterComplex =
-        `[0:v]setpts=PTS-STARTPTS,fps=30,` +
-        `scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=increase,` +
-        `crop=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT},format=yuv420p[bg]`;
-    }
+    filterComplex = `[0:v]${PREVIEW_TEMPLATE_TO_BG}[bg]`;
     lastLabel = 'bg';
-
-    if (assPath && fs.existsSync(assPath)) {
-      const fontSize = Math.floor(48 * SCALE);
-      const marginV = Math.floor(700 * SCALE);
-      const assPathFixed = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
-      const forceStyle = `Fontname=Arial-Black,FontSize=${fontSize},PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H80000000,Bold=1,BorderStyle=1,Outline=3,Shadow=2,Alignment=2,MarginV=${marginV}`;
-      filterComplex += `;[${lastLabel}]subtitles='${assPathFixed}':force_style='${forceStyle}'[with_subs]`;
-      lastLabel = 'with_subs';
-    }
 
     // Overlays in local segment time. Video overlays use setpts so they play 0→duration in order.
     overlayInputs.forEach(({ clip, inputIndex, overlayPath }, index) => {
@@ -1836,6 +1858,15 @@ export async function generateTimelineSegmentPreview(
       lastLabel = afterChars;
     }
 
+    if (assPath && fs.existsSync(assPath)) {
+      const fontSize = Math.floor(48 * SCALE);
+      const marginV = Math.floor(700 * SCALE);
+      const assPathFixed = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+      const forceStyle = `Fontname=Arial-Black,FontSize=${fontSize},PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H80000000,Bold=1,BorderStyle=1,Outline=3,Shadow=2,Alignment=2,MarginV=${marginV}`;
+      filterComplex += `;[${lastLabel}]subtitles='${assPathFixed}':force_style='${forceStyle}'[with_subs]`;
+      lastLabel = 'with_subs';
+    }
+
     onProgress?.(50, 'Encoding segment preview...');
 
     filterComplex += `;[${lastLabel}]fps=30,format=yuv420p,setsar=1[out]`;
@@ -1854,8 +1885,19 @@ export async function generateTimelineSegmentPreview(
 
     const timeout = setTimeout(() => {}, 60000);
 
-    command.on('start', () => {});
-    command.on('stderr', () => {});
+    command.on('start', (cmdLine: string) => {
+      previewDebug('[Segment Preview] ffmpeg start', {
+        projectId,
+        outputPath,
+        outputDir,
+        outputDirExists: fs.existsSync(outputDir),
+        cmdLine,
+      });
+    });
+    command.on('stderr', (line: string) => {
+      // Quiet by default; enable with PREVIEW_DEBUG=1.
+      previewDebug('[Segment Preview] ffmpeg stderr', { line });
+    });
 
     // Short segment: smaller GOP so the player can show the very first frame fast.
     const videoCodecOpts = getPreviewVideoCodecOptions({ gopFrames: 30 });
@@ -1874,7 +1916,7 @@ export async function generateTimelineSegmentPreview(
         ...PREVIEW_MP4_MUX_OPTIONS,
         '-y'
       ]);
-    command.output(outputPath);
+    command.output(outputPathFfmpeg);
 
     command.on('progress', (p: any) => {
       if (p.percent) onProgress?.(Math.min(95, 50 + (p.percent / 100) * 45), `Encoding (segment): ${Math.round(p.percent)}%`);
@@ -1890,6 +1932,17 @@ export async function generateTimelineSegmentPreview(
         .on('error', (err: Error) => {
           clearTimeout(timeout);
           cleanupPreviewTempFiles(audioListPath, concatenatedAudioPath, assPath ?? '');
+          logPreviewServiceTelemetry('generate_segment_preview_ffmpeg_error', {
+            projectId,
+            centerTime,
+            windowSeconds,
+            segmentStart,
+            segmentDuration,
+            outputPath,
+            outputDir,
+            outputDirExists: fs.existsSync(outputDir),
+            ...summarizeFfmpegError(err),
+          });
           reject(err);
         })
         .run();

@@ -64,6 +64,10 @@ function splitClipIntoPairAtAbsoluteTime(clip: Clip, tPlay: number): [Clip, Clip
       (rightClip as SubtitleClip).words = rw;
     }
   }
+  if (clip.kind === 'music' || clip.kind === 'sfx') {
+    const base = (clip as any).sourceOffset ?? 0;
+    (rightClip as any).sourceOffset = base + leftDuration;
+  }
   return [leftClip, rightClip];
 }
 
@@ -156,6 +160,10 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
   const [previewVideoSrc, setPreviewVideoSrc] = useState<string | null>(null);
   const [previewSourceMode, setPreviewSourceMode] = useState<'none' | 'segment' | 'hls'>('none');
+  // Track which backend preview version the current HLS playlist corresponds to.
+  // If overlay media is replaced under the same assetId, the backend version can change
+  // even when timeline JSON doesn't. We must not keep reusing an old playlist on Play.
+  const lastHlsVersionRef = useRef<string | null>(null);
   const hlsPollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const segmentPollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const segmentDebounceRef = useRef<NodeJS.Timeout | null>(null);
@@ -347,7 +355,25 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     if (next && project.template?.src && project.audioSessionId && project.audioSessionId !== 'no-session') {
       // Segment previews are short windows (for scrub feedback), not full playback sources.
       // If current source is segment, force HLS generation for timeline playback.
-      if (!previewVideoSrc || previewSourceMode === 'segment' || isSegmentSrc) {
+      // Also: if we already have an HLS playlist loaded but the backend version changed (e.g. media re-upload),
+      // treat it as stale and regenerate/swap to the new version.
+      let isStaleHls = false;
+      if (previewVideoSrc && previewSourceMode === 'hls') {
+        try {
+          const statusRes = await fetch(API_ENDPOINTS.getPreviewHlsStatus(project.id), { cache: 'no-store' });
+          const statusData = await statusRes.json();
+          const versionNow = typeof statusData?.version === 'string' ? statusData.version : null;
+          if (versionNow && lastHlsVersionRef.current && versionNow !== lastHlsVersionRef.current) {
+            isStaleHls = true;
+            logPreviewTelemetry('hls_stale_detected', {
+              previousVersion: lastHlsVersionRef.current,
+              currentVersion: versionNow,
+            });
+          }
+        } catch (_) {}
+      }
+
+      if (!previewVideoSrc || previewSourceMode === 'segment' || isSegmentSrc || isStaleHls) {
         if (isDirty) {
           try {
             await handleSaveTimeline(true);
@@ -358,12 +384,13 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         }
         // Fast path: if HLS is already ready, reuse it immediately (avoid flicker/loading overlay).
         try {
-          const statusRes = await fetch(API_ENDPOINTS.getPreviewHlsStatus(project.id));
+          const statusRes = await fetch(API_ENDPOINTS.getPreviewHlsStatus(project.id), { cache: 'no-store' });
           const statusData = await statusRes.json();
           if (statusData?.success && statusData?.ready && statusData?.playlistUrl) {
             const absolutePlaylistUrl = `${API_BASE_URL}${statusData.playlistUrl}?t=${Date.now()}`;
             setPreviewVideoSrc(absolutePlaylistUrl);
             setPreviewSourceMode('hls');
+            lastHlsVersionRef.current = typeof statusData?.version === 'string' ? statusData.version : null;
             setIsPlaying(true);
             suppressSegmentUntilRef.current = 0;
             previewReadyAtRef.current = performance.now();
@@ -390,6 +417,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
                 const absolutePlaylistUrl = `${API_BASE_URL}${data.playlistUrl}?t=${Date.now()}`;
                 setPreviewVideoSrc(absolutePlaylistUrl);
                 setPreviewSourceMode('hls');
+                lastHlsVersionRef.current = typeof data?.version === 'string' ? data.version : null;
                 setIsGeneratingPreview(false);
                 setIsPlaying(true);
                 suppressSegmentUntilRef.current = 0;
@@ -462,6 +490,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     setIsPlaying(false);
     setPreviewVideoSrc(null);
     setPreviewSourceMode('none');
+    lastHlsVersionRef.current = null;
     setExportedVideoFilename(null);
     isInitialTimelineRef.current = true;
 
@@ -914,6 +943,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         duration: defaultDuration,
         path: asset.path,
         volume: 0.8,
+        sourceOffset: 0,
       };
 
       let tracks = p.tracks.map((t) => ({ ...t, clips: [...t.clips] }));
@@ -964,6 +994,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         duration,
         path: asset.path,
         volume: 0.35,
+        sourceOffset: 0,
       };
 
       let tracks = p.tracks.map((t) => ({ ...t, clips: [...t.clips] }));
@@ -980,7 +1011,9 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             return {
               ...t,
               clips: t.clips.map((c) =>
-                c.id === hasSame.id ? ({ ...c, start: 0, duration, path: asset.path } as Clip) : c
+                c.id === hasSame.id
+                  ? ({ ...c, start: 0, duration, path: asset.path, sourceOffset: 0 } as Clip)
+                  : c
               ),
             };
           }

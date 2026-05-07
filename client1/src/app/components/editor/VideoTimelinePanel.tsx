@@ -2,7 +2,7 @@
 
 import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { ArrowLeft, Download, Play, Pause, Plus, Scissors, Settings, Trash2, Eye, EyeOff } from 'lucide-react';
-import type { Clip, ClipRef, EditorProject, Track } from '../../../features/editor/types';
+import type { Clip, ClipRef, EditorProject, MusicClip, SfxClip, Track } from '../../../features/editor/types';
 import { voiceDisplayName } from '../../../features/editor/voiceDisplayName';
 
 /**
@@ -255,6 +255,8 @@ export default function VideoTimelinePanel({
     startX: number;
     startStart: number;
     startDuration: number;
+    /** Only set for music/sfx trim-left; captures sourceOffset at pointer-down. */
+    startSourceOffset?: number;
   } | null>(null);
 
   const handleMouseDown = () => {
@@ -471,7 +473,19 @@ export default function VideoTimelinePanel({
       }, 0);
       newStart = clamp(newStart, minStart, originalEnd - 0.1);
       const newDuration = Math.max(0.1, originalEnd - newStart);
-      onUpdateClip(drag.ref, { start: newStart, duration: newDuration } as Partial<Clip>);
+      const deltaStart = newStart - drag.startStart;
+      if (drag.startSourceOffset !== undefined) {
+        onUpdateClip(
+          drag.ref,
+          {
+            start: newStart,
+            duration: newDuration,
+            sourceOffset: Math.max(0, drag.startSourceOffset + deltaStart),
+          } as Partial<Clip>
+        );
+      } else {
+        onUpdateClip(drag.ref, { start: newStart, duration: newDuration } as Partial<Clip>);
+      }
       return;
     }
 
@@ -777,12 +791,17 @@ export default function VideoTimelinePanel({
                                 : (e.target as HTMLElement)?.dataset?.handle === 'r'
                                   ? 'trim-right'
                                   : 'move';
+                            const isMusicOrSfx = c.kind === 'music' || c.kind === 'sfx';
                             dragRef.current = {
                               ref,
                               mode,
                               startX: e.clientX,
                               startStart: c.start,
                               startDuration: c.duration,
+                              startSourceOffset:
+                                mode === 'trim-left' && isMusicOrSfx
+                                  ? ((c as MusicClip | SfxClip).sourceOffset ?? 0)
+                                  : undefined,
                             };
                             (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
                             window.addEventListener('pointermove', onPointerMove);

@@ -403,6 +403,12 @@ export async function generateHyperframesClipHtmlWithSkill(
     model?: string;
     cwd?: string;
     environment?: HyperframesOpenCodeEnvironmentCheck;
+    /**
+     * If provided, the OpenCode agent will be instructed to write the generated
+     * HTML to this path via the `write` tool (HyperFrames clips only).
+     * Backend will still validate and may overwrite after normalization.
+     */
+    targetIndexHtmlPath?: string;
   }
 ): Promise<HyperframesClipHtmlGenerationResult> {
   const startedAt = Date.now();
@@ -423,6 +429,10 @@ export async function generateHyperframesClipHtmlWithSkill(
 
   const model = options?.model || 'animationGemini';
   const basePrompt = buildHyperframesClipHtmlPrompt(params);
+  const agentWritePath = (options?.targetIndexHtmlPath || '').trim();
+  const writeInstruction = agentWritePath
+    ? `\n\nFILE OUTPUT REQUIREMENT:\n- Use the built-in "write" tool to write the final generated HTML to this exact path:\n  ${agentWritePath}\n- Write the HTML string as the file contents (full standalone document).\n- After writing, still return JSON only: {"html":"..."}.\n`
+    : '';
   const strictEnforcement = shouldRequireSkillToolUsage();
   const maxAttempts = strictEnforcement ? 3 : 2;
   let output = '';
@@ -435,8 +445,8 @@ export async function generateHyperframesClipHtmlWithSkill(
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const prompt = attempt === 1
-      ? basePrompt
-      : `${basePrompt}
+      ? `${basePrompt}${writeInstruction}`
+      : `${basePrompt}${writeInstruction}
 
 HARD RETRY REQUIREMENT (attempt ${attempt} of ${maxAttempts}):
 Your previous attempt did not invoke the required skill tools. Before producing any HTML, call the "skill" tool THREE separate times, once each for:
@@ -471,14 +481,71 @@ Do not collapse them into one call. Do not paraphrase the skill content. After a
     }
   }
 
-  let html = extractHtmlFromOutput(output);
-
   const clipHtmlLooksUsable = (h: string | null): boolean =>
     Boolean(h && /data-composition-id\s*=/i.test(h) && /gsap\.timeline\s*\(/i.test(h));
 
-  if (!clipHtmlLooksUsable(html)) {
-    const duration = Math.max(0.1, Number(params.moment.duration || 0));
-    const salvagePrompt = `${basePrompt}
+  let html: string | null = null;
+  if (agentWritePath) {
+    // File-first: if we asked the agent to write index.html, we treat that as the source of truth.
+    // Do NOT attempt to "extract" HTML from stdout; if the file wasn't written, fail fast.
+    try {
+      if (fs.existsSync(agentWritePath)) {
+        const content = fs.readFileSync(agentWritePath, 'utf8');
+        html = content.trim().length ? content : null;
+      }
+    } catch {
+      html = null;
+    }
+
+    if (!clipHtmlLooksUsable(html)) {
+      const duration = Math.max(0.1, Number(params.moment.duration || 0));
+      const retryPrompt = `${basePrompt}${writeInstruction}
+
+CRITICAL — FILE WRITE FAILED OR WAS INVALID:
+You MUST use the "write" tool to write a complete standalone index.html to:
+${agentWritePath}
+
+Non-negotiable HTML requirements:
+- Root div with data-composition-id="main" data-start="0" data-duration="${duration}" data-width="1080" data-height="1920"
+- gsap.timeline({ paused: true }) registered as window.__timelines["main"]
+
+After writing the file, return JSON only: {"ok": true}`;
+
+      console.warn('[HyperFrames Agent] clip HTML missing/invalid agent-written index.html; retrying', {
+        momentIndex: params.moment.index,
+        targetIndexHtmlPath: agentWritePath,
+      });
+
+      output = await opencodeRun({ prompt: retryPrompt, model, format: 'json', quiet: true, cwd });
+      diagnostics = summarizeOpenCodeOutput(output);
+      const postRetrySkills = detectHyperframesSkillUsage(diagnostics, output);
+      skillUsage = {
+        usedHyperframesSkill: skillUsage.usedHyperframesSkill || postRetrySkills.usedHyperframesSkill,
+        usedHyperframesCliSkill: skillUsage.usedHyperframesCliSkill || postRetrySkills.usedHyperframesCliSkill,
+        usedGsapSkill: skillUsage.usedGsapSkill || postRetrySkills.usedGsapSkill,
+      };
+
+      try {
+        if (fs.existsSync(agentWritePath)) {
+          const content = fs.readFileSync(agentWritePath, 'utf8');
+          html = content.trim().length ? content : null;
+        }
+      } catch {
+        html = null;
+      }
+    }
+
+    if (!clipHtmlLooksUsable(html)) {
+      throw new Error(
+        `HyperFrames clip generation failed: OpenCode did not write a valid index.html to ${agentWritePath}. Ensure OpenCode permissions allow the write tool (edit permission).`
+      );
+    }
+  } else {
+    // Legacy: extraction mode (no agent write target provided).
+    html = extractHtmlFromOutput(output);
+    if (!clipHtmlLooksUsable(html)) {
+      const duration = Math.max(0.1, Number(params.moment.duration || 0));
+      const salvagePrompt = `${basePrompt}
 
 CRITICAL — PRIOR OUTPUT WAS UNUSABLE FOR EXTRACTION:
 Either the model text stream had no valid JSON with a complete "html" string, or the HTML omitted the root composition attributes.
@@ -491,27 +558,28 @@ Inside that HTML (non-negotiable):
 - gsap.timeline({ paused: true }) registered as window.__timelines["main"]
 Do not put the document only inside skill examples — emit it as your final assistant JSON.`;
 
-    console.warn('[HyperFrames Agent] clip HTML salvage pass — extraction unusable', {
-      momentIndex: params.moment.index,
-      priorHtmlChars: html?.length ?? 0,
-      assistantStreamChars: extractAssistantTextFromOpenCodeStream(output).length,
-    });
+      console.warn('[HyperFrames Agent] clip HTML salvage pass — extraction unusable', {
+        momentIndex: params.moment.index,
+        priorHtmlChars: html?.length ?? 0,
+        assistantStreamChars: extractAssistantTextFromOpenCodeStream(output).length,
+      });
 
-    output = await opencodeRun({ prompt: salvagePrompt, model, format: 'json', quiet: true, cwd });
-    diagnostics = summarizeOpenCodeOutput(output);
-    const postSalvageSkills = detectHyperframesSkillUsage(diagnostics, output);
-    skillUsage = {
-      usedHyperframesSkill: skillUsage.usedHyperframesSkill || postSalvageSkills.usedHyperframesSkill,
-      usedHyperframesCliSkill: skillUsage.usedHyperframesCliSkill || postSalvageSkills.usedHyperframesCliSkill,
-      usedGsapSkill: skillUsage.usedGsapSkill || postSalvageSkills.usedGsapSkill,
-    };
-    html = extractHtmlFromOutput(output);
-  }
+      output = await opencodeRun({ prompt: salvagePrompt, model, format: 'json', quiet: true, cwd });
+      diagnostics = summarizeOpenCodeOutput(output);
+      const postSalvageSkills = detectHyperframesSkillUsage(diagnostics, output);
+      skillUsage = {
+        usedHyperframesSkill: skillUsage.usedHyperframesSkill || postSalvageSkills.usedHyperframesSkill,
+        usedHyperframesCliSkill: skillUsage.usedHyperframesCliSkill || postSalvageSkills.usedHyperframesCliSkill,
+        usedGsapSkill: skillUsage.usedGsapSkill || postSalvageSkills.usedGsapSkill,
+      };
+      html = extractHtmlFromOutput(output);
+    }
 
-  if (!clipHtmlLooksUsable(html)) {
-    throw new Error(
-      'HyperFrames clip HTML extraction failed: expected JSON {"html":"..."} (or ```html fences in assistant text) with root data-composition-id and gsap.timeline({ paused: true }).'
-    );
+    if (!clipHtmlLooksUsable(html)) {
+      throw new Error(
+        'HyperFrames clip HTML extraction failed: expected JSON {"html":"..."} (or ```html fences in assistant text) with root data-composition-id and gsap.timeline({ paused: true }).'
+      );
+    }
   }
 
   const allSkillsInvoked =
@@ -534,11 +602,12 @@ Do not put the document only inside skill examples — emit it as your final ass
     });
   }
 
-  console.log('[HyperFrames Agent] clip HTML extraction complete', {
+  console.log('[HyperFrames Agent] clip HTML ready', {
     momentIndex: params.moment.index,
     htmlChars: html?.length ?? 0,
     elapsedMs: Date.now() - startedAt,
     allSkillsInvoked,
+    wroteIndexHtml: Boolean(agentWritePath),
   });
   return {
     output,
