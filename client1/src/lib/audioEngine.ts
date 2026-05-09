@@ -1,0 +1,219 @@
+// client1/src/lib/audioEngine.ts
+// Web Audio API orchestrator for local timeline playback.
+// Loads and schedules all audio clips (dialogue, music, SFX) from the project timeline.
+
+import type { EditorProject, MusicClip, SfxClip } from '@/features/editor/types';
+import { API_BASE_URL, API_ENDPOINTS } from '@/config/api';
+
+type ScheduledNode = {
+  node: AudioBufferSourceNode;
+  gainNode: GainNode;
+};
+
+/** Resolve a backend-relative path to an absolute URL for fetching. */
+function resolveAudioUrl(path: string): string {
+  if (path.startsWith('http://') || path.startsWith('https://')) return path;
+  // Backend-relative paths like "audio_assets/music/..." are served via /api/audio/download/:filename
+  // but the actual storage paths are served directly; construct an absolute URL from the base.
+  // Try to derive filename for the download endpoint:
+  const filename = path.split(/[/\\]/).pop();
+  if (filename) {
+    return `${API_BASE_URL}/api/audio/download/${encodeURIComponent(filename)}`;
+  }
+  return `${API_BASE_URL}/${path}`;
+}
+
+function downloadAudioUrl(filename: string, sessionId?: string): string {
+  const base = API_ENDPOINTS.downloadAudio(filename);
+  return sessionId ? `${base}?sessionId=${encodeURIComponent(sessionId)}` : base;
+}
+
+export class AudioEngine {
+  private audioContext: AudioContext | null = null;
+  /** Wall-clock AudioContext time when timeline position 0 began. */
+  private startAudioTime = 0;
+  /** Timeline position we started playback from. */
+  private startTimelineOffset = 0;
+  private playing = false;
+  private scheduledNodes: ScheduledNode[] = [];
+  /** Cache decoded buffers so re-plays don't re-fetch. */
+  private bufferCache = new Map<string, AudioBuffer>();
+  private sessionDialogues: any[] | null = null;
+
+  /** Current playback position in seconds along the project timeline. */
+  getCurrentTime(): number {
+    if (!this.playing || !this.audioContext) return this.startTimelineOffset;
+    return (this.audioContext.currentTime - this.startAudioTime) + this.startTimelineOffset;
+  }
+
+  /** Pre-fetch and decode all audio assets referenced in the project timeline.
+   *  Call this before `play()` so playback starts immediately. */
+  async preload(project: EditorProject): Promise<void> {
+    const urls = new Set<string>();
+
+    for (const track of project.tracks) {
+      for (const clip of track.clips) {
+        if (clip.kind === 'music') {
+          urls.add(resolveAudioUrl((clip as MusicClip).path));
+        } else if (clip.kind === 'sfx') {
+          urls.add(resolveAudioUrl((clip as SfxClip).path));
+        }
+      }
+    }
+
+    // Load session dialogues for audio fallback
+    if (project.audioSessionId && project.audioSessionId !== 'no-session') {
+      try {
+        const res = await fetch(API_ENDPOINTS.audioSession(project.audioSessionId));
+        if (res.ok) {
+          const data = await res.json();
+          const session = data?.session ?? data;
+          if (session?.dialogues) {
+            this.sessionDialogues = session.dialogues;
+            for (const d of session.dialogues) {
+              if (d.audioFile?.filename) {
+                urls.add(downloadAudioUrl(d.audioFile.filename, project.audioSessionId));
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load session dialogues:', e);
+      }
+    }
+
+    await Promise.all(
+      [...urls].map(async (url) => {
+        if (this.bufferCache.has(url)) return;
+        try {
+          const ctx = this.getOrCreateContext();
+          const res = await fetch(url);
+          if (!res.ok) return;
+          const ab = await res.arrayBuffer();
+          const buf = await ctx.decodeAudioData(ab);
+          this.bufferCache.set(url, buf);
+        } catch {
+          // Non-fatal: audio clip simply won't play
+        }
+      })
+    );
+  }
+
+  /** Start playback from `timelineOffset` seconds into the project. */
+  play(project: EditorProject, timelineOffset = 0): void {
+    this.stop();
+    const ctx = this.getOrCreateContext();
+
+    this.startAudioTime = ctx.currentTime;
+    this.startTimelineOffset = timelineOffset;
+    this.playing = true;
+
+    for (const track of project.tracks) {
+      if (track.muted) continue;
+
+      for (const clip of track.clips) {
+        if (clip.kind !== 'music' && clip.kind !== 'sfx') continue;
+
+        const typedClip = clip as MusicClip | SfxClip;
+        const url = resolveAudioUrl(typedClip.path);
+        const buffer = this.bufferCache.get(url);
+        if (!buffer) continue;
+
+        const clipEnd = typedClip.start + typedClip.duration;
+        // Skip clips that have already ended relative to startOffset
+        if (clipEnd <= timelineOffset) continue;
+
+        const gainNode = ctx.createGain();
+        gainNode.gain.value = typedClip.volume ?? 1.0;
+        gainNode.connect(ctx.destination);
+
+        const sourceNode = ctx.createBufferSource();
+        sourceNode.buffer = buffer;
+
+        const sourceOffset = typedClip.sourceOffset ?? 0;
+
+        // How far into the clip we are (for clips that started before timelineOffset)
+        const clipElapsed = Math.max(0, timelineOffset - typedClip.start);
+        // When to start on the AudioContext timeline (relative to ctx.currentTime at play())
+        const whenToStart = Math.max(0, typedClip.start - timelineOffset);
+        // How far into the source audio to begin
+        const readOffset = sourceOffset + clipElapsed;
+        // How many seconds of the clip remain to play
+        const remaining = typedClip.duration - clipElapsed;
+
+        sourceNode.connect(gainNode);
+        sourceNode.start(
+          this.startAudioTime + whenToStart,
+          readOffset,
+          Math.max(0, remaining)
+        );
+
+        this.scheduledNodes.push({ node: sourceNode, gainNode });
+      }
+    }
+
+    // Schedule dialogues
+    if (this.sessionDialogues) {
+      let cumulativeTime = 0;
+      for (const dialogue of this.sessionDialogues) {
+        const duration = dialogue.audioFile?.duration || 3;
+        if (dialogue.audioFile?.filename) {
+          const url = downloadAudioUrl(dialogue.audioFile.filename, project.audioSessionId);
+          const buffer = this.bufferCache.get(url);
+          if (buffer) {
+             const clipStart = cumulativeTime;
+             const clipEnd = clipStart + duration;
+             if (clipEnd > timelineOffset) {
+                const gainNode = ctx.createGain();
+                gainNode.gain.value = 1.0;
+                gainNode.connect(ctx.destination);
+                const sourceNode = ctx.createBufferSource();
+                sourceNode.buffer = buffer;
+                
+                const clipElapsed = Math.max(0, timelineOffset - clipStart);
+                const whenToStart = Math.max(0, clipStart - timelineOffset);
+                const remaining = duration - clipElapsed;
+                
+                sourceNode.connect(gainNode);
+                sourceNode.start(
+                  this.startAudioTime + whenToStart,
+                  clipElapsed,
+                  Math.max(0, remaining)
+                );
+                this.scheduledNodes.push({ node: sourceNode, gainNode });
+             }
+          }
+        }
+        cumulativeTime += duration;
+      }
+    }
+  }
+
+  /** Stop all playing sources and reset. */
+  stop(): void {
+    this.playing = false;
+    for (const { node, gainNode } of this.scheduledNodes) {
+      try { node.stop(); } catch { /* already stopped */ }
+      node.disconnect();
+      gainNode.disconnect();
+    }
+    this.scheduledNodes = [];
+  }
+
+  dispose(): void {
+    this.stop();
+    this.bufferCache.clear();
+    this.audioContext?.close().catch(() => {});
+    this.audioContext = null;
+  }
+
+  private getOrCreateContext(): AudioContext {
+    if (!this.audioContext || this.audioContext.state === 'closed') {
+      this.audioContext = new AudioContext();
+    }
+    if (this.audioContext.state === 'suspended') {
+      this.audioContext.resume().catch(() => {});
+    }
+    return this.audioContext;
+  }
+}

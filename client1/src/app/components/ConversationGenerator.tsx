@@ -494,10 +494,10 @@ export default function ConversationGenerator() {
           setGenerationProgress({
             total,
             completed: 0,
-            files: new Array(total).fill(null).map((_, i) => ({
+            files: new Array(total).fill(null).map((_) => ({
               fileId: '',
               filename: '',
-              status: 'waiting' as const
+              status: 'generating' as const
             }))
           });
         } else if (update.type === 'progress') {

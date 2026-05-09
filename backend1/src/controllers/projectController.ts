@@ -2247,6 +2247,11 @@ export async function generateProjectPreview(ctx: HttpContext): Promise<HandlerR
 export async function generateProjectPreviewSegment(ctx: HttpContext): Promise<HandlerResult> {
   const startedAt = Date.now();
   try {
+    // If client signals WebCodecs support, return immediately
+    if (ctx.query?.clientDecoder === 'webcodecs') {
+      return jsonResponse(200, { success: true, state: 'skipped', reason: 'client_webcodecs' });
+    }
+
     const projectId = ctx.params?.id;
     if (!projectId) return jsonResponse(400, { success: false, error: 'Project ID is required' });
 

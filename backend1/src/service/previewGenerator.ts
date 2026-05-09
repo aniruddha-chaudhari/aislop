@@ -1109,6 +1109,15 @@ export async function generateTimelinePreview(
   }
 }
 
+const audioCache = new Map<string, { path: string; timestamp: number }>();
+
+function getCachedAudioPath(projectId: string, audioSessionId: string): string | null {
+  const key = `${projectId}_${audioSessionId}`;
+  const cached = audioCache.get(key);
+  if (cached && fs.existsSync(cached.path)) return cached.path;
+  return null;
+}
+
 /**
  * Generate a full-length HLS preview (3s segments) for a project timeline.
  *
@@ -1170,25 +1179,40 @@ export async function generateTimelinePreviewHls(
     if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
     onProgress?.(10, 'Concatenating audio for HLS preview...');
-    const { audioListPath, concatenatedAudioPath } = createPreviewAudioTempPaths(projectId, 'hls_preview');
-    const audioListContent = audioFiles.map((f: string) => `file '${f.replace(/'/g, "'\\''")}'`).join('\n');
-    fs.writeFileSync(audioListPath, audioListContent);
+    const cachedAudio = getCachedAudioPath(projectId, audioSessionId);
+    let concatenatedAudioPath: string;
+    let audioListPath: string | null = null;
 
-    await new Promise<void>((resolve, reject) => {
-      const concatCmd = ffmpeg()
-        .input(audioListPath)
-        .inputOptions(['-f', 'concat', '-safe', '0'])
-        .outputOptions(['-c:a', 'pcm_s16le'])
-        .output(concatenatedAudioPath);
-      concatCmd.on('start', () => {});
-      concatCmd.on('stderr', () => {});
-      concatCmd.on('end', () => resolve());
-      concatCmd.on('error', (err: Error) => {
-        cleanupPreviewTempFiles(audioListPath, concatenatedAudioPath);
-        reject(err);
+    if (cachedAudio) {
+      concatenatedAudioPath = cachedAudio;
+    } else {
+      const paths = createPreviewAudioTempPaths(projectId, 'hls_preview');
+      audioListPath = paths.audioListPath;
+      concatenatedAudioPath = paths.concatenatedAudioPath;
+      const audioListContent = audioFiles.map((f: string) => `file '${f.replace(/'/g, "'\\''")}'`).join('\n');
+      fs.writeFileSync(audioListPath, audioListContent);
+
+      await new Promise<void>((resolve, reject) => {
+        const concatCmd = ffmpeg()
+          .input(audioListPath!)
+          .inputOptions(['-f', 'concat', '-safe', '0'])
+          .outputOptions(['-c:a', 'pcm_s16le'])
+          .output(concatenatedAudioPath);
+        concatCmd.on('start', () => {});
+        concatCmd.on('stderr', () => {});
+        concatCmd.on('end', () => resolve());
+        concatCmd.on('error', (err: Error) => {
+          cleanupPreviewTempFiles(audioListPath!, concatenatedAudioPath);
+          reject(err);
+        });
+        concatCmd.run();
       });
-      concatCmd.run();
-    });
+      
+      audioCache.set(`${projectId}_${audioSessionId}`, {
+        path: concatenatedAudioPath,
+        timestamp: Date.now(),
+      });
+    }
     // Prevent tail clipping when stored timeline/session duration is slightly shorter than actual audio.
     const concatenatedDuration = await probeMediaDurationSeconds(concatenatedAudioPath);
     if (concatenatedDuration > 0) {
@@ -1428,7 +1452,7 @@ export async function generateTimelinePreviewHls(
       command
         .on('end', () => {
           clearTimeout(timeout);
-          cleanupPreviewTempFiles(audioListPath, concatenatedAudioPath, assPath ?? '');
+          cleanupPreviewTempFiles(audioListPath ?? '', assPath ?? '');
           
           // Post-process playlist: rewrite segment paths to use API URLs.
           // FFmpeg writes relative paths like "seg_000.ts", but we need absolute API URLs.
@@ -1452,7 +1476,7 @@ export async function generateTimelinePreviewHls(
         })
         .on('error', (err: Error) => {
           clearTimeout(timeout);
-          cleanupPreviewTempFiles(audioListPath, concatenatedAudioPath, assPath ?? '');
+          cleanupPreviewTempFiles(audioListPath ?? '', assPath ?? '');
           reject(err);
         })
         .run();

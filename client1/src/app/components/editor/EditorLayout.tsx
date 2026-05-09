@@ -5,6 +5,7 @@ import type { Clip, ClipRef, EditorProject, OverlayClip, SubtitleClip, Track, Wo
 import { useRouter } from 'next/navigation';
 import EditorSidebar from './EditorSidebar';
 import CanvasPreview, { type PreviewPlayerApi } from './CanvasPreview';
+import type { AudioEngine } from '../../../lib/audioEngine';
 import TextPropertiesPanel, { type TextPropertiesPanelHandle } from './TextPropertiesPanel';
 import VideoTimelinePanel from './VideoTimelinePanel';
 import { API_ENDPOINTS, API_BASE_URL } from '../../../config/api';
@@ -154,6 +155,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const rafRef = useRef<number | null>(null);
   const lastTsRef = useRef<number | null>(null);
   const previewPlayerRef = useRef<PreviewPlayerApi | null>(null);
+  const audioEngineRef = useRef<AudioEngine | null>(null);
   const propertiesPanelRef = useRef<TextPropertiesPanelHandle | null>(null);
   
   // Preview generation (HLS only; no 3s segment chunking)
@@ -241,254 +243,39 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   }, []);
 
   const requestSegmentPreview = useCallback(async (atSeconds: number, reason: 'scrub' | 'timeline_change' | 'timeline_saved') => {
-    if (!canGeneratePreview) return;
-    if (isGeneratingPreviewRef.current) return;
-    if (isPlayingRef.current) return;
-    if (Date.now() < suppressSegmentUntilRef.current) return;
-    if (previewSourceModeRef.current === 'hls' && reason === 'scrub') return;
-    if (reason === 'scrub' && Date.now() - lastPlayAttemptAtRef.current < 1500) return;
-    const playhead = Math.max(0, Number.isFinite(atSeconds) ? atSeconds : 0);
-    const windowSeconds = 3;
-    const seq = ++segmentRequestSeqRef.current;
-    logPreviewTelemetry('segment_requested', {
-      reason,
-      playheadTime: Number(playhead.toFixed(3)),
-      isDirty: isDirtyRef.current,
-    });
-
-    const applyReady = (payload: Record<string, unknown> | null | undefined): boolean => {
-      if (!payload || payload.success !== true || payload.state !== 'ready' || typeof payload.url !== 'string') return false;
-      // Ignore stale segment completions while actively playing or just after play click.
-      if (isPlayingRef.current || Date.now() - lastPlayAttemptAtRef.current < 2000) {
-        return false;
-      }
-      if (Date.now() < suppressSegmentUntilRef.current) {
-        return false;
-      }
-      const now = performance.now();
-      const baseUrl = toAbsolutePreviewUrl(payload.url);
-      const cacheBust = baseUrl.includes('?') ? '&t=' : '?t=';
-      setPreviewVideoSrc(`${baseUrl}${cacheBust}${Date.now()}`);
-      setPreviewSourceMode('segment');
-      previewReadyAtRef.current = now;
-      logPreviewTelemetry('segment_ready', {
-        reason,
-        play_click_to_ready_ms: playClickAtRef.current != null ? Math.round(now - playClickAtRef.current) : null,
-      });
-      clearSegmentPolling();
-      return true;
-    };
-
-    try {
-      const dp = draftProjectRef.current;
-      const timelineOverride = isDirtyRef.current
-        ? { duration: dp.duration, tracks: dp.tracks }
-        : undefined;
-      const res = await fetch(API_ENDPOINTS.generatePreviewSegment(project.id), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ playheadTime: playhead, windowSeconds, ...(timelineOverride ? { timeline: timelineOverride } : {}) }),
-      });
-      const data = await res.json();
-      if (seq !== segmentRequestSeqRef.current) return;
-      if (applyReady(data)) return;
-
-      const versionFromStart = typeof (data as any)?.version === 'string' ? String((data as any).version) : null;
-      clearSegmentPolling();
-      segmentPollIntervalRef.current = setInterval(async () => {
-        try {
-          if (seq !== segmentRequestSeqRef.current) {
-            clearSegmentPolling();
-            return;
-          }
-          const statusUrl = `${API_ENDPOINTS.getPreviewSegmentStatus(project.id)}?playheadTime=${encodeURIComponent(String(playhead))}&windowSeconds=${windowSeconds}${versionFromStart ? `&version=${encodeURIComponent(versionFromStart)}` : ''}`;
-          const statusRes = await fetch(statusUrl);
-          const statusData = await statusRes.json();
-          if (seq !== segmentRequestSeqRef.current) {
-            clearSegmentPolling();
-            return;
-          }
-          if (applyReady(statusData)) return;
-          if (statusData?.state === 'error') {
-            clearSegmentPolling();
-            logPreviewTelemetry('segment_error', {
-              reason,
-              error: (statusData as { error?: string })?.error || 'segment status error',
-            });
-          }
-        } catch (_) {}
-      }, 500);
-    } catch (error) {
-      if (seq !== segmentRequestSeqRef.current) return;
-      logPreviewTelemetry('segment_request_failed', {
-        reason,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    return;
   }, [canGeneratePreview, clearSegmentPolling, logPreviewTelemetry, project.id, toAbsolutePreviewUrl]);
 
   const handlePlayToggle = async () => {
     const next = !isPlaying;
-    // Segment preview URLs come back as `/api/project/:id/preview?mode=segment&...`,
-    // not as raw filesystem paths. Match either form so play correctly swaps to HLS.
-    const isSegmentSrc = Boolean(
-      previewVideoSrc &&
-      (previewVideoSrc.includes('/previews/segments/') || /[?&]mode=segment(?:&|$)/.test(previewVideoSrc))
-    );
     logPreviewTelemetry('play_toggle_clicked', {
       from: isPlaying ? 'playing' : 'paused',
       to: next ? 'playing' : 'paused',
-      previewSourceMode,
-      isSegmentSrc,
-      hasPreviewSrc: Boolean(previewVideoSrc),
     });
     let seekTo: number | undefined;
     if (next) {
-      suppressSegmentUntilRef.current = Date.now() + 5000;
-      // Invalidate any in-flight segment preview requests so they cannot overwrite HLS on play.
-      segmentRequestSeqRef.current += 1;
-      clearSegmentPolling();
-      if (segmentDebounceRef.current) {
-        clearTimeout(segmentDebounceRef.current);
-        segmentDebounceRef.current = null;
-      }
-      if (timelineDebounceRef.current) {
-        clearTimeout(timelineDebounceRef.current);
-        timelineDebounceRef.current = null;
-      }
-      lastPlayAttemptAtRef.current = Date.now();
       playClickAtRef.current = performance.now();
       const atEnd = draftProject.duration > 0 && playheadTime >= draftProject.duration;
       seekTo = atEnd ? 0 : playheadTime;
-      logPreviewTelemetry('play_clicked', {
-        hasPreviewSrc: Boolean(previewVideoSrc),
-        isDirty,
-        playheadTime: Number(playheadTime.toFixed(3)),
-      });
-    }
-    
-    // If playing and we have template + audio session, use full HLS preview only
-    if (next && project.template?.src && project.audioSessionId && project.audioSessionId !== 'no-session') {
-      // Segment previews are short windows (for scrub feedback), not full playback sources.
-      // If current source is segment, force HLS generation for timeline playback.
-      // Also: if we already have an HLS playlist loaded but the backend version changed (e.g. media re-upload),
-      // treat it as stale and regenerate/swap to the new version.
-      let isStaleHls = false;
-      if (previewVideoSrc && previewSourceMode === 'hls') {
-        try {
-          const statusRes = await fetch(API_ENDPOINTS.getPreviewHlsStatus(project.id), { cache: 'no-store' });
-          const statusData = await statusRes.json();
-          const versionNow = typeof statusData?.version === 'string' ? statusData.version : null;
-          if (versionNow && lastHlsVersionRef.current && versionNow !== lastHlsVersionRef.current) {
-            isStaleHls = true;
-            logPreviewTelemetry('hls_stale_detected', {
-              previousVersion: lastHlsVersionRef.current,
-              currentVersion: versionNow,
-            });
-          }
-        } catch (_) {}
+      if (atEnd) {
+        setPlayheadTime(0);
       }
-
-      if (!previewVideoSrc || previewSourceMode === 'segment' || isSegmentSrc || isStaleHls) {
-        if (isDirty) {
-          try {
-            await handleSaveTimeline(true);
-          } catch (e) {
-            setMessage({ type: 'error', text: 'Save failed. Save timeline first.' });
-            return;
-          }
-        }
-        // Fast path: if HLS is already ready, reuse it immediately (avoid flicker/loading overlay).
-        try {
-          const statusRes = await fetch(API_ENDPOINTS.getPreviewHlsStatus(project.id), { cache: 'no-store' });
-          const statusData = await statusRes.json();
-          if (statusData?.success && statusData?.ready && statusData?.playlistUrl) {
-            const absolutePlaylistUrl = `${API_BASE_URL}${statusData.playlistUrl}?t=${Date.now()}`;
-            setPreviewVideoSrc(absolutePlaylistUrl);
-            setPreviewSourceMode('hls');
-            lastHlsVersionRef.current = typeof statusData?.version === 'string' ? statusData.version : null;
-            setIsPlaying(true);
-            suppressSegmentUntilRef.current = 0;
-            previewReadyAtRef.current = performance.now();
-            setTimeout(() => previewPlayerRef.current?.requestPlay?.(seekTo ?? playheadTime), 120);
-            return;
-          }
-        } catch (_) {}
-
-        setIsGeneratingPreview(true);
-        setMessage({ type: 'info', text: 'Generating preview...' });
-        try {
-          hlsRequestAtRef.current = performance.now();
-          logPreviewTelemetry('hls_requested');
-          await fetch(API_ENDPOINTS.generatePreviewHls(project.id), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-          });
-          const pollForHls = async () => {
-            try {
-              const res = await fetch(API_ENDPOINTS.getPreviewHlsStatus(project.id));
-              const data = await res.json();
-              if (data.success && data.ready && data.playlistUrl) {
-                const now = performance.now();
-                const absolutePlaylistUrl = `${API_BASE_URL}${data.playlistUrl}?t=${Date.now()}`;
-                setPreviewVideoSrc(absolutePlaylistUrl);
-                setPreviewSourceMode('hls');
-                lastHlsVersionRef.current = typeof data?.version === 'string' ? data.version : null;
-                setIsGeneratingPreview(false);
-                setIsPlaying(true);
-                suppressSegmentUntilRef.current = 0;
-                previewReadyAtRef.current = now;
-                logPreviewTelemetry('hls_ready', {
-                  hls_request_to_ready_ms: hlsRequestAtRef.current != null ? Math.round(now - hlsRequestAtRef.current) : null,
-                  play_click_to_ready_ms: playClickAtRef.current != null ? Math.round(now - playClickAtRef.current) : null,
-                });
-                if (hlsPollIntervalRef.current) {
-                  clearInterval(hlsPollIntervalRef.current);
-                  hlsPollIntervalRef.current = null;
-                }
-                setTimeout(() => previewPlayerRef.current?.requestPlay?.(seekTo ?? playheadTime), 300);
-                setMessage({ type: 'success', text: 'Preview ready!' });
-                setTimeout(() => setMessage(null), 2000);
-              }
-            } catch (_) {}
-          };
-          hlsPollIntervalRef.current = setInterval(pollForHls, 1000);
-        } catch (error) {
-          const now = performance.now();
-          logPreviewTelemetry('hls_error', {
-            hls_request_elapsed_ms: hlsRequestAtRef.current != null ? Math.round(now - hlsRequestAtRef.current) : null,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          setMessage({ type: 'error', text: error instanceof Error ? error.message : 'Failed to generate preview' });
-          setTimeout(() => setMessage(null), 5000);
-          setIsGeneratingPreview(false);
-        }
-        return;
+      setIsPlaying(true);
+      // Start AudioEngine synchronously to ensure resume happens inside the
+      // user gesture (some browsers block resume if done async).
+      try {
+        audioEngineRef.current?.play?.(draftProjectRef.current, seekTo ?? 0);
+      } catch (e) {
+        console.warn('audioEngine play failed synchronously', e);
       }
-    } else if (next && !project.template?.src) {
-      // Block play only when no template (allow template-only play from timeline)
-      setMessage({ type: 'info', text: 'Please select a template first' });
-      setTimeout(() => setMessage(null), 3000);
-      return;
-    }
-    
-    // Only reset to start when actually at end of timeline (duration > 0)
-    if (next && draftProject.duration > 0 && playheadTime >= draftProject.duration) {
-      setPlayheadTime(0);
-      seekTo = 0;
-    } else if (next) {
-      seekTo = playheadTime;
-    }
-    setIsPlaying(next);
-    if (next) {
-      suppressSegmentUntilRef.current = 0;
-      previewReadyAtRef.current = performance.now();
-      logPreviewTelemetry('play_using_existing_preview');
+      // Also invoke child preview API if available (it may be null if child
+      // hasn't mounted yet).
       previewPlayerRef.current?.requestPlay?.(seekTo);
+    } else {
+      setIsPlaying(false);
+      previewPlayerRef.current?.requestPause?.();
     }
-    else previewPlayerRef.current?.requestPause?.();
   };
-  
   // Template and audio session data/state
   const [templates, setTemplates] = useState<TemplateVideo[]>([]);
   const [audioSessions, setAudioSessions] = useState<AudioSession[]>([]);
@@ -539,6 +326,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       clearInterval(hlsPollIntervalRef.current);
       hlsPollIntervalRef.current = null;
     }
+    // Skip server-side segment preview when WebCodecs canvas handles scrub locally
+    if (typeof VideoDecoder !== 'undefined') return;
     if (!canGeneratePreview || isDirty) return;
     if (timelineDebounceRef.current) clearTimeout(timelineDebounceRef.current);
     timelineDebounceRef.current = setTimeout(() => {
@@ -546,8 +335,11 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     }, 400);
   }, [draftProject.tracks, draftProject.duration, canGeneratePreview, isDirty, isPlaying, previewSourceMode, requestSegmentPreview]);
 
+
   // Debounced scrub preview refresh when paused.
   useEffect(() => {
+    // Skip server-side segment preview when WebCodecs handles scrub locally
+    if (typeof VideoDecoder !== 'undefined') return;
     if (!canGeneratePreview || isPlaying || isGeneratingPreview) return;
     if (previewSourceMode === 'hls') return;
     if (segmentDebounceRef.current) clearTimeout(segmentDebounceRef.current);
@@ -2039,6 +1831,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             onSelectClip={setSelected}
             onUpdateClip={updateClip}
             onPreviewReady={(api) => { previewPlayerRef.current = api; }}
+            onAudioEngineReady={(engine) => { audioEngineRef.current = engine; }}
         previewVideoSrc={previewVideoSrc}
         previewSourceMode={previewSourceMode}
         isGeneratingPreview={isGeneratingPreview}

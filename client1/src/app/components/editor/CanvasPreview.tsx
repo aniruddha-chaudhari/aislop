@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import type { Clip, ClipRef, EditorProject } from '../../../features/editor/types';
 import { API_ENDPOINTS } from '../../../config/api';
+import { CanvasCompositor } from '../../../lib/canvasCompositor';
+import { AudioEngine } from '../../../lib/audioEngine';
 
 export type PreviewPlayerApi = {
   /** Optional: seek to this time (seconds) before playing. Use current playhead so video starts from timeline position. */
@@ -25,6 +27,8 @@ type Props = {
   onUpdateClip: (ref: ClipRef, patch: Partial<Clip>) => void;
   /** Called with play/pause API so parent can call play() in same stack as user click (required for autoplay policy). */
   onPreviewReady?: (api: PreviewPlayerApi | null) => void;
+  /** Called once with the AudioEngine instance so parent can start audio on play. */
+  onAudioEngineReady?: (engine: AudioEngine | null) => void;
   /** Optional: Preview video source (FFmpeg composite) to use instead of template */
   previewVideoSrc?: string | null;
   previewSourceMode?: 'none' | 'segment' | 'hls';
@@ -46,11 +50,14 @@ export default function CanvasPreview({
   onSelectClip,
   onUpdateClip,
   onPreviewReady,
+  onAudioEngineReady,
   previewVideoSrc,
   previewSourceMode = 'none',
   isGeneratingPreview = false,
   onFirstFrame,
 }: Props) {
+  const projectRef = useRef<EditorProject>(project);
+  useEffect(() => { projectRef.current = project; }, [project]);
   const playerRef = useRef<HTMLVideoElement | null>(null);
   const playerWrapperRef = useRef<HTMLDivElement | null>(null);
   
@@ -66,6 +73,19 @@ export default function CanvasPreview({
   const isSeekingRef = useRef(false);
   const [mutedForPolicy, setMutedForPolicy] = useState(true);
   const frameRef = useRef<HTMLDivElement | null>(null);
+  const compositorRef = useRef<CanvasCompositor | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const audioEngineRef = useRef<AudioEngine | null>(null);
+  const localPlaybackActiveRef = useRef(false);
+  const rafIdRef = useRef<number | null>(null);
+  const [localCanvasReady, setLocalCanvasReady] = useState(false);
+  const onPlayheadChangeRef = useRef(onPlayheadChange);
+  const onPlayPauseRef = useRef(onPlayPause);
+  const onFirstFrameRef = useRef(onFirstFrame);
+
+  useEffect(() => { onPlayheadChangeRef.current = onPlayheadChange; }, [onPlayheadChange]);
+  useEffect(() => { onPlayPauseRef.current = onPlayPause; }, [onPlayPause]);
+  useEffect(() => { onFirstFrameRef.current = onFirstFrame; }, [onFirstFrame]);
   // Convert template path to API URL if it's a file system path
   const getTemplateUrl = (templateSrc: string | undefined): string | undefined => {
     if (!templateSrc) return undefined;
@@ -103,6 +123,14 @@ export default function CanvasPreview({
     [previewVideoSrc, project.template.src]
   );
   const hasVideoSrc = Boolean(videoSrc);
+  const templateMediaKind = useMemo<'image' | 'video'>(() => {
+    if (previewVideoSrc) return 'video';
+    const src = project.template.src ?? '';
+    const cleanSrc = src.split(/[?#]/)[0]?.toLowerCase() ?? '';
+    if (/\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(cleanSrc)) return 'image';
+    if (project.template.type === 'image') return 'image';
+    return 'video';
+  }, [previewVideoSrc, project.template.src, project.template.type]);
   const isHlsSrc = useMemo(() => {
     if (!previewVideoSrc) return false;
     // Support cache-busted playlist URLs like ".../index.m3u8?t=123".
@@ -115,6 +143,74 @@ export default function CanvasPreview({
   const lastIntendedPlayheadRef = useRef(0);
   const isBufferingToSeekRef = useRef(false);
   const firstFrameReportedRef = useRef(false);
+
+  useEffect(() => {
+    if (!canvasRef.current) return;
+    const compositor = new CanvasCompositor(canvasRef.current);
+    compositorRef.current = compositor;
+    setLocalCanvasReady(true);
+    compositor.preloadImages(project);
+    compositor.renderFrame(projectRef.current, lastIntendedPlayheadRef.current, { drawTemplate: false }).catch(console.warn);
+
+    // Initialise AudioEngine and pre-fetch audio assets
+    if (!audioEngineRef.current) {
+      audioEngineRef.current = new AudioEngine();
+      onAudioEngineReady?.(audioEngineRef.current);
+    }
+    audioEngineRef.current.preload(project).catch(console.warn);
+
+    return () => {
+      setLocalCanvasReady(false);
+      compositor.dispose();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.template.src, project.id, templateMediaKind]);
+
+  // Static scrub rendering when paused
+  useEffect(() => {
+    if (isPlaying || !compositorRef.current || !localCanvasReady) return;
+    compositorRef.current.renderFrame(project, playheadTime, { drawTemplate: false }).catch(console.warn);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playheadTime, isPlaying, localCanvasReady]);
+
+  // Drive canvas rendering loop during local playback
+  useEffect(() => {
+    if (!isPlaying || !localCanvasReady || !compositorRef.current || !audioEngineRef.current) return;
+
+    let lastFrameTime = 0;
+    const render = () => {
+      const now = performance.now();
+      // Render at ~60fps max
+      if (now - lastFrameTime >= 16) {
+        try {
+          const currentTime = Math.min(duration, audioEngineRef.current!.getCurrentTime());
+          compositorRef.current!.renderFrame(projectRef.current, currentTime, { drawTemplate: false }).catch((err) => console.warn('[CanvasPreview] renderFrame error', err));
+          onPlayheadChangeRef.current(currentTime);
+          if (!firstFrameReportedRef.current) {
+            firstFrameReportedRef.current = true;
+            onFirstFrameRef.current?.();
+          }
+          if (currentTime >= duration) {
+            onPlayPauseRef.current();
+            return;
+          }
+        } catch (err) {
+          console.warn('[CanvasPreview] render loop error', err);
+        }
+        lastFrameTime = now;
+      }
+      rafIdRef.current = requestAnimationFrame(render);
+    };
+
+    rafIdRef.current = requestAnimationFrame(render);
+    return () => {
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying, localCanvasReady, duration]);
 
   useEffect(() => {
     videoReadyRef.current = false;
@@ -177,19 +273,26 @@ export default function CanvasPreview({
     if (!onPreviewReady) return;
     const api: PreviewPlayerApi = {
       requestPlay: (seekToSeconds) => {
+        const t = seekToSeconds ?? playheadTime;
+        lastIntendedPlayheadRef.current = t;
+
+        if (localCanvasReady) {
+          // Local GPU playback: start audio engine and let rAF loop handle rendering
+          if (audioEngineRef.current && projectRef.current) {
+            try {
+              audioEngineRef.current.play(projectRef.current, t);
+              localPlaybackActiveRef.current = true;
+            } catch (e) {
+              console.warn('[CanvasPreview] audioEngine.play threw', e);
+            }
+          }
+        }
+
+        // Fallback: HTML video element playback
         const video = getVideoElement();
         if (!video) return;
-        const t = seekToSeconds ?? playheadTime;
-
-        // Update intended position
-        lastIntendedPlayheadRef.current = t;
         isSyncingFromTimelineRef.current = true;
-
-        const doPlay = () => {
-          video.play().catch(() => {});
-        };
-
-        // Seek is async: wait for 'seeked' before play() so we don't start from 0.
+        const doPlay = () => { video.play().catch(() => {}); };
         const needSeek = Number.isFinite(t) && video.readyState >= 1 && Number.isFinite(video.duration) && Math.abs(video.currentTime - t) > 0.05;
         if (needSeek) {
           try {
@@ -206,7 +309,7 @@ export default function CanvasPreview({
               doPlay();
             }, 2000);
             video.addEventListener('seeked', onSeeked, { once: true });
-          } catch (err) {
+          } catch {
             isSyncingFromTimelineRef.current = false;
             doPlay();
           }
@@ -216,14 +319,16 @@ export default function CanvasPreview({
         }
       },
       requestPause: () => {
+        audioEngineRef.current?.stop();
+        localPlaybackActiveRef.current = false;
         const video = getVideoElement();
-        if (!video) return;
-        video.pause();
+        video?.pause();
       },
     };
     onPreviewReady(api);
     return () => onPreviewReady(null);
-  }, [onPreviewReady, playheadTime]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onPreviewReady, localCanvasReady, playheadTime]);
 
   const handleReady = () => {
     videoReadyRef.current = true;
@@ -233,7 +338,7 @@ export default function CanvasPreview({
   useEffect(() => {
     const video = getVideoElement();
     if (!video || !hasVideoSrc) return;
-    
+
     if (!isPlaying) {
       video.pause();
       return;
@@ -279,7 +384,7 @@ export default function CanvasPreview({
       video.addEventListener('canplay', applyPlay, { once: true });
       return () => video.removeEventListener('canplay', applyPlay);
     }
-  }, [isPlaying, hasVideoSrc]);
+  }, [isPlaying, hasVideoSrc, localCanvasReady]);
 
   // Sync volume from timeline.
   useEffect(() => {
@@ -381,7 +486,7 @@ export default function CanvasPreview({
         >
           {/* Template: container with ref to find video element */}
           <div ref={playerWrapperRef} className="absolute inset-0 z-[20] pointer-events-none">
-            {(project.template.type === 'video' || previewVideoSrc) && hasVideoSrc ? (
+            {templateMediaKind === 'video' && hasVideoSrc ? (
               <video
                 ref={setPlayerRef}
                 // For HLS sources, the src will be managed by hls.js; keep it empty here.
@@ -441,7 +546,7 @@ export default function CanvasPreview({
                 }}
                 onError={() => {}}
               />
-            ) : project.template.type === 'image' && hasVideoSrc && !previewVideoSrc ? (
+            ) : templateMediaKind === 'image' && hasVideoSrc && !previewVideoSrc ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 key={videoSrc}
@@ -472,6 +577,16 @@ export default function CanvasPreview({
             )}
           </div>
 
+          <canvas
+            ref={canvasRef}
+            className="absolute inset-0 w-full h-full"
+            style={{
+              zIndex: 30,
+              display: localCanvasReady ? 'block' : 'none',
+              objectFit: 'contain',
+            }}
+          />
+
           {/* Overlays and characters are not drawn in the editor preview — view them in the timeline and properties panel. The backend preview/export bakes them in. */}
 
         </div>
@@ -479,6 +594,3 @@ export default function CanvasPreview({
     </div>
   );
 }
-
-
-
