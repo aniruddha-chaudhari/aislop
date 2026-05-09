@@ -10,6 +10,8 @@ import { computeOverlayPlacement } from './overlayTransform';
 import {
   fixSubtitleClipsTimelineNonOverlap,
   clampSubtitleClipsToTimelineDuration,
+  MIN_SUBTITLE_CLIP_DURATION,
+  excludeSubtitleClipsInRanges,
   clampAssEventToClip,
   getSubtitleWordText,
 } from './subtitleClipNormalize';
@@ -230,16 +232,22 @@ function buildReplaceOverlayRanges(clips: OverlayClip[]): TimeRange[] {
     .map((clip) => ({ start: clip.start, end: clip.start + clip.duration }));
 }
 
+function buildSubtitleMuteRanges(clips: OverlayClip[]): TimeRange[] {
+  return clips
+    .filter((clip) => {
+      if ((clip.planStatus ?? 'approved') === 'draft') return false;
+      if (isReplaceOverlayClip(clip)) return true;
+      // Animation overlays (Hyperframes moments) should hide subtitles while they play.
+      if (isHyperframesAnimationOverlayClip(clip)) return true;
+      return false;
+    })
+    .map((clip) => ({ start: clip.start, end: clip.start + clip.duration }));
+}
+
 function buildCharacterHiddenOverlayRanges(clips: OverlayClip[]): TimeRange[] {
   return clips
     .filter((clip) => isReplaceOverlayClip(clip) || (isHyperframesAnimationOverlayClip(clip) && clip.planStatus !== 'draft'))
     .map((clip) => ({ start: clip.start, end: clip.start + clip.duration }));
-}
-
-function excludeSubtitlesInRanges(subtitleClips: SubtitleClip[], _excludedRanges: TimeRange[]): SubtitleClip[] {
-  // Keep subtitle timeline untouched even during replace overlays.
-  // Dropping subtitle clips before enrichment can shift later word timings.
-  return subtitleClips;
 }
 
 // Ensure preview directory exists
@@ -616,6 +624,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
           assContent += `Dialogue: 0,${formatAssTime(wordStart)},${formatAssTime(wordEnd)},Normal,${speaker},0,0,0,,${subtitleText}\n`;
         });
       }
+    } else {
+      // Fallback: if word timings are missing, still render the subtitle clip text.
+      const startTime = formatAssTime(clip.start);
+      const endTime = formatAssTime(clip.start + clip.duration);
+      assContent += `Dialogue: 0,${startTime},${endTime},Normal,${speaker},0,0,0,,${clip.text}\n`;
     }
   }
 
@@ -828,7 +841,7 @@ export async function generateTimelinePreview(
     const musicClips = musicTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'music') || [])) as MusicClip[];
     const sfxClips = sfxTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'sfx') || [])) as SfxClip[];
 
-    subtitleClips = excludeSubtitlesInRanges(subtitleClips, buildReplaceOverlayRanges(overlayClips));
+    subtitleClips = excludeSubtitleClipsInRanges(subtitleClips, buildSubtitleMuteRanges(overlayClips));
     onProgress?.(15, 'Fetching word timings for karaoke...');
     if (subtitleClips.length > 0) {
       subtitleClips = await enrichSubtitleClipsWithWords(session, subtitleClips);
@@ -1198,7 +1211,7 @@ export async function generateTimelinePreviewHls(
     const musicClips = musicTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'music') || [])) as MusicClip[];
     const sfxClips = sfxTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'sfx') || [])) as SfxClip[];
 
-    subtitleClips = excludeSubtitlesInRanges(subtitleClips, buildReplaceOverlayRanges(overlayClips));
+    subtitleClips = excludeSubtitleClipsInRanges(subtitleClips, buildSubtitleMuteRanges(overlayClips));
     onProgress?.(15, 'Fetching word timings for HLS karaoke...');
     if (subtitleClips.length > 0) {
       subtitleClips = await enrichSubtitleClipsWithWords(session, subtitleClips);
@@ -1619,7 +1632,12 @@ export async function generateTimelineSegmentPreview(
 
         const localStart = Math.max(0, globalStart - segmentStart);
         const localEnd = Math.min(segmentEnd, globalEnd) - segmentStart;
-        const localDuration = Math.max(0.05, localEnd - localStart);
+        const overlap = localEnd - localStart;
+        // If a subtitle only overlaps the segment by a tiny sliver (common when scrubbing across a clip boundary),
+        // rendering it as a 0.05s forced-min event looks like a "skipped" caption and destabilizes perceived sync.
+        // Instead, drop sliver overlaps and let the next (real) clip render.
+        if (overlap < Math.max(MIN_SUBTITLE_CLIP_DURATION, 0.12)) continue;
+        const localDuration = Math.max(MIN_SUBTITLE_CLIP_DURATION, overlap);
 
         let words = clip.words;
         if (words && words.length > 0) {
@@ -1674,9 +1692,9 @@ export async function generateTimelineSegmentPreview(
     );
     let subtitleClips = (subtitleTrack?.clips?.filter((c: any) => c.kind === 'subtitle') || []) as SubtitleClip[];
     const subtitleClipsBeforeFilter = subtitleClips.length;
-    subtitleClips = excludeSubtitlesInRanges(
+    subtitleClips = excludeSubtitleClipsInRanges(
       subtitleClips,
-      buildReplaceOverlayRanges(
+      buildSubtitleMuteRanges(
         planOverlayTracks.flatMap((t: any) => (t.clips?.filter((c: any) => c.kind === 'overlay') || [])) as OverlayClip[]
       )
     );
@@ -1686,10 +1704,19 @@ export async function generateTimelineSegmentPreview(
       // Safety: ensure subtitles never exceed the known full timeline duration before slicing.
       subtitleClips = clampSubtitleClipsToTimelineDuration(subtitleClips, fullDuration);
       subtitleClips = sliceSubtitleClipsToWindow(subtitleClips);
-      subtitleClips = excludeSubtitlesInRanges(subtitleClips, buildReplaceOverlayRanges(overlayClips));
+      subtitleClips = excludeSubtitleClipsInRanges(subtitleClips, buildSubtitleMuteRanges(overlayClips));
     }
     const subtitleClipsInWindow = subtitleClips.length;
     const subtitleWordsInWindow = subtitleClips.reduce((sum, c) => sum + (c.words?.length || 0), 0);
+    const subtitleClipsMissingWordsInWindow = subtitleClips.reduce((sum, c) => sum + ((c.words?.length || 0) === 0 ? 1 : 0), 0);
+    const subtitleClipDebug = subtitleClips.slice(0, 6).map((c) => ({
+      id: c.id,
+      start: c.start,
+      duration: c.duration,
+      textLen: (c.text || '').length,
+      words: c.words?.length || 0,
+      textPreview: (c.text || '').slice(0, 40),
+    }));
 
     let assPath: string | null = null;
     if (subtitleClips.length > 0) {
@@ -1705,7 +1732,9 @@ export async function generateTimelineSegmentPreview(
       subtitleClipsAfterFilter,
       subtitleClipsInWindow,
       subtitleWordsInWindow,
+      subtitleClipsMissingWordsInWindow,
       assGenerated: Boolean(assPath),
+      subtitleClipDebug,
     });
 
     const command = ffmpeg();

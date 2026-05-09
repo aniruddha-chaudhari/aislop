@@ -126,6 +126,7 @@ export default function EditorSidebar({
   const [projectImages, setProjectImages] = useState<ProjectImageAsset[]>([]);
   const [loadingProjectImages, setLoadingProjectImages] = useState(false);
   const [uploadingProjectImage, setUploadingProjectImage] = useState(false);
+  const [brokenProjectImageThumbs, setBrokenProjectImageThumbs] = useState<Record<string, true>>({});
   const [uploadingLibraryVideo, setUploadingLibraryVideo] = useState(false);
   const [animationPrompt, setAnimationPrompt] = useState('');
   const [animationDuration, setAnimationDuration] = useState(3);
@@ -669,9 +670,28 @@ export default function EditorSidebar({
                           key={asset.assetId}
                           className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2"
                         >
-                          <div className="min-w-0">
-                            <div className="truncate text-xs font-semibold text-foreground">{asset.filename}</div>
-                            <div className="text-[10px] text-muted-foreground truncate">{asset.assetId}</div>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="h-10 w-10 shrink-0 rounded-md bg-muted overflow-hidden border border-border">
+                              {!brokenProjectImageThumbs[asset.assetId] ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={`${API_ENDPOINTS.serveProjectImage(project.id, asset.assetId)}?t=${encodeURIComponent(String(asset.createdAt ?? Date.now()))}`}
+                                  alt={asset.filename}
+                                  className="h-full w-full object-cover"
+                                  onError={() => {
+                                    setBrokenProjectImageThumbs((prev) => ({ ...prev, [asset.assetId]: true }));
+                                  }}
+                                />
+                              ) : (
+                                <div className="h-full w-full flex items-center justify-center text-muted-foreground">
+                                  <ImageIcon size={16} />
+                                </div>
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="truncate text-xs font-semibold text-foreground">{asset.filename}</div>
+                              <div className="text-[10px] text-muted-foreground truncate">{asset.assetId}</div>
+                            </div>
                           </div>
                           <button
                             type="button"

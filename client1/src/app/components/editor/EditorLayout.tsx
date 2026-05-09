@@ -177,6 +177,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   const isDirtyRef = useRef(false);
   const isPlayingRef = useRef(false);
   const isInitialTimelineRef = useRef(true);
+  // Avoid stale React closures when requesting previews while editing.
+  const draftProjectRef = useRef(draftProject);
   const playClickAtRef = useRef<number | null>(null);
   const hlsRequestAtRef = useRef<number | null>(null);
   const previewReadyAtRef = useRef<number | null>(null);
@@ -200,6 +202,10 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
   useEffect(() => {
     latestPlayheadRef.current = playheadTime;
   }, [playheadTime]);
+
+  useEffect(() => {
+    draftProjectRef.current = draftProject;
+  }, [draftProject]);
 
   const logPreviewTelemetry = useCallback((event: string, data: Record<string, unknown> = {}) => {
     console.info('[PreviewTelemetry]', {
@@ -274,15 +280,20 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
     };
 
     try {
+      const dp = draftProjectRef.current;
+      const timelineOverride = isDirtyRef.current
+        ? { duration: dp.duration, tracks: dp.tracks }
+        : undefined;
       const res = await fetch(API_ENDPOINTS.generatePreviewSegment(project.id), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ playheadTime: playhead, windowSeconds }),
+        body: JSON.stringify({ playheadTime: playhead, windowSeconds, ...(timelineOverride ? { timeline: timelineOverride } : {}) }),
       });
       const data = await res.json();
       if (seq !== segmentRequestSeqRef.current) return;
       if (applyReady(data)) return;
 
+      const versionFromStart = typeof (data as any)?.version === 'string' ? String((data as any).version) : null;
       clearSegmentPolling();
       segmentPollIntervalRef.current = setInterval(async () => {
         try {
@@ -290,7 +301,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
             clearSegmentPolling();
             return;
           }
-          const statusUrl = `${API_ENDPOINTS.getPreviewSegmentStatus(project.id)}?playheadTime=${encodeURIComponent(String(playhead))}&windowSeconds=${windowSeconds}`;
+          const statusUrl = `${API_ENDPOINTS.getPreviewSegmentStatus(project.id)}?playheadTime=${encodeURIComponent(String(playhead))}&windowSeconds=${windowSeconds}${versionFromStart ? `&version=${encodeURIComponent(versionFromStart)}` : ''}`;
           const statusRes = await fetch(statusUrl);
           const statusData = await statusRes.json();
           if (seq !== segmentRequestSeqRef.current) {
@@ -318,7 +329,12 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
 
   const handlePlayToggle = async () => {
     const next = !isPlaying;
-    const isSegmentSrc = Boolean(previewVideoSrc && previewVideoSrc.includes('/previews/segments/'));
+    // Segment preview URLs come back as `/api/project/:id/preview?mode=segment&...`,
+    // not as raw filesystem paths. Match either form so play correctly swaps to HLS.
+    const isSegmentSrc = Boolean(
+      previewVideoSrc &&
+      (previewVideoSrc.includes('/previews/segments/') || /[?&]mode=segment(?:&|$)/.test(previewVideoSrc))
+    );
     logPreviewTelemetry('play_toggle_clicked', {
       from: isPlaying ? 'playing' : 'paused',
       to: next ? 'playing' : 'paused',

@@ -299,11 +299,27 @@ export default function CanvasPreview({
     // Track the intended playhead time - this is what the user scrubbed to
     lastIntendedPlayheadRef.current = playheadTime;
 
+    // Segment previews are short windows (e.g. 3s) whose local time 0 corresponds to the
+    // current global playhead. Seeking to the global playhead time would land past the end
+    // of the clip and show an empty/blank frame. Let the video element show its natural
+    // first frame (which already represents the playhead position).
+    if (previewSourceMode === 'segment') {
+      isSyncingFromTimelineRef.current = false;
+      isBufferingToSeekRef.current = false;
+      return;
+    }
+
     const diff = Math.abs(video.currentTime - playheadTime);
     if (diff < 0.1) return;
 
     // Check if video is ready for seeking
     if (video.readyState < 1 || !Number.isFinite(video.duration)) {
+      return;
+    }
+
+    // Don't try to seek past the end of the loaded video (e.g. when the video is shorter
+    // than the timeline). This avoids the player getting stuck on a blank end-frame.
+    if (playheadTime > video.duration - 0.05) {
       return;
     }
 
@@ -347,7 +363,7 @@ export default function CanvasPreview({
       video.addEventListener('timeupdate', onTimeUpdate);
       return () => video.removeEventListener('timeupdate', onTimeUpdate);
     }
-  }, [playheadTime, hasVideoSrc, isPlaying]);
+  }, [playheadTime, hasVideoSrc, isPlaying, previewSourceMode]);
 
   return (
     <div className="flex-1 bg-black flex flex-col items-center justify-center relative overflow-hidden min-h-0">

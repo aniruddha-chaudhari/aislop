@@ -5,6 +5,7 @@ import { generateSubtitlesAndCharacters, generateImagePlan } from '../service/ai
 import { getSessionDuration } from '../service/sessionDuration';
 import type { Track, SubtitleClip, OverlayClip } from '../schema/project';
 import { compileTimeline } from '../service/timelineCompiler';
+import { clearRecentMessages } from '../service/eventEmitter';
 import {
   buildSegmentPreviewOutputPath,
   buildTimelinePreviewOutputPath,
@@ -1687,6 +1688,11 @@ export async function startExport(ctx: HttpContext): Promise<HandlerResult> {
 
     console.info('[EXPORT] Start requested', { projectId, exportStep });
 
+    // Drop any buffered SSE events (e.g. a previous export's 'completed' with an
+    // old videoPath) so the fresh EventSource the client is about to open
+    // doesn't immediately replay a stale terminal event for this project.
+    clearRecentMessages(projectId);
+
     // Update status to exporting
     await projectService.updateStatus(projectId, 'exporting');
 
@@ -2252,6 +2258,16 @@ export async function generateProjectPreviewSegment(ctx: HttpContext): Promise<H
     }
 
     const body = (ctx.body as any) || {};
+    // Allow previewing unsaved timeline edits by passing a timeline override from the client.
+    // This is used by the editor's scrub/segment preview while the timeline is dirty.
+    let projectForPreview = project;
+    if (body.timeline) {
+      const parsed = TimelineSchema.safeParse(body.timeline);
+      if (!parsed.success) {
+        return jsonResponse(400, { success: false, error: 'Invalid timeline override for preview' });
+      }
+      projectForPreview = { ...project, timeline: parsed.data };
+    }
     const playheadTimeRaw = Number(body?.playheadTime);
     if (!Number.isFinite(playheadTimeRaw)) {
       return jsonResponse(400, { success: false, error: 'playheadTime (number) is required' });
@@ -2261,7 +2277,7 @@ export async function generateProjectPreviewSegment(ctx: HttpContext): Promise<H
     const windowSeconds = Number.isFinite(windowSecondsRaw) && windowSecondsRaw > 0 ? windowSecondsRaw : 3;
 
     const force = readForceFlag(ctx);
-    const { timelineHash, shortVersion } = getPreviewVersion(project);
+    const { timelineHash, shortVersion } = getPreviewVersion(projectForPreview);
     const outputPath = buildSegmentPreviewOutputPath(projectId, playheadTime, windowSeconds, shortVersion);
     const url = `/api/project/${projectId}/preview?mode=segment&version=${encodeURIComponent(shortVersion)}&playheadTime=${encodeURIComponent(String(playheadTime))}&windowSeconds=${encodeURIComponent(String(windowSeconds))}`;
 
@@ -2312,7 +2328,7 @@ export async function generateProjectPreviewSegment(ctx: HttpContext): Promise<H
             status: { mode: 'segment', state: 'rendering', timelineHash, progress: 25 },
           });
           const result = await generateTimelineSegmentPreview(
-            project,
+            projectForPreview,
             playheadTime,
             windowSeconds,
             undefined,
@@ -2386,25 +2402,27 @@ export async function getProjectPreviewSegmentStatus(ctx: HttpContext): Promise<
     const project = await projectService.getProject(projectId);
     if (!project) return jsonResponse(404, { success: false, error: 'Project not found' });
 
-    const { timelineHash, shortVersion } = getPreviewVersion(project);
     const query = (ctx.query ?? {}) as Record<string, string | undefined>;
     const playheadTime = Number(query.playheadTime);
     const windowSecondsRaw = Number(query.windowSeconds);
     const windowSeconds = Number.isFinite(windowSecondsRaw) && windowSecondsRaw > 0 ? windowSecondsRaw : 3;
+    const requestedVersion = typeof query.version === 'string' && query.version.trim() ? query.version.trim() : null;
+    const { timelineHash, shortVersion } = getPreviewVersion(project);
+    const effectiveVersion = requestedVersion ?? shortVersion;
 
     if (!Number.isFinite(playheadTime)) {
       return jsonResponse(400, { success: false, error: 'playheadTime query param is required' });
     }
 
-    const url = `/api/project/${projectId}/preview?mode=segment&version=${encodeURIComponent(shortVersion)}&playheadTime=${encodeURIComponent(String(playheadTime))}&windowSeconds=${encodeURIComponent(String(windowSeconds))}`;
-    const outputPath = buildSegmentPreviewOutputPath(projectId, playheadTime, windowSeconds, shortVersion);
+    const url = `/api/project/${projectId}/preview?mode=segment&version=${encodeURIComponent(effectiveVersion)}&playheadTime=${encodeURIComponent(String(playheadTime))}&windowSeconds=${encodeURIComponent(String(windowSeconds))}`;
+    const outputPath = buildSegmentPreviewOutputPath(projectId, playheadTime, windowSeconds, effectiveVersion);
     if (fs.existsSync(outputPath)) {
       return jsonResponse(200, {
         success: true,
         mode: 'segment',
         state: 'ready',
         timelineHash,
-        version: shortVersion,
+        version: effectiveVersion,
         progress: 100,
         url,
       });

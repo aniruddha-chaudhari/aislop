@@ -141,3 +141,102 @@ export function getSubtitleWordText(token: unknown): string {
   if (typeof rec.value === 'string') return rec.value.trim();
   return '';
 }
+
+type TimeRange = { start: number; end: number };
+
+function mergeTimeRanges(ranges: TimeRange[]): TimeRange[] {
+  if (!ranges.length) return [];
+  const sorted = [...ranges]
+    .filter((r) => Number.isFinite(r.start) && Number.isFinite(r.end) && r.end > r.start)
+    .sort((a, b) => a.start - b.start);
+  const out: TimeRange[] = [];
+  for (const r of sorted) {
+    if (!out.length || r.start > out[out.length - 1].end) out.push({ ...r });
+    else out[out.length - 1].end = Math.max(out[out.length - 1].end, r.end);
+  }
+  return out;
+}
+
+function subtractRangesFromInterval(start: number, end: number, blocks: TimeRange[]): TimeRange[] {
+  if (end <= start) return [];
+  const merged = mergeTimeRanges(blocks);
+  if (!merged.length) return [{ start, end }];
+  const out: TimeRange[] = [];
+  let x = start;
+  for (const b of merged) {
+    if (b.end <= start) continue;
+    if (b.start >= end) break;
+    const bs = Math.max(b.start, start);
+    const be = Math.min(b.end, end);
+    if (x < bs) out.push({ start: x, end: bs });
+    x = Math.max(x, be);
+    if (x >= end) break;
+  }
+  if (x < end) out.push({ start: x, end });
+  return out;
+}
+
+/**
+ * Remove subtitle visibility inside excluded time ranges (e.g. replace overlays or animation overlays).
+ * This does NOT shift later subtitles: it splits clips around the excluded windows.
+ */
+export function excludeSubtitleClipsInRanges(clips: SubtitleClip[], excludedRanges: TimeRange[]): SubtitleClip[] {
+  if (!clips.length || !excludedRanges.length) return clips;
+  const blocks = mergeTimeRanges(excludedRanges);
+  if (!blocks.length) return clips;
+
+  const out: SubtitleClip[] = [];
+  for (const clip of clips) {
+    const cs = clip.start;
+    const ce = clip.start + clip.duration;
+    const parts = subtractRangesFromInterval(cs, ce, blocks).filter((p) => p.end - p.start >= MIN_SUBTITLE_CLIP_DURATION);
+    if (!parts.length) continue;
+
+    // Precompute word timestamps in absolute time for splitting.
+    const absWords =
+      clip.words && clip.words.length
+        ? clip.words.map((w) => ({
+            word: w.word,
+            absStart: clip.start + w.start,
+            absEnd: clip.start + w.end,
+          }))
+        : null;
+
+    parts.forEach((p, i) => {
+      const duration = p.end - p.start;
+      let words: SubtitleClip['words'] = undefined;
+      let text = clip.text;
+      if (absWords) {
+        const clippedAbs = absWords
+          .filter((w) => w.absEnd > p.start && w.absStart < p.end)
+          .map((w) => ({
+            word: w.word,
+            start: Math.max(0, w.absStart - p.start),
+            end: Math.min(duration, Math.max(0.01, w.absEnd - p.start)),
+          }))
+          .filter((w) => w.end > 0.01 && w.start < duration + 1e-6);
+        const normalized = normalizeWordsInClip(clippedAbs, duration);
+        if (normalized.length) words = normalized;
+        // Critical: avoid repeating muted words after replace/animation.
+        // Rebuild the visible text from the words that actually survive in this part.
+        text = normalized.map((w) => w.word).join(' ').trim() || clip.text;
+      } else if (parts.length > 1) {
+        // No word timings → we cannot safely trim text for post-mute segments.
+        // To avoid repeating the already-spoken text after a replace/animation, only keep the first segment.
+        const isFirstPart = Math.abs(p.start - cs) < 1e-4;
+        if (!isFirstPart) return;
+      }
+
+      out.push({
+        ...clip,
+        id: parts.length === 1 ? clip.id : `${clip.id}_nosub${i}`,
+        start: p.start,
+        duration,
+        text,
+        ...(words ? { words } : {}),
+      });
+    });
+  }
+
+  return out;
+}

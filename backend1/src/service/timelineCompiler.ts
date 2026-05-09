@@ -8,6 +8,7 @@ import { enrichSubtitleClipsWithWords } from './previewGenerator';
 import {
   fixSubtitleClipsTimelineNonOverlap,
   clampSubtitleClipsToTimelineDuration,
+  excludeSubtitleClipsInRanges,
   clampAssEventToClip,
   getSubtitleWordText,
 } from './subtitleClipNormalize';
@@ -27,6 +28,37 @@ const VIDEO_OUTPUT_DIR = path.join(process.cwd(), 'storage', 'videos');
 const TEMP_DIR = path.join(process.cwd(), 'storage', 'temp');
 const IMAGE_UPLOAD_DIR = path.join(process.cwd(), 'storage', 'images');
 const AUDIO_TAIL_BUFFER_SEC = 1.2;
+
+/** Parse FFmpeg `time=HH:MM:SS.xx` style timemark from fluent-ffmpeg progress payloads. */
+function parseFfmpegTimemarkSeconds(mark: unknown): number | null {
+  if (typeof mark !== 'string') return null;
+  const trimmed = mark.trim();
+  if (!trimmed) return null;
+  const normalized = trimmed.replace(',', '.');
+  const parts = normalized.split(':');
+  if (parts.length !== 3) return null;
+  const h = Number(parts[0]);
+  const m = Number(parts[1]);
+  const sec = Number(parts[2]);
+  if (![h, m, sec].every((x) => Number.isFinite(x))) return null;
+  return h * 3600 + m * 60 + sec;
+}
+
+/**
+ * fluent-ffmpeg often omits `percent` for filter_complex / NVENC; `timemark` vs output `-t`
+ * duration is still updated on stderr and gives a usable progress bar.
+ */
+function exportProgressPercent(progress: any, outputDurationSeconds: number): number | null {
+  const p = Number(progress?.percent);
+  if (Number.isFinite(p) && p > 0 && p <= 100) {
+    return Math.min(99, Math.round(p));
+  }
+  const t = parseFfmpegTimemarkSeconds(progress?.timemark);
+  if (t != null && t >= 0 && outputDurationSeconds > 0.01) {
+    return Math.min(99, Math.max(1, Math.round((t / outputDurationSeconds) * 100)));
+  }
+  return null;
+}
 
 /**
  * Gap between karaoke tokens. Plain spaces can collapse next to {\\c...} in libass/ffmpeg.
@@ -115,6 +147,17 @@ function buildReplaceOverlayRanges(clips: OverlayClip[]): TimeRange[] {
     }));
 }
 
+function buildSubtitleMuteRanges(clips: OverlayClip[]): TimeRange[] {
+  return clips
+    .filter((clip) => {
+      if (clip.planStatus === 'draft') return false;
+      if (isReplaceOverlayClip(clip)) return true;
+      if (isHyperframesAnimationOverlayClip(clip)) return true;
+      return false;
+    })
+    .map((clip) => ({ start: clip.start, end: clip.start + clip.duration }));
+}
+
 function buildCharacterHiddenOverlayRanges(clips: OverlayClip[]): TimeRange[] {
   return clips
     .filter((clip) => isReplaceOverlayClip(clip) || (isHyperframesAnimationOverlayClip(clip) && clip.planStatus !== 'draft'))
@@ -122,12 +165,6 @@ function buildCharacterHiddenOverlayRanges(clips: OverlayClip[]): TimeRange[] {
       start: clip.start,
       end: clip.start + clip.duration,
     }));
-}
-
-function excludeSubtitlesInRanges(subtitleClips: SubtitleClip[], _excludedRanges: TimeRange[]): SubtitleClip[] {
-  // Keep subtitle timeline untouched even during replace overlays.
-  // Dropping subtitle clips before enrichment can shift later word timings.
-  return subtitleClips;
 }
 
 type AudioInputRef = { clip: MusicClip | SfxClip; inputIndex: number; kind: 'music' | 'sfx' };
@@ -292,8 +329,8 @@ export async function compileTimeline(
     ) ?? [];
 
     if (subtitleClips.length > 0 && exportStep >= 2) {
-      const replaceOverlayRanges = buildReplaceOverlayRanges(overlayClips);
-      subtitleClips = excludeSubtitlesInRanges(subtitleClips, replaceOverlayRanges);
+      const muteRanges = buildSubtitleMuteRanges(overlayClips);
+      subtitleClips = excludeSubtitleClipsInRanges(subtitleClips, muteRanges);
       const session = await loadSessionForExport(project.audioSessionId);
       if (session && subtitleClips.length > 0) {
         subtitleClips = await enrichSubtitleClipsWithWords(session, subtitleClips);
@@ -543,16 +580,27 @@ export async function compileTimeline(
     command.outputOptions(outputOpts);
 
     command.output(outputPath);
-    command.on('progress', (progress: any) => {
-      if (progress.percent && onProgress) {
-        const percent = Math.min(Math.round(progress.percent), 99);
-        onProgress(percent, `Rendering video: ${percent}%`);
 
-        publishFileUpdate(project.id, {
-          type: 'progress',
-          message: `Rendering video: ${percent}%`,
-          percent,
-        });
+    let lastPublishedPercent = -1;
+    const publishExportProgress = (percent: number, message: string) => {
+      if (percent === lastPublishedPercent) return;
+      lastPublishedPercent = percent;
+      onProgress?.(percent, message);
+      publishFileUpdate(project.id, {
+        type: 'progress',
+        message,
+        percent,
+      });
+    };
+
+    command.on('start', () => {
+      publishExportProgress(1, 'Starting encoder…');
+    });
+
+    command.on('progress', (progress: any) => {
+      const percent = exportProgressPercent(progress, duration);
+      if (percent != null) {
+        publishExportProgress(percent, `Rendering video: ${percent}%`);
       }
     });
 

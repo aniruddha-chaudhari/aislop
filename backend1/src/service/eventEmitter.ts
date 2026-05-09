@@ -87,6 +87,19 @@ export function getRecentMessages(sessionId: string): Array<{ timestamp: number;
 }
 
 /**
+ * Clear recent messages for a session.
+ *
+ * Call this before starting a new long-running operation (e.g. export) for the
+ * given session so that stale terminal events ('completed' / 'error') from a
+ * previous run aren't replayed to fresh SSE connections, which would otherwise
+ * cause the client to act on the previous run's result (e.g. show the old
+ * exported video file) instead of the in-flight one.
+ */
+export function clearRecentMessages(sessionId: string): void {
+  recentMessages.delete(sessionId);
+}
+
+/**
  * Clean up old messages (optional, can be called periodically)
  */
 export function cleanupOldMessages(maxAge: number = 60 * 60 * 1000): void {

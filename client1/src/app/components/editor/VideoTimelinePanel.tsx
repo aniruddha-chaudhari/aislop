@@ -305,15 +305,75 @@ export default function VideoTimelinePanel({
     return `${mins}:${String(secs).padStart(2, '0')}`;
   };
 
+  // More precise time format used on the playhead badge so scrubbing shows sub-second accuracy.
+  const formatPlayheadTime = (seconds: number) => {
+    const safe = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+    const mins = Math.floor(safe / 60);
+    const secs = Math.floor(safe % 60);
+    const cs = Math.floor((safe - Math.floor(safe)) * 100);
+    return `${mins}:${String(secs).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+  };
+
   const pxPerSecond = useMemo(() => 70 * timelineZoom, [timelineZoom]);
   const laneWidth = useMemo(() => Math.max(600, project.duration * pxPerSecond), [project.duration, pxPerSecond]);
 
-  const timeTicks = useMemo(() => {
-    const step = project.duration <= 60 ? 5 : 10;
+  // Adaptive ruler scale. Pick a "nice" major step so labels are at least MIN_LABEL_PX apart,
+  // and a matching minor subdivision that sits on visually clean fractions (halves/fifths).
+  const { majorStep, minorStep } = useMemo(() => {
+    const MIN_LABEL_PX = 56;
+    const MIN_MINOR_PX = 6;
+    const NICE: ReadonlyArray<{ major: number; minor: number }> = [
+      { major: 0.1, minor: 0.05 },
+      { major: 0.2, minor: 0.1 },
+      { major: 0.5, minor: 0.1 },
+      { major: 1, minor: 0.5 },
+      { major: 2, minor: 1 },
+      { major: 5, minor: 1 },
+      { major: 10, minor: 5 },
+      { major: 15, minor: 5 },
+      { major: 30, minor: 10 },
+      { major: 60, minor: 30 },
+      { major: 120, minor: 60 },
+      { major: 300, minor: 60 },
+      { major: 600, minor: 60 },
+      { major: 1800, minor: 600 },
+    ];
+    const minSeconds = MIN_LABEL_PX / Math.max(1, pxPerSecond);
+    const pick = NICE.find((s) => s.major >= minSeconds) ?? NICE[NICE.length - 1];
+    const useMinor = pick.minor * pxPerSecond >= MIN_MINOR_PX;
+    return { majorStep: pick.major, minorStep: useMinor ? pick.minor : pick.major };
+  }, [pxPerSecond]);
+
+  const majorTicks = useMemo(() => {
     const out: number[] = [];
-    for (let t = 0; t <= project.duration + 0.0001; t += step) out.push(t);
+    if (!Number.isFinite(project.duration) || project.duration <= 0) return out;
+    for (let t = 0; t <= project.duration + 1e-6; t += majorStep) {
+      out.push(Number(t.toFixed(3)));
+    }
     return out;
-  }, [project.duration]);
+  }, [project.duration, majorStep]);
+
+  const minorTicks = useMemo(() => {
+    if (minorStep >= majorStep) return [];
+    const out: number[] = [];
+    if (!Number.isFinite(project.duration) || project.duration <= 0) return out;
+    for (let t = 0; t <= project.duration + 1e-6; t += minorStep) {
+      const nearestMajor = Math.round(t / majorStep) * majorStep;
+      if (Math.abs(nearestMajor - t) < 1e-6) continue;
+      out.push(Number(t.toFixed(3)));
+    }
+    return out;
+  }, [project.duration, majorStep, minorStep]);
+
+  const formatRulerTick = (seconds: number): string => {
+    const safe = Math.max(0, seconds);
+    const mins = Math.floor(safe / 60);
+    const secs = safe - mins * 60;
+    if (majorStep < 1) {
+      return `${mins}:${secs.toFixed(1).padStart(4, '0')}`;
+    }
+    return `${mins}:${String(Math.floor(secs)).padStart(2, '0')}`;
+  };
 
   const timelineContentRef = useRef<HTMLDivElement | null>(null);
   const playheadDragRef = useRef(false);
@@ -721,10 +781,14 @@ export default function VideoTimelinePanel({
               <div ref={timelineContentRef} className="relative" style={{ width: `${laneWidth}px` }}>
                 {/* Draggable playhead */}
                 <div
-                  className="absolute top-0 bottom-0 w-3 -translate-x-1/2 cursor-ew-resize z-10 flex justify-center"
+                  className="absolute top-0 bottom-0 w-3 -translate-x-1/2 cursor-ew-resize z-20 flex justify-center"
                   style={{ left: `${playheadTime * pxPerSecond}px` }}
                   onPointerDown={onPlayheadPointerDown}
                 >
+                  {/* Time readout that follows the scrub */}
+                  <div className="absolute top-0 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded-sm bg-accent text-accent-foreground text-[10px] font-semibold tabular-nums leading-none shadow-sm pointer-events-none whitespace-nowrap">
+                    {formatPlayheadTime(playheadTime)}
+                  </div>
                   <div className="w-px flex-1 bg-accent pointer-events-none" />
                 </div>
 
@@ -733,14 +797,25 @@ export default function VideoTimelinePanel({
                   className="h-8 border-b border-border bg-card relative cursor-pointer"
                   onClick={onRulerClick}
                 >
-                  {timeTicks.map((t) => (
+                  {/* Minor ticks (no labels) */}
+                  {minorTicks.map((t) => (
                     <div
-                      key={t}
-                      className="absolute top-0 h-full flex flex-col items-center -translate-x-1/2"
+                      key={`min-${t}`}
+                      className="absolute top-0 w-px h-1.5 bg-foreground/15 -translate-x-1/2 pointer-events-none"
+                      style={{ left: `${t * pxPerSecond}px` }}
+                    />
+                  ))}
+                  {/* Major ticks with labels */}
+                  {majorTicks.map((t) => (
+                    <div
+                      key={`maj-${t}`}
+                      className="absolute top-0 h-full flex flex-col items-center -translate-x-1/2 pointer-events-none"
                       style={{ left: `${t * pxPerSecond}px` }}
                     >
-                      <div className="h-2 w-px bg-foreground/20" />
-                      <div className="text-[10px] text-muted-foreground">{t}s</div>
+                      <div className="h-2.5 w-px bg-foreground/35" />
+                      <div className="mt-0.5 text-[10px] text-muted-foreground tabular-nums leading-none">
+                        {formatRulerTick(t)}
+                      </div>
                     </div>
                   ))}
                 </div>
