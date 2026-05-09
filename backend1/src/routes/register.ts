@@ -55,8 +55,10 @@ register([
   // Image
   { method: 'POST', pattern: '/api/image/generate', handler: generateImage },
 
-  // Character Images
-  { method: 'GET', pattern: '/api/character-image/:character/:emotion?', handler: character.getCharacterImage },
+  // Character Images — emotion must be `:emotion` (not `:emotion?`): matchPath uses the literal segment name,
+  // so `:emotion?` was binding to params['emotion?'] and ctx.params.emotion was always undefined → neutral only.
+  { method: 'GET', pattern: '/api/character-image/:character/:emotion', handler: character.getCharacterImage },
+  { method: 'GET', pattern: '/api/character-image/:character', handler: character.getCharacterImage },
   { method: 'GET', pattern: '/api/character-images', handler: character.listCharacterImages },
 
   // Video

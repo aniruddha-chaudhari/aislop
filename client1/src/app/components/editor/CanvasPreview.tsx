@@ -1,11 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import Hls from 'hls.js';
-import type { Clip, ClipRef, EditorProject } from '../../../features/editor/types';
-import { API_ENDPOINTS } from '../../../config/api';
+import type { CharacterClip, Clip, ClipRef, EditorProject, OverlayClip, SubtitleClip, WordTimestamp } from '../../../features/editor/types';
+import { API_BASE_URL, API_ENDPOINTS } from '../../../config/api';
 import { CanvasCompositor } from '../../../lib/canvasCompositor';
 import { AudioEngine } from '../../../lib/audioEngine';
+import { voiceDisplayName } from '../../../features/editor/voiceDisplayName';
+import { resolveCharacterClipEmotion } from '../../../features/editor/characterClipEmotion';
 
 export type PreviewPlayerApi = {
   /** Optional: seek to this time (seconds) before playing. Use current playhead so video starts from timeline position. */
@@ -36,6 +38,248 @@ type Props = {
   /** Telemetry hook: fired once when first frame is observed after playback starts. */
   onFirstFrame?: () => void;
 };
+
+const FRAME_W = 1080;
+const FRAME_H = 1920;
+function clamp(n: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, n));
+}
+
+function isStillMedia(src: string): boolean {
+  return /\.(png|jpe?g|webp|gif|bmp|avif)(?:$|[?#])/i.test(src);
+}
+
+function isVideoMedia(src: string): boolean {
+  return /\.(mp4|webm|mov|m4v)(?:$|[?#])/i.test(src);
+}
+
+function isHyperframesOverlay(clip: OverlayClip): boolean {
+  return clip.animationType === 'hyperframes' || Boolean(clip.animationMomentId);
+}
+
+function isReplaceOverlay(clip: OverlayClip): boolean {
+  return clip.displayMode === 'replace' && clip.planStatus !== 'draft';
+}
+
+function hidesSubtitles(clip: OverlayClip): boolean {
+  if (clip.planStatus === 'draft') return false;
+  return isReplaceOverlay(clip) || isHyperframesOverlay(clip);
+}
+
+function hidesCharacters(clip: OverlayClip): boolean {
+  return isReplaceOverlay(clip) || (isHyperframesOverlay(clip) && clip.planStatus !== 'draft');
+}
+
+function isTimeInsideClip(time: number, clip: { start: number; duration: number }): boolean {
+  return time >= clip.start && time < clip.start + clip.duration;
+}
+
+type CharacterBucket = 'stewie' | 'peter' | 'other';
+
+const CHARACTER_GEOM: Record<CharacterBucket, { x: number; y: number; w: number; h: number }> = {
+  stewie: { x: 300, y: 1350, w: 500, h: 600 },
+  peter: { x: 300, y: 1250, w: 580, h: 720 },
+  other: { x: 260, y: 1160, w: 560, h: 760 },
+};
+
+function characterBucket(character: string): CharacterBucket {
+  if (character === 'Stewie') return 'stewie';
+  if (character === 'Peter' || character === 'Narrator') return 'peter';
+  return 'other';
+}
+
+function characterStyle(clip: CharacterClip): CSSProperties {
+  const geom = CHARACTER_GEOM[characterBucket(clip.character)];
+  return {
+    position: 'absolute',
+    left: `${(geom.x / FRAME_W) * 100}%`,
+    top: `${(geom.y / FRAME_H) * 100}%`,
+    width: `${(geom.w / FRAME_W) * 100}%`,
+    height: `${(geom.h / FRAME_H) * 100}%`,
+    objectFit: 'contain',
+  };
+}
+
+function wordsForSubtitle(clip: SubtitleClip): WordTimestamp[] {
+  if (clip.words?.length) return clip.words;
+  const rawWords = clip.text ? clip.text.split(/\s+/).filter(Boolean) : [];
+  if (!rawWords.length) return [];
+  const wordDuration = Math.max(0.1, clip.duration / rawWords.length);
+  return rawWords.map((word, i) => ({ word, start: i * wordDuration, end: (i + 1) * wordDuration }));
+}
+
+/**
+ * Mirrors backend ASS karaoke layout from `generateAssFromTimeline`:
+ * - 3-word rolling group based on the active word.
+ * - When the joined group text exceeds 25 chars and the group has >2 words,
+ *   first two words go on line 1 and the third word on line 2 (matches `\N` split).
+ * - Active word is highlighted yellow, others white.
+ */
+type SubtitleAssLayout = {
+  line1: { word: string; absoluteIndex: number }[];
+  line2: { word: string; absoluteIndex: number }[];
+  activeAbsoluteIndex: number;
+};
+
+const ASS_INTER_WORD_GAP = '\u2002';
+
+function subtitleAssLayoutAtTime(clip: SubtitleClip, playheadTime: number): SubtitleAssLayout | null {
+  const words = wordsForSubtitle(clip);
+  if (!words.length) return clip.text ? { line1: [{ word: clip.text, absoluteIndex: -1 }], line2: [], activeAbsoluteIndex: -1 } : null;
+
+  const relTime = playheadTime - clip.start;
+  const liveActive = words.findIndex((word) => relTime >= word.start && relTime < word.end);
+  const safeActive = liveActive >= 0 ? liveActive : Math.max(0, words.length - 1);
+  const groupStart = Math.floor(safeActive / 3) * 3;
+  const wordGroup = words.slice(groupStart, Math.min(groupStart + 3, words.length));
+
+  const fullText = wordGroup.map((w) => w.word).join(' ');
+  const isTooLong = fullText.length > 25 && wordGroup.length > 2;
+
+  const decorate = (slice: WordTimestamp[], absStart: number) =>
+    slice.map((w, idx) => ({ word: w.word, absoluteIndex: absStart + idx }));
+
+  if (isTooLong) {
+    return {
+      line1: decorate(wordGroup.slice(0, 2), groupStart),
+      line2: decorate(wordGroup.slice(2, 3), groupStart + 2),
+      activeAbsoluteIndex: liveActive,
+    };
+  }
+  return {
+    line1: decorate(wordGroup, groupStart),
+    line2: [],
+    activeAbsoluteIndex: liveActive,
+  };
+}
+
+function SubtitlePreview({
+  layout,
+}: {
+  layout: SubtitleAssLayout;
+}) {
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const [scale, setScale] = useState(1);
+
+  useEffect(() => {
+    const el = frameRef.current;
+    if (!el) return;
+    const updateScale = () => {
+      const rect = el.getBoundingClientRect();
+      setScale(rect.height > 0 ? rect.height / FRAME_H : 1);
+    };
+    updateScale();
+    const observer = new ResizeObserver(updateScale);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // ASS Style: Normal,Arial-Black,48,&H00FFFFFF,...,1,3,2,2,30,30,800,1
+  // PlayResY=1920 reference; ScaledBorderAndShadow=yes → outline/shadow scale with frame height.
+  const fontSize = 48 * scale;
+  const marginBottom = 800 * scale;
+  const sideMargin = 30 * scale;
+  const outline = 3 * scale;
+  const shadow = 2 * scale;
+  const ACTIVE = '#FFFF00';
+  const INACTIVE = '#FFFFFF';
+
+  const renderLine = (line: SubtitleAssLayout['line1'], keyPrefix: string) => (
+    <div key={keyPrefix} style={{ whiteSpace: 'nowrap' }}>
+      {line.map((token, idx) => (
+        <span key={`${keyPrefix}_${idx}`}>
+          {idx > 0 ? ASS_INTER_WORD_GAP : ''}
+          <span style={{ color: token.absoluteIndex === layout.activeAbsoluteIndex ? ACTIVE : INACTIVE }}>
+            {token.word}
+          </span>
+        </span>
+      ))}
+    </div>
+  );
+
+  return (
+    <div ref={frameRef} className="absolute inset-0 pointer-events-none" style={{ zIndex: 32 }}>
+      <div
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          bottom: `${marginBottom}px`,
+          paddingLeft: `${sideMargin}px`,
+          paddingRight: `${sideMargin}px`,
+          textAlign: 'center',
+          fontFamily: '"Arial Black", "Arial-Black", Arial, sans-serif',
+          fontSize: `${fontSize}px`,
+          fontWeight: 900,
+          lineHeight: 1,
+          color: INACTIVE,
+          // BorderStyle=1 + Outline=3 black + Shadow=2 + BackColour=&H80000000 (50% black).
+          WebkitTextStroke: `${outline}px #000000`,
+          paintOrder: 'stroke fill',
+          textShadow: `${shadow}px ${shadow}px 0 rgba(0,0,0,0.5)`,
+        }}
+      >
+        {renderLine(layout.line1, 'l1')}
+        {layout.line2.length > 0 && renderLine(layout.line2, 'l2')}
+      </div>
+    </div>
+  );
+}
+
+function OverlayVideo({
+  clip,
+  src,
+  style,
+  isPlaying,
+  playheadTime,
+}: {
+  clip: OverlayClip;
+  src: string;
+  style: CSSProperties;
+  isPlaying: boolean;
+  playheadTime: number;
+}) {
+  const ref = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    const video = ref.current;
+    if (!video) return;
+    const relativeTime = clamp(playheadTime - clip.start, 0, clip.duration);
+    if (Number.isFinite(relativeTime) && Math.abs(video.currentTime - relativeTime) > 0.15) {
+      try {
+        video.currentTime = relativeTime;
+      } catch {
+        // Some browsers reject seeking before metadata; loadedmetadata below will retry.
+      }
+    }
+    if (isPlaying) {
+      video.play().catch(() => {});
+    } else {
+      video.pause();
+    }
+  }, [clip.duration, clip.start, isPlaying, playheadTime]);
+
+  return (
+    <video
+      ref={ref}
+      src={src}
+      className="block"
+      style={style}
+      muted
+      playsInline
+      preload="auto"
+      onLoadedMetadata={() => {
+        const video = ref.current;
+        if (!video) return;
+        const relativeTime = clamp(playheadTime - clip.start, 0, clip.duration);
+        try {
+          video.currentTime = relativeTime;
+        } catch {}
+      }}
+    />
+  );
+}
+
 
 export default function CanvasPreview({
   project,
@@ -136,6 +380,108 @@ export default function CanvasPreview({
     // Support cache-busted playlist URLs like ".../index.m3u8?t=123".
     return /\.m3u8(?:$|[?#])/i.test(previewVideoSrc);
   }, [previewVideoSrc]);
+  const activeOverlayClips = useMemo(() => {
+    const clips: OverlayClip[] = [];
+    for (const track of project.tracks) {
+      if (track.type !== 'overlay' || track.id === 't_overlay_template') continue;
+      for (const clip of track.clips) {
+        if (clip.kind !== 'overlay') continue;
+        const overlay = clip as OverlayClip;
+        if (overlay.planStatus === 'draft') continue;
+        if (playheadTime < overlay.start || playheadTime > overlay.start + overlay.duration) continue;
+        clips.push(overlay);
+      }
+    }
+    return clips;
+  }, [project.tracks, playheadTime]);
+  const activeOverlayHideState = useMemo(() => {
+    let hideSubtitles = false;
+    let hideCharacters = false;
+    for (const track of project.tracks) {
+      if (track.type !== 'overlay' || track.id === 't_overlay_template') continue;
+      for (const clip of track.clips) {
+        if (clip.kind !== 'overlay') continue;
+        const overlay = clip as OverlayClip;
+        if (!isTimeInsideClip(playheadTime, overlay)) continue;
+        hideSubtitles = hideSubtitles || hidesSubtitles(overlay);
+        hideCharacters = hideCharacters || hidesCharacters(overlay);
+      }
+    }
+    return { hideSubtitles, hideCharacters };
+  }, [project.tracks, playheadTime]);
+  /**
+   * One active clip per character slot (stewie / peter / other). Mirrors how FFmpeg
+   * stacks character overlays per bucket and lets React reuse a stable `<img>` per slot.
+   * Use `<` end (exclusive) so two clips sharing a boundary don't both render the same frame.
+   */
+  const activeCharacterClipsBySlot = useMemo(() => {
+    const out: Record<CharacterBucket, CharacterClip | null> = {
+      stewie: null,
+      peter: null,
+      other: null,
+    };
+    if (activeOverlayHideState.hideCharacters) return out;
+    for (const track of project.tracks) {
+      if (track.type !== 'character') continue;
+      for (const clip of track.clips) {
+        if (clip.kind !== 'character') continue;
+        const character = clip as CharacterClip;
+        if (playheadTime < character.start || playheadTime >= character.start + character.duration) continue;
+        const slot = characterBucket(character.character);
+        if (out[slot] == null) out[slot] = character;
+      }
+    }
+    return out;
+  }, [activeOverlayHideState.hideCharacters, project.tracks, playheadTime]);
+  const activeSubtitle = useMemo(() => {
+    if (activeOverlayHideState.hideSubtitles) return null;
+    for (const track of project.tracks) {
+      if (track.type !== 'subtitle') continue;
+      for (const clip of track.clips) {
+        if (clip.kind !== 'subtitle') continue;
+        const subtitle = clip as SubtitleClip;
+        if (playheadTime >= subtitle.start && playheadTime < subtitle.start + subtitle.duration) {
+          return subtitle;
+        }
+      }
+    }
+    return null;
+  }, [activeOverlayHideState.hideSubtitles, project.tracks, playheadTime]);
+  const activeSubtitleLayout = useMemo(
+    () => (activeSubtitle ? subtitleAssLayoutAtTime(activeSubtitle, playheadTime) : null),
+    [activeSubtitle, playheadTime]
+  );
+
+  const getOverlayUrl = useCallback((clip: OverlayClip): string => {
+    if (clip.path && (clip.path.startsWith('http://') || clip.path.startsWith('https://'))) return clip.path;
+    return API_ENDPOINTS.serveProjectImage(project.id, clip.assetId);
+  }, [project.id]);
+
+  const characterImageUrl = useCallback((clip: CharacterClip): string => {
+    const name = encodeURIComponent(voiceDisplayName(clip.character));
+    const emotion = encodeURIComponent(resolveCharacterClipEmotion(project, clip));
+    return `${API_BASE_URL}/api/character-image/${name}/${emotion}`;
+  }, [project]);
+
+  /** Baked FFmpeg preview (segment/HLS) already composites overlays, characters, subtitles — hide DOM duplicates. */
+  const showDomTimelineComposite = !previewVideoSrc;
+
+  // Warm the browser image cache with every resolved sprite URL (same resolution as FFmpeg's per-clip inputs).
+  useEffect(() => {
+    const seen = new Set<string>();
+    for (const track of project.tracks) {
+      if (track.type !== 'character') continue;
+      for (const clip of track.clips) {
+        if (clip.kind !== 'character') continue;
+        const cc = clip as CharacterClip;
+        const url = characterImageUrl(cc);
+        if (seen.has(url)) continue;
+        seen.add(url);
+        const img = new Image();
+        img.src = url;
+      }
+    }
+  }, [project.tracks, characterImageUrl]);
 
   const lastSeekedRef = useRef<number>(0);
   const videoReadyRef = useRef(false);
@@ -150,7 +496,13 @@ export default function CanvasPreview({
     compositorRef.current = compositor;
     setLocalCanvasReady(true);
     compositor.preloadImages(project);
-    compositor.renderFrame(projectRef.current, lastIntendedPlayheadRef.current, { drawTemplate: false }).catch(console.warn);
+    compositor.renderFrame(projectRef.current, lastIntendedPlayheadRef.current, {
+      drawTemplate: false,
+      drawOverlays: false,
+      drawCharacters: false,
+      drawSubtitles: false,
+      drawSubtitleBackground: false,
+    }).catch(console.warn);
 
     // Initialise AudioEngine and pre-fetch audio assets
     if (!audioEngineRef.current) {
@@ -169,7 +521,13 @@ export default function CanvasPreview({
   // Static scrub rendering when paused
   useEffect(() => {
     if (isPlaying || !compositorRef.current || !localCanvasReady) return;
-    compositorRef.current.renderFrame(project, playheadTime, { drawTemplate: false }).catch(console.warn);
+    compositorRef.current.renderFrame(project, playheadTime, {
+      drawTemplate: false,
+      drawOverlays: false,
+      drawCharacters: false,
+      drawSubtitles: false,
+      drawSubtitleBackground: false,
+    }).catch(console.warn);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playheadTime, isPlaying, localCanvasReady]);
 
@@ -184,7 +542,13 @@ export default function CanvasPreview({
       if (now - lastFrameTime >= 16) {
         try {
           const currentTime = Math.min(duration, audioEngineRef.current!.getCurrentTime());
-          compositorRef.current!.renderFrame(projectRef.current, currentTime, { drawTemplate: false }).catch((err) => console.warn('[CanvasPreview] renderFrame error', err));
+          compositorRef.current!.renderFrame(projectRef.current, currentTime, {
+            drawTemplate: false,
+            drawOverlays: false,
+            drawCharacters: false,
+            drawSubtitles: false,
+            drawSubtitleBackground: false,
+          }).catch((err) => console.warn('[CanvasPreview] renderFrame error', err));
           onPlayheadChangeRef.current(currentTime);
           if (!firstFrameReportedRef.current) {
             firstFrameReportedRef.current = true;
@@ -577,6 +941,96 @@ export default function CanvasPreview({
             )}
           </div>
 
+          {showDomTimelineComposite && activeOverlayClips.map((clip) => {
+            const url = getOverlayUrl(clip);
+            const hint = clip.path || clip.label || clip.assetId;
+            const isVideo = isVideoMedia(hint) || (!isStillMedia(hint) && isVideoMedia(url));
+            const isReplace = clip.displayMode === 'replace';
+            const isFullFrameVideo = isVideo && (isReplace || isHyperframesOverlay(clip));
+            // Mirrors backend: replace = full frame letterboxed; hyperframes = full frame transparent;
+            // everything else (image OR video) fills the top region above the subtitle band.
+            const style: CSSProperties = isReplace
+              ? {
+                  position: 'absolute',
+                  inset: 0,
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'contain',
+                  background: '#101014',
+                  zIndex: 24,
+                  pointerEvents: 'none',
+                }
+              : isFullFrameVideo
+                ? {
+                    position: 'absolute',
+                    inset: 0,
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'contain',
+                    zIndex: 26,
+                    pointerEvents: 'none',
+                  }
+                : {
+                    position: 'absolute',
+                    left: 0,
+                    top: 0,
+                    width: '100%',
+                    height: `${((FRAME_H - 700) / FRAME_H) * 100}%`,
+                    objectFit: 'contain',
+                    objectPosition: 'top center',
+                    zIndex: 26,
+                    pointerEvents: 'none',
+                  };
+
+            if (isVideo) {
+              return (
+              <OverlayVideo
+                key={clip.id}
+                clip={clip}
+                src={url}
+                style={style}
+                isPlaying={isPlaying}
+                playheadTime={playheadTime}
+              />
+              );
+            }
+
+            return (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                key={clip.id}
+                src={url}
+                alt={clip.label}
+                className="block"
+                style={style}
+              />
+            );
+          })}
+
+          {showDomTimelineComposite &&
+            (Object.entries(activeCharacterClipsBySlot) as Array<[CharacterBucket, CharacterClip | null]>)
+              .filter(([, clip]) => clip != null)
+              .map(([slot, clip]) => {
+                const c = clip as CharacterClip;
+                const emo = resolveCharacterClipEmotion(project, c);
+                return (
+                  // Stable key per slot → same <img> element across clip transitions, so the
+                  // browser re-uses the cached bitmap (no flicker / "cycling" through all sprites).
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    key={`character_slot_${slot}`}
+                    src={characterImageUrl(c)}
+                    alt={`${voiceDisplayName(c.character)} ${emo}`}
+                    className="block pointer-events-none"
+                    style={{ ...characterStyle(c), zIndex: 28 }}
+                  />
+                );
+              })}
+
+          {showDomTimelineComposite && activeSubtitleLayout && (
+            <SubtitlePreview layout={activeSubtitleLayout} />
+          )}
+
           <canvas
             ref={canvasRef}
             className="absolute inset-0 w-full h-full"
@@ -584,10 +1038,11 @@ export default function CanvasPreview({
               zIndex: 30,
               display: localCanvasReady ? 'block' : 'none',
               objectFit: 'contain',
+              pointerEvents: 'none',
             }}
           />
 
-          {/* Overlays and characters are not drawn in the editor preview — view them in the timeline and properties panel. The backend preview/export bakes them in. */}
+          {/* Template-only mode: DOM composites timeline clips. When previewVideoSrc is set, FFmpeg preview already bakes the same stack (see showDomTimelineComposite). */}
 
         </div>
       </div>

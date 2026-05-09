@@ -6,7 +6,6 @@ import { PrismaClient } from '../generated/prisma';
 import type { Project, SubtitleClip, OverlayClip, CharacterClip, MusicClip, SfxClip } from '../schema/project';
 import { getCharacterClipImagePath } from '../utils/characterImages';
 import { appendCharacterClipsToFilterComplex, expandCharacterClipsExcludingReplaceRanges } from './characterOverlayFilters';
-import { computeOverlayPlacement } from './overlayTransform';
 import {
   fixSubtitleClipsTimelineNonOverlap,
   clampSubtitleClipsToTimelineDuration,
@@ -53,11 +52,6 @@ function previewDebug(message: string, data?: Record<string, unknown>): void {
   if (data) console.debug(message, data);
   else console.debug(message);
 }
-
-// Overlay base size (legacy default scale=0.5) and legacy top offset.
-const OVERLAY_BASE_W = Math.floor(960 * (PREVIEW_WIDTH / 1080)); // 320 at 360px width
-const OVERLAY_BASE_H = Math.floor(720 * (PREVIEW_HEIGHT / 1920)); // 240 at 640px height
-const OVERLAY_LEGACY_TOP_Y = Math.floor(40 * (PREVIEW_HEIGHT / 1920)); // 13 at 640px height (~40px at 1920)
 
 function sanitizePreviewVersion(versionTag?: string): string {
   const raw = (versionTag || 'latest').trim();
@@ -947,31 +941,18 @@ export async function generateTimelinePreview(
         return;
       }
 
-      if (isVideoOverlay) {
-        if (isHyperframesAnimationOverlayClip(clip)) {
-          filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x00000000[${scaledLabel}]`;
-          filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
-          lastLabel = overlayLabel;
-          return;
-        }
-
-        const topRegionH = getTopRegionHeight(PREVIEW_HEIGHT);
-        filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${topRegionH}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${PREVIEW_WIDTH}:${topRegionH}:(ow-iw)/2:0:0x00000000[${scaledLabel}]`;
+      if (isHyperframesAnimationOverlayClip(clip)) {
+        filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x00000000[${scaledLabel}]`;
         filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
         lastLabel = overlayLabel;
         return;
       }
 
-      const placement = computeOverlayPlacement(
-        clip,
-        PREVIEW_WIDTH,
-        PREVIEW_HEIGHT,
-        OVERLAY_BASE_W,
-        OVERLAY_BASE_H,
-        OVERLAY_LEGACY_TOP_Y
-      );
-      filterComplex += `;[${inputIndex}:v]${setpts}scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
-      filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
+      // Unified clip-overlay rule: both images and videos fill the top "border" region above the
+      // subtitle band so B-roll thumbnails are edge-to-edge instead of small floating placements.
+      const topRegionH = getTopRegionHeight(PREVIEW_HEIGHT);
+      filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${topRegionH}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${PREVIEW_WIDTH}:${topRegionH}:(ow-iw)/2:0:0x00000000[${scaledLabel}]`;
+      filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
       lastLabel = overlayLabel;
     });
 
@@ -1340,31 +1321,18 @@ export async function generateTimelinePreviewHls(
         return;
       }
 
-      if (isVideoOverlay) {
-        if (isHyperframesAnimationOverlayClip(clip)) {
-          filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x00000000[${scaledLabel}]`;
-          filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
-          lastLabel = overlayLabel;
-          return;
-        }
-
-        const topRegionH = getTopRegionHeight(PREVIEW_HEIGHT);
-        filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${topRegionH}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${PREVIEW_WIDTH}:${topRegionH}:(ow-iw)/2:0:0x00000000[${scaledLabel}]`;
+      if (isHyperframesAnimationOverlayClip(clip)) {
+        filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x00000000[${scaledLabel}]`;
         filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
         lastLabel = overlayLabel;
         return;
       }
 
-      const placement = computeOverlayPlacement(
-        clip,
-        PREVIEW_WIDTH,
-        PREVIEW_HEIGHT,
-        OVERLAY_BASE_W,
-        OVERLAY_BASE_H,
-        OVERLAY_LEGACY_TOP_Y
-      );
-      filterComplex += `;[${inputIndex}:v]${setpts}scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
-      filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
+      // Unified clip-overlay rule: both images and videos fill the top "border" region above the
+      // subtitle band so B-roll thumbnails are edge-to-edge instead of small floating placements.
+      const topRegionH = getTopRegionHeight(PREVIEW_HEIGHT);
+      filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${topRegionH}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${PREVIEW_WIDTH}:${topRegionH}:(ow-iw)/2:0:0x00000000[${scaledLabel}]`;
+      filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
       lastLabel = overlayLabel;
     });
 
@@ -1860,31 +1828,18 @@ export async function generateTimelineSegmentPreview(
         return;
       }
 
-      if (isVideoOverlay) {
-        if (isHyperframesAnimationOverlayClip(clip)) {
-          filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x00000000[${scaledLabel}]`;
-          filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
-          lastLabel = overlayLabel;
-          return;
-        }
-
-        const topRegionH = getTopRegionHeight(PREVIEW_HEIGHT);
-        filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${topRegionH}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${PREVIEW_WIDTH}:${topRegionH}:(ow-iw)/2:0:0x00000000[${scaledLabel}]`;
+      if (isHyperframesAnimationOverlayClip(clip)) {
+        filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${PREVIEW_WIDTH}:${PREVIEW_HEIGHT}:(ow-iw)/2:(oh-ih)/2:0x00000000[${scaledLabel}]`;
         filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
         lastLabel = overlayLabel;
         return;
       }
 
-      const placement = computeOverlayPlacement(
-        clip,
-        PREVIEW_WIDTH,
-        PREVIEW_HEIGHT,
-        OVERLAY_BASE_W,
-        OVERLAY_BASE_H,
-        OVERLAY_LEGACY_TOP_Y
-      );
-      filterComplex += `;[${inputIndex}:v]${setpts}scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
-      filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
+      // Unified clip-overlay rule: both images and videos fill the top "border" region above the
+      // subtitle band so B-roll thumbnails are edge-to-edge instead of small floating placements.
+      const topRegionH = getTopRegionHeight(PREVIEW_HEIGHT);
+      filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${topRegionH}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${PREVIEW_WIDTH}:${topRegionH}:(ow-iw)/2:0:0x00000000[${scaledLabel}]`;
+      filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
       lastLabel = overlayLabel;
     });
 

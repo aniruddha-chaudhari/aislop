@@ -4,7 +4,8 @@ import { getCharacterEmotionImagePath } from '../utils/characterImages';
 import { fileResponse, jsonResponse } from '../utils/http';
 
 export async function getCharacterImage(ctx: any): Promise<Response> {
-  const { character, emotion = 'neutral' } = ctx.params;
+  const character = ctx.params.character as string;
+  const emotion = (ctx.params.emotion as string | undefined) ?? 'neutral';
 
   try {
     const imagePath = getCharacterEmotionImagePath(character, emotion);

@@ -1,0 +1,606 @@
+# Eliminate Preview Lag with MediaBunny + Backend Optimization
+
+## Problem Analysis
+
+After reading the full codebase, here is your **exact lag architecture**:
+
+### Current Flow (Why It's Slow)
+
+```mermaid
+sequenceDiagram
+    participant User as User (Browser)
+    participant Client as client1 (Next.js)
+    participant Backend as backend1 (Bun)
+    participant FFmpeg as FFmpeg Process
+
+    User->>Client: Scrubs timeline to 15s
+    Client->>Backend: POST /api/project/:id/preview/segment {playheadTime: 15}
+    Backend->>FFmpeg: Spawn ffmpeg process
+    Note over FFmpeg: 1. Concatenate all audio WAVs
+    Note over FFmpeg: 2. Seek template video to 15s
+    Note over FFmpeg: 3. Build complex filter graph (overlays, characters, subtitles)
+    Note over FFmpeg: 4. Encode 3s MP4 segment
+    FFmpeg-->>Backend: seg_15000_3000.mp4 (2-8 seconds later)
+    Backend-->>Client: {url: "/previews/segments/..."}
+    Client->>Backend: GET segment MP4
+    Backend-->>Client: MP4 bytes
+    Client->>User: Video element loads & displays
+    Note over User: Total lag: 3-10 seconds per scrub
+```
+
+### Root Cause
+
+Every single scrub/playhead change triggers in [previewGenerator.ts:1496-2002](file:///f:/Aniruddha/code/webdev/PROJECTS/aislop/backend1/src/service/previewGenerator.ts#L1496-L2002):
+1. **Audio concatenation** — re-concatenates ALL audio WAVs every time
+2. **FFmpeg process spawn** — full process start overhead
+3. **Complex filter graph** — overlays, characters, subtitles ASS generation
+4. **Video encoding** — encodes a 3s MP4 even at 360x640
+
+For **Play**, [previewGenerator.ts:1120-1482](file:///f:/Aniruddha/code/webdev/PROJECTS/aislop/backend1/src/service/previewGenerator.ts#L1120-L1482) generates a full HLS playlist with *all* overlays composited — taking 15-60s before the user sees anything.
+
+### Proposed Flow (Instant)
+
+```mermaid
+sequenceDiagram
+    participant User as User (Browser)
+    participant Engine as MediaBunny Engine (Browser)
+    participant Canvas as Canvas Compositor (Browser)
+    participant Backend as backend1 (Bun)
+
+    Note over User,Backend: ONE-TIME: Backend sends manifest + asset URLs on project load
+    Backend-->>Engine: Template video URL + Audio URLs + Overlay image URLs
+
+    User->>Engine: Scrubs timeline to 15s
+    Engine->>Engine: videoSink.getSample(15) → VideoFrame (GPU-decoded, <5ms)
+    Engine->>Canvas: Draw template frame
+    Canvas->>Canvas: Draw overlay images at correct positions (from timeline data)
+    Canvas->>Canvas: Draw character sprites
+    Canvas->>Canvas: Draw karaoke subtitles (CSS/Canvas text)
+    Canvas->>User: Composited frame displayed instantly
+    Note over User: Total lag: <16ms (one frame)
+```
+
+## User Review Required
+
+> [!IMPORTANT]
+> **This plan adds MediaBunny as a client-side dependency (~50KB gzipped).** Your backend FFmpeg pipeline is preserved exactly as-is for the **final export** — MediaBunny only replaces the **preview layer** in the browser.
+
+> [!WARNING]
+> **WebCodecs browser support:** Chrome 94+, Edge 94+, Safari 16.4+, Firefox 130+. If you need to support older browsers, the plan includes a fallback to your current segment-based approach.
+
+## Open Questions
+
+> [!IMPORTANT]
+> 1. **Template videos:** Your templates are stored on the backend filesystem. Do users typically use the same 2-3 templates, or are they uploading new ones frequently? This affects whether we pre-convert them to browser-friendly formats.
+> 2. **Overlay images:** Are your overlay images always PNG/JPEG, or do you also have video overlays (Hyperframes animations) that need to play inline? The plan handles both, but video overlays add complexity.
+> 3. **Audio preview:** Do you want audio to play during scrubbing (scrub audio), or is visual-only scrub feedback sufficient? Full audio scrub requires Web Audio API integration.
+
+---
+
+## Proposed Changes
+
+### Phase 1: Client-Side Canvas Compositor (Instant Scrub Preview)
+
+Replace the server-round-trip segment preview with a client-side canvas that composites template frame + overlays + characters + subtitles directly in the browser.
+
+---
+
+#### [NEW] [mediaEngine.ts](file:///f:/Aniruddha/code/webdev/PROJECTS/aislop/client1/src/lib/mediaEngine.ts)
+
+Core MediaBunny wrapper for GPU-accelerated frame extraction.
+
+```typescript
+// client1/src/lib/mediaEngine.ts
+import {
+  Input,
+  ALL_FORMATS,
+  UrlSource,
+  VideoSampleSink,
+} from 'mediabunny';
+
+export class MediaEngine {
+  private input: Input | null = null;
+  private videoSink: VideoSampleSink | null = null;
+  private ready = false;
+
+  /** Load a template video from a URL (served by backend) */
+  async load(videoUrl: string): Promise<void> {
+    this.dispose();
+    this.input = new Input({
+      formats: ALL_FORMATS,
+      source: new UrlSource(videoUrl),
+    });
+    const videoTrack = await this.input.getPrimaryVideoTrack();
+    if (!videoTrack || !(await videoTrack.canDecode())) {
+      throw new Error('Video track not decodable via WebCodecs');
+    }
+    this.videoSink = new VideoSampleSink(videoTrack);
+    this.ready = true;
+  }
+
+  /** Get a decoded VideoFrame at a specific timestamp (GPU-accelerated) */
+  async getFrameAtTime(
+    timeSeconds: number,
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number
+  ): Promise<void> {
+    if (!this.videoSink || !this.ready) return;
+    const sample = await this.videoSink.getSample(timeSeconds);
+    if (sample) {
+      sample.draw(ctx, 0, 0, width, height);
+      sample.close();
+    }
+  }
+
+  /** Check if WebCodecs is available in this browser */
+  static isSupported(): boolean {
+    return typeof VideoDecoder !== 'undefined'
+      && typeof VideoEncoder !== 'undefined';
+  }
+
+  dispose(): void {
+    this.videoSink = null;
+    this.input = null;
+    this.ready = false;
+  }
+}
+```
+
+---
+
+#### [NEW] [canvasCompositor.ts](file:///f:/Aniruddha/code/webdev/PROJECTS/aislop/client1/src/lib/canvasCompositor.ts)
+
+Client-side compositor that draws template frame + overlays + characters + subtitles onto a single `<canvas>`.
+
+```typescript
+// client1/src/lib/canvasCompositor.ts
+import type { EditorProject, Clip, OverlayClip, CharacterClip, SubtitleClip } from '@/features/editor/types';
+import { MediaEngine } from './mediaEngine';
+import { API_ENDPOINTS } from '@/config/api';
+
+type CachedImage = { img: HTMLImageElement; loaded: boolean };
+
+export class CanvasCompositor {
+  private canvas: HTMLCanvasElement;
+  private ctx: CanvasRenderingContext2D;
+  private engine: MediaEngine;
+  private imageCache = new Map<string, CachedImage>();
+  private width = 360;
+  private height = 640;
+
+  constructor(canvas: HTMLCanvasElement) {
+    this.canvas = canvas;
+    this.canvas.width = this.width;
+    this.canvas.height = this.height;
+    this.ctx = canvas.getContext('2d')!;
+    this.engine = new MediaEngine();
+  }
+
+  async loadTemplate(videoUrl: string): Promise<void> {
+    await this.engine.load(videoUrl);
+  }
+
+  /** Preload overlay and character images into cache */
+  preloadImages(project: EditorProject): void {
+    for (const track of project.tracks) {
+      for (const clip of track.clips) {
+        if (clip.kind === 'overlay') {
+          const oc = clip as OverlayClip;
+          const url = API_ENDPOINTS.serveProjectImage(project.id, oc.assetId);
+          this.cacheImage(oc.assetId, url);
+        }
+        if (clip.kind === 'character') {
+          const cc = clip as CharacterClip;
+          const key = `char_${cc.character}_${cc.emotion || 'default'}`;
+          // Character images served from backend static path
+          const url = `/api/video/character/${cc.character}/${cc.emotion || 'default'}`;
+          this.cacheImage(key, url);
+        }
+      }
+    }
+  }
+
+  private cacheImage(key: string, url: string): void {
+    if (this.imageCache.has(key)) return;
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    const entry: CachedImage = { img, loaded: false };
+    img.onload = () => { entry.loaded = true; };
+    img.src = url;
+    this.imageCache.set(key, entry);
+  }
+
+  /** Render a single composited frame at the given timeline time */
+  async renderFrame(project: EditorProject, timeSeconds: number): Promise<void> {
+    const ctx = this.ctx;
+    const w = this.width;
+    const h = this.height;
+
+    // 1. Clear canvas
+    ctx.clearRect(0, 0, w, h);
+
+    // 2. Draw template video frame (GPU-decoded via MediaBunny)
+    await this.engine.getFrameAtTime(timeSeconds, ctx, w, h);
+
+    // 3. Draw overlays active at this time
+    this.drawOverlays(project, timeSeconds, ctx, w, h);
+
+    // 4. Draw characters active at this time
+    this.drawCharacters(project, timeSeconds, ctx, w, h);
+
+    // 5. Draw subtitle text active at this time
+    this.drawSubtitles(project, timeSeconds, ctx, w, h);
+  }
+
+  private drawOverlays(
+    project: EditorProject, t: number,
+    ctx: CanvasRenderingContext2D, w: number, h: number
+  ): void {
+    for (const track of project.tracks) {
+      if (track.type !== 'overlay') continue;
+      for (const clip of track.clips) {
+        const oc = clip as OverlayClip;
+        if (t < oc.start || t > oc.start + oc.duration) continue;
+        if (oc.planStatus === 'draft') continue;
+
+        const cached = this.imageCache.get(oc.assetId);
+        if (!cached?.loaded) continue;
+
+        if (oc.displayMode === 'replace') {
+          // Full-frame replacement
+          ctx.drawImage(cached.img, 0, 0, w, h);
+        } else {
+          // Positioned overlay
+          const scale = oc.scale || 0.5;
+          const ow = Math.floor(w * scale);
+          const oh = Math.floor(h * scale * 0.75);
+          const ox = Math.floor(oc.x * w - ow / 2);
+          const oy = Math.floor(oc.y * h - oh / 2);
+          ctx.drawImage(cached.img, ox, oy, ow, oh);
+        }
+      }
+    }
+  }
+
+  private drawCharacters(
+    project: EditorProject, t: number,
+    ctx: CanvasRenderingContext2D, w: number, h: number
+  ): void {
+    const SCALE = h / 1920;
+    const charGeom: Record<string, { x: number; y: number; w: number; h: number }> = {
+      Stewie: { x: Math.floor(300 * SCALE), y: Math.floor(1350 * SCALE), w: Math.floor(500 * SCALE), h: Math.floor(600 * SCALE) },
+      Peter:  { x: Math.floor(300 * SCALE), y: Math.floor(1250 * SCALE), w: Math.floor(580 * SCALE), h: Math.floor(720 * SCALE) },
+    };
+    const defaultGeom = { x: Math.floor(260 * SCALE), y: Math.floor(1160 * SCALE), w: Math.floor(560 * SCALE), h: Math.floor(760 * SCALE) };
+
+    for (const track of project.tracks) {
+      if (track.type !== 'character') continue;
+      for (const clip of track.clips) {
+        const cc = clip as CharacterClip;
+        if (t < cc.start || t > cc.start + cc.duration) continue;
+
+        const key = `char_${cc.character}_${cc.emotion || 'default'}`;
+        const cached = this.imageCache.get(key);
+        if (!cached?.loaded) continue;
+
+        const geom = charGeom[cc.character] || defaultGeom;
+        ctx.drawImage(cached.img, geom.x, geom.y, geom.w, geom.h);
+      }
+    }
+  }
+
+  private drawSubtitles(
+    project: EditorProject, t: number,
+    ctx: CanvasRenderingContext2D, w: number, h: number
+  ): void {
+    const SCALE = h / 1920;
+    const fontSize = Math.floor(48 * SCALE);
+    const marginV = Math.floor(700 * SCALE);
+    const baseY = h - marginV;
+
+    for (const track of project.tracks) {
+      if (track.type !== 'subtitle') continue;
+      for (const clip of track.clips) {
+        const sc = clip as SubtitleClip;
+        if (t < sc.start || t > sc.start + sc.duration) continue;
+
+        // Find active word for karaoke highlight
+        const relTime = t - sc.start;
+        const words = sc.words || [];
+        let activeWordIdx = -1;
+        for (let i = 0; i < words.length; i++) {
+          if (relTime >= words[i].start && relTime < words[i].end) {
+            activeWordIdx = i;
+            break;
+          }
+        }
+
+        // Draw 3-word groups with karaoke highlighting
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        if (words.length > 0) {
+          // Find which 3-word group the active word belongs to
+          const groupStart = Math.floor((activeWordIdx >= 0 ? activeWordIdx : 0) / 3) * 3;
+          const groupWords = words.slice(groupStart, groupStart + 3);
+
+          let xOffset = w / 2;
+          const totalText = groupWords.map(w => w.word).join(' ');
+
+          // Draw shadow
+          ctx.font = `bold ${fontSize}px Arial-Black, Arial, sans-serif`;
+          ctx.strokeStyle = 'black';
+          ctx.lineWidth = fontSize * 0.15;
+          ctx.strokeText(totalText, xOffset, baseY);
+
+          // Draw each word with color
+          let charX = xOffset - ctx.measureText(totalText).width / 2;
+          for (let i = 0; i < groupWords.length; i++) {
+            const wordText = groupWords[i].word + (i < groupWords.length - 1 ? ' ' : '');
+            const isActive = (groupStart + i) === activeWordIdx;
+            ctx.fillStyle = isActive ? '#FFFF00' : '#FFFFFF';
+            ctx.textAlign = 'left';
+            ctx.fillText(wordText, charX, baseY);
+            charX += ctx.measureText(wordText).width;
+          }
+        } else {
+          // Fallback: render plain text
+          ctx.font = `bold ${fontSize}px Arial-Black, Arial, sans-serif`;
+          ctx.fillStyle = '#FFFFFF';
+          ctx.strokeStyle = 'black';
+          ctx.lineWidth = fontSize * 0.15;
+          ctx.strokeText(sc.text, w / 2, baseY);
+          ctx.fillText(sc.text, w / 2, baseY);
+        }
+        break; // Only render first active subtitle
+      }
+    }
+  }
+
+  dispose(): void {
+    this.engine.dispose();
+    this.imageCache.clear();
+  }
+}
+```
+
+---
+
+#### [MODIFY] [CanvasPreview.tsx](file:///f:/Aniruddha/code/webdev/PROJECTS/aislop/client1/src/app/components/editor/CanvasPreview.tsx)
+
+Add a `<canvas>` layer that uses `CanvasCompositor` for instant scrub feedback when WebCodecs is available. Fall back to the existing `<video>` element when not supported or during full playback.
+
+**Key changes:**
+- Add a `<canvas>` element behind the `<video>` element
+- On scrub (paused), render via `CanvasCompositor` instead of requesting a server segment
+- On play, switch to the existing HLS `<video>` playback path (compositor hides)
+- Add `useEffect` to initialize `CanvasCompositor` when template URL is available
+
+```diff
+ // Add imports
++import { CanvasCompositor } from '@/lib/canvasCompositor';
++import { MediaEngine } from '@/lib/mediaEngine';
+
+ // Inside component, add refs
++const compositorRef = useRef<CanvasCompositor | null>(null);
++const canvasRef = useRef<HTMLCanvasElement | null>(null);
++const webCodecsSupported = useRef(MediaEngine.isSupported());
+
+ // Add initialization effect
++useEffect(() => {
++  if (!webCodecsSupported.current || !canvasRef.current) return;
++  const compositor = new CanvasCompositor(canvasRef.current);
++  compositorRef.current = compositor;
++  
++  const templateUrl = getTemplateUrl(project.template.src);
++  if (templateUrl) {
++    compositor.loadTemplate(templateUrl).catch(console.warn);
++    compositor.preloadImages(project);
++  }
++  return () => compositor.dispose();
++}, [project.template.src, project.id]);
+
+ // Add scrub render effect (replaces segment preview requests)
++useEffect(() => {
++  if (isPlaying || !compositorRef.current || !webCodecsSupported.current) return;
++  // Render composited frame instantly on canvas
++  compositorRef.current.renderFrame(project, playheadTime).catch(console.warn);
++}, [playheadTime, isPlaying, project]);
+
+ // In JSX, add canvas element
++{webCodecsSupported.current && (
++  <canvas
++    ref={canvasRef}
++    className="absolute inset-0 w-full h-full"
++    style={{ 
++      zIndex: isPlaying ? 10 : 30,  // Behind video during play, in front during scrub
++      display: isPlaying ? 'none' : 'block',
++      objectFit: 'contain',
++    }}
++  />
++)}
+```
+
+---
+
+#### [MODIFY] [EditorLayout.tsx](file:///f:/Aniruddha/code/webdev/PROJECTS/aislop/client1/src/app/components/editor/EditorLayout.tsx)
+
+**Eliminate segment preview requests when WebCodecs is available.** The scrub debounce logic at lines 550-563 currently fires `requestSegmentPreview` on every playhead change. With MediaBunny, this entire round-trip is unnecessary.
+
+```diff
+ // Line ~550: Debounced scrub preview refresh when paused
+-useEffect(() => {
+-  if (!canGeneratePreview || isPlaying || isGeneratingPreview) return;
+-  if (previewSourceMode === 'hls') return;
+-  if (segmentDebounceRef.current) clearTimeout(segmentDebounceRef.current);
+-  segmentDebounceRef.current = setTimeout(() => {
+-    void requestSegmentPreview(playheadTime, 'scrub');
+-  }, 180);
+-  return () => { ... };
+-}, [playheadTime, ...]);
++useEffect(() => {
++  // Skip server-side segment preview when WebCodecs handles scrub locally
++  if (typeof VideoDecoder !== 'undefined') return;
++  if (!canGeneratePreview || isPlaying || isGeneratingPreview) return;
++  if (previewSourceMode === 'hls') return;
++  if (segmentDebounceRef.current) clearTimeout(segmentDebounceRef.current);
++  segmentDebounceRef.current = setTimeout(() => {
++    void requestSegmentPreview(playheadTime, 'scrub');
++  }, 180);
++  return () => { ... };
++}, [playheadTime, ...]);
+```
+
+---
+
+### Phase 2: Backend Optimization (Faster HLS/Export)
+
+Even with client-side scrub, you still need HLS for full playback and FFmpeg for final export. These changes make both significantly faster.
+
+---
+
+#### [MODIFY] [previewGenerator.ts](file:///f:/Aniruddha/code/webdev/PROJECTS/aislop/backend1/src/service/previewGenerator.ts)
+
+**Optimization 1: Cache concatenated audio.** Lines 803-821 re-concatenate ALL audio WAVs on every preview request. This is ~2-5 seconds of wasted time.
+
+```diff
+ // Line ~803: Add audio cache
++const audioCache = new Map<string, { path: string; timestamp: number }>();
++
++function getCachedAudioPath(projectId: string, audioSessionId: string): string | null {
++  const key = `${projectId}_${audioSessionId}`;
++  const cached = audioCache.get(key);
++  if (cached && fs.existsSync(cached.path)) return cached.path;
++  return null;
++}
+
+ // In generateTimelinePreviewHls, replace audio concat block:
++const cachedAudio = getCachedAudioPath(projectId, audioSessionId);
++let concatenatedAudioPath: string;
++let audioListPath: string | null = null;
++
++if (cachedAudio) {
++  concatenatedAudioPath = cachedAudio;
++} else {
+   // ... existing concat logic ...
++  audioCache.set(`${projectId}_${audioSessionId}`, {
++    path: concatenatedAudioPath,
++    timestamp: Date.now(),
++  });
++}
+```
+
+**Optimization 2: Skip segment preview entirely when WebCodecs is active.** Add a query param so the client can signal it doesn't need segment previews.
+
+```diff
+ // In the segment preview route handler (projectController.ts):
++// If client signals WebCodecs support, return immediately
++if (ctx.query?.clientDecoder === 'webcodecs') {
++  return { status: 200, body: { success: true, state: 'skipped', reason: 'client_webcodecs' } };
++}
+```
+
+---
+
+#### [NEW] [characterServeRoute](file:///f:/Aniruddha/code/webdev/PROJECTS/aislop/backend1/src/routes) — Add endpoint to serve character images
+
+The client-side compositor needs character images. Add a simple static serve route.
+
+```typescript
+// backend1/src/routes or in router.ts
+register({
+  method: 'GET',
+  pattern: '/api/video/character/:character/:emotion',
+  handler: async (ctx) => {
+    const { character, emotion } = ctx.params;
+    const imagePath = getCharacterClipImagePath({ character, emotion });
+    if (!imagePath || !fs.existsSync(imagePath)) {
+      return { status: 404, body: { error: 'Character image not found' } };
+    }
+    const buf = fs.readFileSync(imagePath);
+    return {
+      status: 200,
+      body: buf,
+      headers: {
+        'Content-Type': 'image/png',
+        'Cache-Control': 'public, max-age=86400',
+      },
+    };
+  },
+});
+```
+
+---
+
+### Phase 3: Audio Preview with Web Audio API (Optional)
+
+For audio during playback (not just scrub), the existing HLS approach works. But for scrub audio feedback:
+
+#### [NEW] [audioEngine.ts](file:///f:/Aniruddha/code/webdev/PROJECTS/aislop/client1/src/lib/audioEngine.ts)
+
+```typescript
+// client1/src/lib/audioEngine.ts
+export class AudioEngine {
+  private audioContext: AudioContext | null = null;
+  private audioBuffer: AudioBuffer | null = null;
+  private source: AudioBufferSourceNode | null = null;
+
+  async loadAudio(url: string): Promise<void> {
+    this.audioContext = new AudioContext();
+    const response = await fetch(url);
+    const arrayBuffer = await response.arrayBuffer();
+    this.audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
+  }
+
+  playFrom(timeSeconds: number): void {
+    if (!this.audioContext || !this.audioBuffer) return;
+    this.stop();
+    this.source = this.audioContext.createBufferSource();
+    this.source.buffer = this.audioBuffer;
+    this.source.connect(this.audioContext.destination);
+    this.source.start(0, timeSeconds);
+  }
+
+  stop(): void {
+    this.source?.stop();
+    this.source = null;
+  }
+
+  dispose(): void {
+    this.stop();
+    this.audioContext?.close();
+  }
+}
+```
+
+---
+
+## Summary of Changes
+
+| Layer | File | Change | Impact |
+|-------|------|--------|--------|
+| **client1** | `src/lib/mediaEngine.ts` | [NEW] MediaBunny wrapper for GPU frame extraction | Instant frame decode |
+| **client1** | `src/lib/canvasCompositor.ts` | [NEW] Canvas-based compositor for overlays+chars+subs | Zero-latency compositing |
+| **client1** | `src/lib/audioEngine.ts` | [NEW] Web Audio API for scrub audio (optional) | Audio during scrub |
+| **client1** | `components/editor/CanvasPreview.tsx` | [MODIFY] Add canvas layer, use compositor on scrub | **Eliminates segment round-trips** |
+| **client1** | `components/editor/EditorLayout.tsx` | [MODIFY] Skip segment requests when WebCodecs available | Reduces backend load |
+| **client1** | `package.json` | [MODIFY] Add `mediabunny` dependency | ~50KB gzipped |
+| **backend1** | `service/previewGenerator.ts` | [MODIFY] Cache concatenated audio | 2-5s faster HLS/segment |
+| **backend1** | `router.ts` or routes | [NEW] Character image serve endpoint | Client compositor needs images |
+
+## Verification Plan
+
+### Automated Tests
+1. `npm run build` in both `client1` and `backend1` — no type errors
+2. Open editor in Chrome DevTools → Performance tab → scrub the timeline
+   - **Before:** Network waterfall shows segment POST requests on each scrub
+   - **After:** Zero network requests during scrub; canvas repaints in <16ms
+3. Console log `[PreviewTelemetry]` events to measure `play_click_to_first_frame_ms`
+
+### Manual Verification
+1. Open editor → scrub timeline rapidly → preview updates instantly (no "Generating preview..." overlay)
+2. Press Play → HLS playback works exactly as before (with all overlays composited by backend)
+3. Press Export → Final export works exactly as before (backend FFmpeg pipeline untouched)
+4. Open in Firefox/Safari → Falls back to existing segment-based preview gracefully
+5. Load a project with overlay images + character sprites + karaoke subtitles → all render correctly on the canvas compositor during scrub

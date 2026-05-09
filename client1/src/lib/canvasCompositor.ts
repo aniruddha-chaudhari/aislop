@@ -1,7 +1,9 @@
 // client1/src/lib/canvasCompositor.ts
 import type { EditorProject, OverlayClip, CharacterClip, SubtitleClip } from '@/features/editor/types';
 import { MediaEngine } from './mediaEngine';
-import { API_ENDPOINTS } from '@/config/api';
+import { API_BASE_URL, API_ENDPOINTS } from '@/config/api';
+import { voiceDisplayName } from '@/features/editor/voiceDisplayName';
+import { resolveCharacterClipEmotion } from '@/features/editor/characterClipEmotion';
 
 type CachedImage = { img: HTMLImageElement; loaded: boolean };
 
@@ -36,9 +38,11 @@ export class CanvasCompositor {
         }
         if (clip.kind === 'character') {
           const cc = clip as CharacterClip;
-          const key = `char_${cc.character}_${cc.emotion || 'neutral'}`;
-          // Character images served from backend static path
-          const url = `/api/character-image/${cc.character}/${cc.emotion || 'neutral'}`;
+          const emotion = resolveCharacterClipEmotion(project, cc);
+          const key = `char_${cc.character}_${emotion}`;
+          const name = encodeURIComponent(voiceDisplayName(cc.character));
+          const emoEnc = encodeURIComponent(emotion);
+          const url = `${API_BASE_URL}/api/character-image/${name}/${emoEnc}`;
           this.cacheImage(key, url);
         }
       }
@@ -59,9 +63,21 @@ export class CanvasCompositor {
   async renderFrame(
     project: EditorProject,
     timeSeconds: number,
-    options: { drawTemplate?: boolean } = {}
+    options: {
+      drawTemplate?: boolean;
+      drawOverlays?: boolean;
+      drawCharacters?: boolean;
+      drawSubtitles?: boolean;
+      drawSubtitleBackground?: boolean;
+    } = {}
   ): Promise<void> {
-    const { drawTemplate = true } = options;
+    const {
+      drawTemplate = true,
+      drawOverlays = true,
+      drawCharacters = true,
+      drawSubtitles = true,
+      drawSubtitleBackground = false,
+    } = options;
     const ctx = this.ctx;
     const w = this.width;
     const h = this.height;
@@ -75,13 +91,19 @@ export class CanvasCompositor {
     }
 
     // 3. Draw overlays active at this time
-    this.drawOverlays(project, timeSeconds, ctx, w, h);
+    if (drawOverlays) {
+      this.drawOverlays(project, timeSeconds, ctx, w, h);
+    }
 
     // 4. Draw characters active at this time
-    this.drawCharacters(project, timeSeconds, ctx, w, h);
+    if (drawCharacters) {
+      this.drawCharacters(project, timeSeconds, ctx, w, h);
+    }
 
     // 5. Draw subtitle text active at this time
-    this.drawSubtitles(project, timeSeconds, ctx, w, h);
+    if (drawSubtitles) {
+      this.drawSubtitles(project, timeSeconds, ctx, w, h, drawSubtitleBackground);
+    }
   }
 
   private drawOverlays(
@@ -119,11 +141,9 @@ export class CanvasCompositor {
     ctx: CanvasRenderingContext2D, w: number, h: number
   ): void {
     const SCALE = h / 1920;
-    const charGeom: Record<string, { x: number; y: number; w: number; h: number }> = {
-      Stewie: { x: Math.floor(300 * SCALE), y: Math.floor(1350 * SCALE), w: Math.floor(500 * SCALE), h: Math.floor(600 * SCALE) },
-      Peter:  { x: Math.floor(300 * SCALE), y: Math.floor(1250 * SCALE), w: Math.floor(580 * SCALE), h: Math.floor(720 * SCALE) },
-    };
-    const defaultGeom = { x: Math.floor(260 * SCALE), y: Math.floor(1160 * SCALE), w: Math.floor(560 * SCALE), h: Math.floor(760 * SCALE) };
+    const stewieGeom = { x: Math.floor(300 * SCALE), y: Math.floor(1350 * SCALE), w: Math.floor(500 * SCALE), h: Math.floor(600 * SCALE) };
+    const peterGeom = { x: Math.floor(300 * SCALE), y: Math.floor(1250 * SCALE), w: Math.floor(580 * SCALE), h: Math.floor(720 * SCALE) };
+    const otherGeom = { x: Math.floor(260 * SCALE), y: Math.floor(1160 * SCALE), w: Math.floor(560 * SCALE), h: Math.floor(760 * SCALE) };
 
     for (const track of project.tracks) {
       if (track.type !== 'character') continue;
@@ -131,11 +151,16 @@ export class CanvasCompositor {
         const cc = clip as CharacterClip;
         if (t < cc.start || t > cc.start + cc.duration) continue;
 
-        const key = `char_${cc.character}_${cc.emotion || 'neutral'}`;
+        const emotion = resolveCharacterClipEmotion(project, cc);
+        const key = `char_${cc.character}_${emotion}`;
         const cached = this.imageCache.get(key);
         if (!cached?.loaded) continue;
 
-        const geom = charGeom[cc.character] || defaultGeom;
+        const geom = cc.character === 'Stewie'
+          ? stewieGeom
+          : (cc.character === 'Peter' || cc.character === 'Narrator')
+            ? peterGeom
+            : otherGeom;
         ctx.drawImage(cached.img, geom.x, geom.y, geom.w, geom.h);
       }
     }
@@ -143,7 +168,8 @@ export class CanvasCompositor {
 
   private drawSubtitles(
     project: EditorProject, t: number,
-    ctx: CanvasRenderingContext2D, w: number, h: number
+    ctx: CanvasRenderingContext2D, w: number, h: number,
+    drawBackground: boolean
   ): void {
     // Match backend ASS style: 1920-based scale, Fontsize=48, MarginV=700, Alignment=2 (bottom-center)
     const SCALE = h / 1920;
@@ -196,14 +222,15 @@ export class CanvasCompositor {
             if (i < groupWords.length - 1) totalW += spaceW;
           }
 
-          // Draw semi-transparent background box (matches ASS BackColour alpha)
           const pad = fontSize * 0.25;
-          const boxX = w / 2 - totalW / 2 - pad;
-          const boxY = baseY - fontSize - pad;
-          const boxW = totalW + pad * 2;
-          const boxH = fontSize + pad * 2;
-          ctx.fillStyle = 'rgba(0,0,0,0.5)';
-          ctx.fillRect(boxX, boxY, boxW, boxH);
+          if (drawBackground) {
+            const boxX = w / 2 - totalW / 2 - pad;
+            const boxY = baseY - fontSize - pad;
+            const boxW = totalW + pad * 2;
+            const boxH = fontSize + pad * 2;
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.fillRect(boxX, boxY, boxW, boxH);
+          }
 
           // Draw each word with outline then fill (ASS BorderStyle=1, Outline=3)
           let curX = w / 2 - totalW / 2;
@@ -227,8 +254,10 @@ export class CanvasCompositor {
           // Fallback: plain text, centered
           const textW = ctx.measureText(sc.text).width;
           const pad = fontSize * 0.25;
-          ctx.fillStyle = 'rgba(0,0,0,0.5)';
-          ctx.fillRect(w / 2 - textW / 2 - pad, baseY - fontSize - pad, textW + pad * 2, fontSize + pad * 2);
+          if (drawBackground) {
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.fillRect(w / 2 - textW / 2 - pad, baseY - fontSize - pad, textW + pad * 2, fontSize + pad * 2);
+          }
 
           ctx.lineWidth = fontSize * 0.15;
           ctx.strokeStyle = '#000000';

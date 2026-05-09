@@ -79,12 +79,33 @@ function resolveFallbackPath(dir: string): string | null {
  */
 export function getCharacterImagePath(character: string): string | null {
   const dir = resolveDir();
-  const file = NAMES[character as keyof typeof NAMES];
+  const canonicalCharacter = normalizeCharacterKey(character);
+  const file = NAMES[canonicalCharacter as keyof typeof NAMES];
   if (file) {
     const p = path.join(dir, file);
     if (fs.existsSync(p)) return p;
   }
   return resolveFallbackPath(dir);
+}
+
+function normalizeEmotionKey(emotion: string | null | undefined): string | undefined {
+  if (emotion == null) return undefined;
+  const t = String(emotion).trim();
+  if (!t) return undefined;
+  return t.toLowerCase();
+}
+
+/**
+ * Canonical names for NAMES / EMOTION_VARIANTS keys (PascalCase).
+ */
+function normalizeCharacterKey(character: string): string {
+  const t = (character || '').trim();
+  if (!t) return character;
+  const lower = t.toLowerCase();
+  if (lower === 'narrator') return 'Narrator';
+  if (lower === 'peter') return 'Peter';
+  if (lower === 'stewie') return 'Stewie';
+  return t;
 }
 
 /**
@@ -104,13 +125,15 @@ export function getCharacterClipImagePath(clip: { character: string; emotion?: s
 
 export function getCharacterEmotionImagePath(character: string, emotion?: string | null): string | null {
   const dir = resolveDir();
+  const canonicalCharacter = normalizeCharacterKey(character);
+  const emotionKey = normalizeEmotionKey(emotion ?? undefined);
 
-  if (emotion) {
-    const variantsForCharacter = EMOTION_VARIANTS[character];
+  if (emotionKey) {
+    const variantsForCharacter = EMOTION_VARIANTS[canonicalCharacter];
     const emotionFilename =
-      variantsForCharacter?.[emotion] ??
+      variantsForCharacter?.[emotionKey] ??
       // Accept loose labels like "excited" by mapping them to a talking variant.
-      (emotion === 'excited' || emotion === 'angry' ? variantsForCharacter?.['talking'] : undefined);
+      (emotionKey === 'excited' || emotionKey === 'angry' ? variantsForCharacter?.['talking'] : undefined);
 
     if (emotionFilename) {
       const emotionPath = path.join(dir, emotionFilename);
@@ -120,7 +143,7 @@ export function getCharacterEmotionImagePath(character: string, emotion?: string
     }
   }
 
-  return getCharacterImagePath(character);
+  return getCharacterImagePath(canonicalCharacter);
 }
 
 /**
