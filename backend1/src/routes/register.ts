@@ -48,6 +48,7 @@ register([
   { method: 'GET', pattern: '/api/audio/cleanup', handler: audio.cleanupAudioFiles },
 
   // Audio Assets (music + sfx)
+  { method: 'GET', pattern: '/api/audio-assets/file', handler: audioAssets.serveAudioAssetFile },
   { method: 'GET', pattern: '/api/audio-assets/music', handler: audioAssets.listMusicAssets },
   { method: 'GET', pattern: '/api/audio-assets/sfx', handler: audioAssets.listSfxAssets },
   { method: 'GET', pattern: '/api/audio/reference-audio', handler: audioAssets.listReferenceAudioAssets },

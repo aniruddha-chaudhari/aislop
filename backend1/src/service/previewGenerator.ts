@@ -6,6 +6,7 @@ import { PrismaClient } from '../generated/prisma';
 import type { Project, SubtitleClip, OverlayClip, CharacterClip, MusicClip, SfxClip } from '../schema/project';
 import { getCharacterClipImagePath } from '../utils/characterImages';
 import { appendCharacterClipsToFilterComplex, expandCharacterClipsExcludingReplaceRanges } from './characterOverlayFilters';
+import { computeOverlayPlacement } from './overlayTransform';
 import {
   fixSubtitleClipsTimelineNonOverlap,
   clampSubtitleClipsToTimelineDuration,
@@ -46,6 +47,12 @@ const PREVIEW_TEMPLATE_TO_BG = `setpts=PTS-STARTPTS,scale=${PREVIEW_WIDTH}:${PRE
 const PREVIEW_BITRATE = '500k'; // Low bitrate for fast generation
 const AUDIO_TAIL_BUFFER_SEC = 1.2;
 const PREVIEW_DEBUG = process.env.PREVIEW_DEBUG === '1';
+
+// Image overlay legacy placement constants (scaled to preview canvas).
+// Match timelineCompiler defaults at 1080x1920: 960x720 base, 40px legacy top.
+const OVERLAY_BASE_W = Math.floor(960 * (PREVIEW_WIDTH / 1080));
+const OVERLAY_BASE_H = Math.floor(720 * (PREVIEW_HEIGHT / 1920));
+const OVERLAY_LEGACY_TOP_Y = Math.floor(40 * (PREVIEW_HEIGHT / 1920));
 
 function previewDebug(message: string, data?: Record<string, unknown>): void {
   if (!PREVIEW_DEBUG) return;
@@ -670,6 +677,7 @@ function buildAudioMixFilter(
 ): { filter: string | null; outputLabel: string | null } {
   const filters: string[] = [];
   const labels: string[] = [];
+  const MUSIC_FADE_OUT_SEC = 1.0;
 
   if (dialogueInputIndex !== null) {
     filters.push(
@@ -695,6 +703,11 @@ function buildAudioMixFilter(
     }
     chain.push('asetpts=PTS-STARTPTS');
     if (volume !== 1) chain.push(`volume=${volume}`);
+    if (duration != null && prefix === 'a_music') {
+      const d = Math.max(0.05, Math.min(MUSIC_FADE_OUT_SEC, duration));
+      const st = Math.max(0, duration - d);
+      chain.push(`afade=t=out:st=${st}:d=${d}`);
+    }
     if (delayMs > 0) chain.push(`adelay=${delayMs}|${delayMs}`);
     chain.push('aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo');
 
@@ -948,11 +961,26 @@ export async function generateTimelinePreview(
         return;
       }
 
-      // Unified clip-overlay rule: both images and videos fill the top "border" region above the
-      // subtitle band so B-roll thumbnails are edge-to-edge instead of small floating placements.
-      const topRegionH = getTopRegionHeight(PREVIEW_HEIGHT);
-      filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${topRegionH}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${PREVIEW_WIDTH}:${topRegionH}:(ow-iw)/2:0:0x00000000[${scaledLabel}]`;
-      filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
+      if (isVideoOverlay) {
+        // Video B-roll fills the top region edge-to-edge (above the subtitle band).
+        const topRegionH = getTopRegionHeight(PREVIEW_HEIGHT);
+        filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${topRegionH}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${PREVIEW_WIDTH}:${topRegionH}:(ow-iw)/2:0:0x00000000[${scaledLabel}]`;
+        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
+        lastLabel = overlayLabel;
+        return;
+      }
+
+      // Image overlays: legacy normalized placement (x/y in 0..1, scale relative to 0.5).
+      const placement = computeOverlayPlacement(
+        clip,
+        PREVIEW_WIDTH,
+        PREVIEW_HEIGHT,
+        OVERLAY_BASE_W,
+        OVERLAY_BASE_H,
+        OVERLAY_LEGACY_TOP_Y
+      );
+      filterComplex += `;[${inputIndex}:v]${setpts}scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
+      filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
       lastLabel = overlayLabel;
     });
 
@@ -1328,11 +1356,26 @@ export async function generateTimelinePreviewHls(
         return;
       }
 
-      // Unified clip-overlay rule: both images and videos fill the top "border" region above the
-      // subtitle band so B-roll thumbnails are edge-to-edge instead of small floating placements.
-      const topRegionH = getTopRegionHeight(PREVIEW_HEIGHT);
-      filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${topRegionH}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${PREVIEW_WIDTH}:${topRegionH}:(ow-iw)/2:0:0x00000000[${scaledLabel}]`;
-      filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
+      if (isVideoOverlay) {
+        // Video B-roll fills the top region edge-to-edge (above the subtitle band).
+        const topRegionH = getTopRegionHeight(PREVIEW_HEIGHT);
+        filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${topRegionH}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${PREVIEW_WIDTH}:${topRegionH}:(ow-iw)/2:0:0x00000000[${scaledLabel}]`;
+        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
+        lastLabel = overlayLabel;
+        return;
+      }
+
+      // Image overlays: legacy normalized placement (x/y in 0..1, scale relative to 0.5).
+      const placement = computeOverlayPlacement(
+        clip,
+        PREVIEW_WIDTH,
+        PREVIEW_HEIGHT,
+        OVERLAY_BASE_W,
+        OVERLAY_BASE_H,
+        OVERLAY_LEGACY_TOP_Y
+      );
+      filterComplex += `;[${inputIndex}:v]${setpts}scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
+      filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
       lastLabel = overlayLabel;
     });
 
@@ -1835,11 +1878,26 @@ export async function generateTimelineSegmentPreview(
         return;
       }
 
-      // Unified clip-overlay rule: both images and videos fill the top "border" region above the
-      // subtitle band so B-roll thumbnails are edge-to-edge instead of small floating placements.
-      const topRegionH = getTopRegionHeight(PREVIEW_HEIGHT);
-      filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${topRegionH}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${PREVIEW_WIDTH}:${topRegionH}:(ow-iw)/2:0:0x00000000[${scaledLabel}]`;
-      filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
+      if (isVideoOverlay) {
+        // Video B-roll fills the top region edge-to-edge (above the subtitle band).
+        const topRegionH = getTopRegionHeight(PREVIEW_HEIGHT);
+        filterComplex += `;[${inputIndex}:v]${setpts}scale=${PREVIEW_WIDTH}:${topRegionH}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${PREVIEW_WIDTH}:${topRegionH}:(ow-iw)/2:0:0x00000000[${scaledLabel}]`;
+        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
+        lastLabel = overlayLabel;
+        return;
+      }
+
+      // Image overlays: legacy normalized placement (x/y in 0..1, scale relative to 0.5).
+      const placement = computeOverlayPlacement(
+        clip,
+        PREVIEW_WIDTH,
+        PREVIEW_HEIGHT,
+        OVERLAY_BASE_W,
+        OVERLAY_BASE_H,
+        OVERLAY_LEGACY_TOP_Y
+      );
+      filterComplex += `;[${inputIndex}:v]${setpts}scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
+      filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
       lastLabel = overlayLabel;
     });
 

@@ -37,6 +37,9 @@ export const API_ENDPOINTS = {
   deleteAudioFile: (filename: string) => `${API_BASE_URL}/api/audio/files/${filename}`,
   deleteAudioSession: (sessionId: string) => `${API_BASE_URL}/api/audio/session/${sessionId}`,
   downloadAudio: (filename: string) => `${API_BASE_URL}/api/audio/download/${filename}`,
+  /** Library music/SFX under `storage/audio_assets` (timeline paths like `audio_assets/music/...`). */
+  downloadAudioAsset: (relativeStoragePath: string) =>
+    `${API_BASE_URL}/api/audio-assets/file?path=${encodeURIComponent(relativeStoragePath.replace(/\\/g, '/'))}`,
   testTTSConnection: `${API_BASE_URL}/api/audio/test-connection`,
   cleanupAudio: `${API_BASE_URL}/api/audio/cleanup`,
   streamFileUpdates: (sessionId: string) => `${API_BASE_URL}/api/stream/${sessionId}/files`,

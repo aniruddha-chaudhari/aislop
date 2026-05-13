@@ -480,6 +480,48 @@ function getProjectOverlayDir(audioSessionId: string, projectId: string): string
   return path.join(getSessionOverlayDir(audioSessionId), projectId);
 }
 
+const STORAGE_ROOT = path.resolve(process.cwd(), 'storage');
+const ALLOWED_STORAGE_SUBDIRS = [
+  'rendered-hyperframes-animations',
+  'rendered-animations',
+  'images',
+];
+
+/**
+ * Resolve `clip.path` to an absolute file path on disk, but only return it if the resolved
+ * location lives inside one of the allowed `storage/...` subdirectories AND the file exists.
+ * Prevents serving arbitrary files via path traversal in a project JSON.
+ */
+function resolveAllowedStorageFile(rawPath: string): string | null {
+  const trimmed = (rawPath || '').trim();
+  if (!trimmed) return null;
+  const absolute = path.isAbsolute(trimmed) ? trimmed : path.resolve(process.cwd(), trimmed);
+  const normalized = path.resolve(absolute);
+  const relativeToStorage = path.relative(STORAGE_ROOT, normalized);
+  if (relativeToStorage.startsWith('..') || path.isAbsolute(relativeToStorage)) return null;
+  const topSegment = relativeToStorage.split(path.sep)[0];
+  if (!ALLOWED_STORAGE_SUBDIRS.includes(topSegment)) return null;
+  if (!fs.existsSync(normalized)) return null;
+  if (!fs.statSync(normalized).isFile()) return null;
+  return normalized;
+}
+
+function findOverlayClipByAssetId(
+  project: { tracks?: Track[]; timeline?: { tracks?: Track[] } },
+  assetId: string
+): OverlayClip | null {
+  const trackPool: Track[] = project.tracks ?? project.timeline?.tracks ?? [];
+  for (const track of trackPool) {
+    if (track.type !== 'overlay') continue;
+    for (const clip of track.clips) {
+      if (clip.kind !== 'overlay') continue;
+      const overlay = clip as OverlayClip;
+      if (overlay.assetId === assetId) return overlay;
+    }
+  }
+  return null;
+}
+
 function sanitizeOverlayAssetId(rawAssetId: string): string {
   const safe = rawAssetId.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
   return safe || 'asset';
@@ -2005,6 +2047,17 @@ export async function serveProjectImage(ctx: HttpContext): Promise<HandlerResult
         filePath = candidate;
         break;
       }
+    }
+
+    // Fallback: rendered animation clips (HyperFrames + legacy Remotion) live in
+    // storage/rendered-hyperframes-animations/<projectFolder>/moment_*.mp4 (or rendered-animations/...),
+    // not the upload directories. The OverlayClip stores the absolute output path on `clip.path`
+    // when the moment was rendered. Resolve via the project timeline and serve directly, validated
+    // against the allowed storage roots so nothing outside `storage/` can be served.
+    if (!filePath) {
+      const overlayClip = findOverlayClipByAssetId(project, assetId);
+      const recorded = overlayClip?.path ? resolveAllowedStorageFile(overlayClip.path) : null;
+      if (recorded) filePath = recorded;
     }
 
     if (!filePath) {

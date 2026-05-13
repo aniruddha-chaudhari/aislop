@@ -261,18 +261,22 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         setPlayheadTime(0);
       }
       setIsPlaying(true);
-      // Start AudioEngine synchronously to ensure resume happens inside the
-      // user gesture (some browsers block resume if done async).
-      try {
-        audioEngineRef.current?.play?.(draftProjectRef.current, seekTo ?? 0);
-      } catch (e) {
-        console.warn('audioEngine play failed synchronously', e);
+      // WebAudio timeline audio: only when not using a baked preview stream (that already has mixed audio).
+      if (!previewVideoSrc) {
+        try {
+          audioEngineRef.current?.play?.(draftProjectRef.current, seekTo ?? 0);
+        } catch (e) {
+          console.warn('audioEngine play failed synchronously', e);
+        }
       }
-      // Also invoke child preview API if available (it may be null if child
-      // hasn't mounted yet).
       previewPlayerRef.current?.requestPlay?.(seekTo);
     } else {
       setIsPlaying(false);
+      if (!previewVideoSrc) {
+        try {
+          audioEngineRef.current?.stop?.();
+        } catch {}
+      }
       previewPlayerRef.current?.requestPause?.();
     }
   };

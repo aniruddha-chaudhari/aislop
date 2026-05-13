@@ -13,6 +13,7 @@ import {
   getSubtitleWordText,
 } from './subtitleClipNormalize';
 import { getSessionDuration } from './sessionDuration';
+import { computeOverlayPlacement } from './overlayTransform';
 import { resolveSessionOverlayPath } from '../utils/overlayAssets';
 
 const ffmpeg = require('fluent-ffmpeg');
@@ -175,6 +176,8 @@ function buildAudioMixFilter(
 ): { filter: string | null; outputLabel: string | null } {
   const filters: string[] = [];
   const labels: string[] = [];
+  /** Music-only fade at clip end in exported FFmpeg audio (matches preview intent). */
+  const MUSIC_FADE_OUT_SEC = 1.0;
 
   if (dialogueInputIndex !== null) {
     filters.push(
@@ -200,6 +203,11 @@ function buildAudioMixFilter(
     }
     chain.push('asetpts=PTS-STARTPTS');
     if (volume !== 1) chain.push(`volume=${volume}`);
+    if (duration != null && prefix === 'a_music') {
+      const d = Math.max(0.05, Math.min(MUSIC_FADE_OUT_SEC, duration));
+      const st = Math.max(0, duration - d);
+      chain.push(`afade=t=out:st=${st}:d=${d}`);
+    }
     if (delayMs > 0) chain.push(`adelay=${delayMs}|${delayMs}`);
     chain.push('aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo');
 
@@ -412,6 +420,11 @@ export async function compileTimeline(
     let filterComplex = `[0:v]${scaleVfCore}[bg]`;
     let lastLabel = 'bg';
 
+    // Image overlay legacy placement constants (only used for non-replace, non-hyperframes images).
+    const OVERLAY_BASE_W = 960;
+    const OVERLAY_BASE_H = 720;
+    const OVERLAY_LEGACY_TOP_Y = 40;
+
     if (exportStep >= 3) {
       overlayInputs.forEach(({ clip, inputIndex, overlayPath }, index) => {
         const isReplace = isReplaceOverlayClip(clip);
@@ -437,11 +450,26 @@ export async function compileTimeline(
           return;
         }
 
-        // Unified clip-overlay rule: both images and videos fill the top "border" region above the
-        // subtitle band so B-roll thumbnails are edge-to-edge instead of small floating placements.
-        const topRegionH = getTopRegionHeight(1920);
-        filterComplex += `;[${inputIndex}:v]${setpts}scale=1080:${topRegionH}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1080:${topRegionH}:(1080-iw)/2:0:0x00000000[${scaledLabel}]`;
-        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
+        if (isVideoOverlay) {
+          // Video B-roll fills the top region edge-to-edge (above the subtitle band).
+          const topRegionH = getTopRegionHeight(1920);
+          filterComplex += `;[${inputIndex}:v]${setpts}scale=1080:${topRegionH}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1080:${topRegionH}:(1080-iw)/2:0:0x00000000[${scaledLabel}]`;
+          filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=0:0:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
+          lastLabel = overlayLabel;
+          return;
+        }
+
+        // Image overlays: legacy normalized placement (x/y in 0..1, scale relative to 0.5).
+        const placement = computeOverlayPlacement(
+          clip,
+          1080,
+          1920,
+          OVERLAY_BASE_W,
+          OVERLAY_BASE_H,
+          OVERLAY_LEGACY_TOP_Y
+        );
+        filterComplex += `;[${inputIndex}:v]${setpts}scale=${placement.width}:${placement.height}:force_original_aspect_ratio=decrease[${scaledLabel}]`;
+        filterComplex += `;[${lastLabel}][${scaledLabel}]overlay=${placement.x}:${placement.y}:enable='between(t,${clip.start},${clip.start + clip.duration})':eof_action=pass:repeatlast=0[${overlayLabel}]`;
         lastLabel = overlayLabel;
       });
     }

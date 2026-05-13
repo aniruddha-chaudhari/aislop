@@ -1,7 +1,16 @@
 import fs from 'fs';
 import path from 'path';
 import type { HttpContext, HandlerResult } from '../utils/http';
-import { jsonResponse } from '../utils/http';
+import { fileResponse, jsonResponse } from '../utils/http';
+
+const AUDIO_MIME: Record<string, string> = {
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac',
+  '.flac': 'audio/flac',
+};
 
 const AUDIO_ASSETS_DIR = path.join(process.cwd(), 'storage', 'audio_assets');
 const MUSIC_DIR = path.join(AUDIO_ASSETS_DIR, 'music');
@@ -37,6 +46,54 @@ function listAudioAssetsIn(dir: string, subdir: 'music' | 'sfx'): AudioAsset[] {
   }
 
   return assets;
+}
+
+/** Stream `storage/audio_assets/...` for editor Web Audio. Query: `path=audio_assets/music/foo.mp3`. */
+export async function serveAudioAssetFile(ctx: HttpContext): Promise<HandlerResult> {
+  try {
+    const rawPath = ctx.query?.path ?? ctx.query?.p;
+    if (!rawPath || typeof rawPath !== 'string') {
+      return jsonResponse(400, { error: 'Missing path query (path=audio_assets/music/...)' });
+    }
+    let normalized = rawPath.replace(/\\/g, '/').trim();
+    try {
+      normalized = decodeURIComponent(normalized);
+    } catch {
+      // keep normalized as-is
+    }
+    normalized = normalized.replace(/^\/+/, '');
+    if (!normalized.startsWith('audio_assets/')) {
+      return jsonResponse(400, { error: 'Path must start with audio_assets/' });
+    }
+    if (normalized.includes('..')) {
+      return jsonResponse(400, { error: 'Invalid path' });
+    }
+    const parts = normalized.split('/').filter(Boolean);
+    const fullPath = path.resolve(process.cwd(), 'storage', ...parts);
+    const resolvedRoot = path.resolve(process.cwd(), 'storage', 'audio_assets');
+    const relToRoot = path.relative(resolvedRoot, fullPath);
+    if (relToRoot.startsWith('..') || path.isAbsolute(relToRoot)) {
+      return jsonResponse(400, { error: 'Invalid path' });
+    }
+    if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) {
+      return jsonResponse(404, { error: 'File not found' });
+    }
+    const ext = path.extname(fullPath).toLowerCase();
+    if (!AUDIO_EXTS.has(ext)) {
+      return jsonResponse(400, { error: 'Unsupported audio type' });
+    }
+    const buf = await fs.promises.readFile(fullPath);
+    const ct = AUDIO_MIME[ext] ?? 'application/octet-stream';
+    return fileResponse(200, buf, ct, {
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'public, max-age=3600',
+    });
+  } catch (error) {
+    return jsonResponse(500, {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to serve audio asset',
+    });
+  }
 }
 
 export async function listMusicAssets(_ctx: HttpContext): Promise<HandlerResult> {

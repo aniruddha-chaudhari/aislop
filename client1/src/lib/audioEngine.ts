@@ -11,16 +11,21 @@ type ScheduledNode = {
 };
 
 /** Resolve a backend-relative path to an absolute URL for fetching. */
-function resolveAudioUrl(path: string): string {
-  if (path.startsWith('http://') || path.startsWith('https://')) return path;
-  // Backend-relative paths like "audio_assets/music/..." are served via /api/audio/download/:filename
-  // but the actual storage paths are served directly; construct an absolute URL from the base.
-  // Try to derive filename for the download endpoint:
-  const filename = path.split(/[/\\]/).pop();
+function resolveAudioUrl(assetPath: string): string {
+  if (assetPath.startsWith('http://') || assetPath.startsWith('https://')) return assetPath;
+  const normalized = assetPath.replace(/\\/g, '/');
+  // Library music/SFX under `storage/audio_assets` — not Prisma session downloads.
+  if (normalized.startsWith('audio_assets/')) {
+    return API_ENDPOINTS.downloadAudioAsset(normalized);
+  }
+  if (normalized.startsWith('storage/audio_assets/')) {
+    return API_ENDPOINTS.downloadAudioAsset(normalized.slice('storage/'.length));
+  }
+  const filename = normalized.split(/[/\\]/).pop();
   if (filename) {
     return `${API_BASE_URL}/api/audio/download/${encodeURIComponent(filename)}`;
   }
-  return `${API_BASE_URL}/${path}`;
+  return `${API_BASE_URL}/${assetPath}`;
 }
 
 function downloadAudioUrl(filename: string, sessionId?: string): string {
@@ -39,6 +44,8 @@ export class AudioEngine {
   /** Cache decoded buffers so re-plays don't re-fetch. */
   private bufferCache = new Map<string, AudioBuffer>();
   private sessionDialogues: any[] | null = null;
+  /** Fade-out at end of each music/SFX clip (seconds, capped by remaining clip length). */
+  private clipFadeOutSeconds = 1.0;
 
   /** Current playback position in seconds along the project timeline. */
   getCurrentTime(): number {
@@ -120,34 +127,42 @@ export class AudioEngine {
         if (!buffer) continue;
 
         const clipEnd = typedClip.start + typedClip.duration;
-        // Skip clips that have already ended relative to startOffset
         if (clipEnd <= timelineOffset) continue;
 
         const gainNode = ctx.createGain();
-        gainNode.gain.value = typedClip.volume ?? 1.0;
+        const clipVolume = typedClip.volume ?? 1.0;
+        gainNode.gain.value = clipVolume;
         gainNode.connect(ctx.destination);
 
         const sourceNode = ctx.createBufferSource();
         sourceNode.buffer = buffer;
 
         const sourceOffset = typedClip.sourceOffset ?? 0;
-
-        // How far into the clip we are (for clips that started before timelineOffset)
         const clipElapsed = Math.max(0, timelineOffset - typedClip.start);
-        // When to start on the AudioContext timeline (relative to ctx.currentTime at play())
         const whenToStart = Math.max(0, typedClip.start - timelineOffset);
-        // How far into the source audio to begin
         const readOffset = sourceOffset + clipElapsed;
-        // How many seconds of the clip remain to play
         const remaining = typedClip.duration - clipElapsed;
+        const bufferRemaining = Math.max(0, buffer.duration - readOffset);
+        const playFor = Math.max(0, Math.min(remaining, bufferRemaining));
 
         sourceNode.connect(gainNode);
-        sourceNode.start(
-          this.startAudioTime + whenToStart,
-          readOffset,
-          Math.max(0, remaining)
-        );
+        const startAt = this.startAudioTime + whenToStart;
+        const endAt = startAt + playFor;
 
+        if (playFor > 0) {
+          const fade = Math.max(0.03, Math.min(this.clipFadeOutSeconds, playFor));
+          const fadeStart = Math.max(startAt, endAt - fade);
+          try {
+            gainNode.gain.cancelScheduledValues(startAt);
+            gainNode.gain.setValueAtTime(clipVolume, startAt);
+            gainNode.gain.setValueAtTime(Math.max(0.0001, clipVolume), fadeStart);
+            gainNode.gain.setTargetAtTime(0.0001, fadeStart, Math.max(0.03, fade / 3));
+          } catch {
+            // Non-fatal
+          }
+        }
+
+        sourceNode.start(startAt, readOffset, playFor);
         this.scheduledNodes.push({ node: sourceNode, gainNode });
       }
     }
@@ -161,27 +176,38 @@ export class AudioEngine {
           const url = downloadAudioUrl(dialogue.audioFile.filename, project.audioSessionId);
           const buffer = this.bufferCache.get(url);
           if (buffer) {
-             const clipStart = cumulativeTime;
-             const clipEnd = clipStart + duration;
-             if (clipEnd > timelineOffset) {
-                const gainNode = ctx.createGain();
-                gainNode.gain.value = 1.0;
-                gainNode.connect(ctx.destination);
-                const sourceNode = ctx.createBufferSource();
-                sourceNode.buffer = buffer;
-                
-                const clipElapsed = Math.max(0, timelineOffset - clipStart);
-                const whenToStart = Math.max(0, clipStart - timelineOffset);
-                const remaining = duration - clipElapsed;
-                
-                sourceNode.connect(gainNode);
-                sourceNode.start(
-                  this.startAudioTime + whenToStart,
-                  clipElapsed,
-                  Math.max(0, remaining)
-                );
-                this.scheduledNodes.push({ node: sourceNode, gainNode });
-             }
+            const clipStart = cumulativeTime;
+            const clipEnd = clipStart + duration;
+            if (clipEnd > timelineOffset) {
+              const gainNode = ctx.createGain();
+              gainNode.gain.value = 1.0;
+              gainNode.connect(ctx.destination);
+              const sourceNode = ctx.createBufferSource();
+              sourceNode.buffer = buffer;
+
+              const clipElapsed = Math.max(0, timelineOffset - clipStart);
+              const whenToStart = Math.max(0, clipStart - timelineOffset);
+              const remaining = duration - clipElapsed;
+              const readOffset = clipElapsed;
+              const bufferRemaining = Math.max(0, buffer.duration - readOffset);
+              const playFor = Math.max(0, Math.min(remaining, bufferRemaining));
+
+              sourceNode.connect(gainNode);
+              const startAt = this.startAudioTime + whenToStart;
+              const endAt = startAt + playFor;
+              if (playFor > 0) {
+                const fade = Math.max(0.03, Math.min(this.clipFadeOutSeconds, playFor));
+                const fadeStart = Math.max(startAt, endAt - fade);
+                try {
+                  gainNode.gain.cancelScheduledValues(startAt);
+                  gainNode.gain.setValueAtTime(1.0, startAt);
+                  gainNode.gain.setValueAtTime(1.0, fadeStart);
+                  gainNode.gain.setTargetAtTime(0.0001, fadeStart, Math.max(0.03, fade / 3));
+                } catch {}
+              }
+              sourceNode.start(startAt, readOffset, playFor);
+              this.scheduledNodes.push({ node: sourceNode, gainNode });
+            }
           }
         }
         cumulativeTime += duration;
@@ -192,12 +218,46 @@ export class AudioEngine {
   /** Stop all playing sources and reset. */
   stop(): void {
     this.playing = false;
-    for (const { node, gainNode } of this.scheduledNodes) {
-      try { node.stop(); } catch { /* already stopped */ }
-      node.disconnect();
-      gainNode.disconnect();
-    }
+    const ctx = this.audioContext;
+    const fade = 0.12;
+    const nodes = this.scheduledNodes;
     this.scheduledNodes = [];
+
+    for (const { node, gainNode } of nodes) {
+      if (ctx) {
+        const now = ctx.currentTime;
+        const stopAt = now + fade;
+        try {
+          const current = gainNode.gain.value;
+          gainNode.gain.cancelScheduledValues(now);
+          gainNode.gain.setValueAtTime(current, now);
+          gainNode.gain.linearRampToValueAtTime(0.0001, stopAt);
+        } catch {}
+        try {
+          node.stop(stopAt);
+        } catch {
+          /* already stopped */
+        }
+        setTimeout(() => {
+          try {
+            node.disconnect();
+          } catch {}
+          try {
+            gainNode.disconnect();
+          } catch {}
+        }, Math.ceil((fade + 0.02) * 1000));
+      } else {
+        try {
+          node.stop();
+        } catch {}
+        try {
+          node.disconnect();
+        } catch {}
+        try {
+          gainNode.disconnect();
+        } catch {}
+      }
+    }
   }
 
   dispose(): void {

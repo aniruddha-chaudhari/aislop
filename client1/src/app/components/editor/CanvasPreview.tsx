@@ -320,7 +320,6 @@ export default function CanvasPreview({
   const compositorRef = useRef<CanvasCompositor | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const audioEngineRef = useRef<AudioEngine | null>(null);
-  const localPlaybackActiveRef = useRef(false);
   const rafIdRef = useRef<number | null>(null);
   const [localCanvasReady, setLocalCanvasReady] = useState(false);
   const onPlayheadChangeRef = useRef(onPlayheadChange);
@@ -380,6 +379,13 @@ export default function CanvasPreview({
     // Support cache-busted playlist URLs like ".../index.m3u8?t=123".
     return /\.m3u8(?:$|[?#])/i.test(previewVideoSrc);
   }, [previewVideoSrc]);
+
+  /** Fingerprint timeline audio clips so WebAudio preload runs when music/SFX/session change. */
+  const audioTimelineKey = useMemo(
+    () => `${project.audioSessionId ?? ''}\0${JSON.stringify(project.tracks)}`,
+    [project.audioSessionId, project.tracks]
+  );
+
   const activeOverlayClips = useMemo(() => {
     const clips: OverlayClip[] = [];
     for (const track of project.tracks) {
@@ -518,6 +524,12 @@ export default function CanvasPreview({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.template.src, project.id, templateMediaKind]);
 
+  useEffect(() => {
+    if (!localCanvasReady || !audioEngineRef.current) return;
+    void audioEngineRef.current.preload(project);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [localCanvasReady, audioTimelineKey, project]);
+
   // Static scrub rendering when paused
   useEffect(() => {
     if (isPlaying || !compositorRef.current || !localCanvasReady) return;
@@ -640,21 +652,12 @@ export default function CanvasPreview({
         const t = seekToSeconds ?? playheadTime;
         lastIntendedPlayheadRef.current = t;
 
-        if (localCanvasReady) {
-          // Local GPU playback: start audio engine and let rAF loop handle rendering
-          if (audioEngineRef.current && projectRef.current) {
-            try {
-              audioEngineRef.current.play(projectRef.current, t);
-              localPlaybackActiveRef.current = true;
-            } catch (e) {
-              console.warn('[CanvasPreview] audioEngine.play threw', e);
-            }
-          }
-        }
-
-        // Fallback: HTML video element playback
+        // AudioEngine.play runs in EditorLayout (user gesture). Here: drive <video> only.
         const video = getVideoElement();
         if (!video) return;
+        // Baked preview (HLS/MP4): keep video audio. Template-only: mute — timeline audio is WebAudio.
+        video.muted = !previewVideoSrc;
+
         isSyncingFromTimelineRef.current = true;
         const doPlay = () => { video.play().catch(() => {}); };
         const needSeek = Number.isFinite(t) && video.readyState >= 1 && Number.isFinite(video.duration) && Math.abs(video.currentTime - t) > 0.05;
@@ -683,8 +686,6 @@ export default function CanvasPreview({
         }
       },
       requestPause: () => {
-        audioEngineRef.current?.stop();
-        localPlaybackActiveRef.current = false;
         const video = getVideoElement();
         video?.pause();
       },
@@ -916,7 +917,10 @@ export default function CanvasPreview({
                 key={videoSrc}
                 className="absolute inset-0 h-full w-full object-cover"
                 src={videoSrc ?? '/next.svg'}
-                alt={project.template.label}
+                alt=""
+                onError={(e) => {
+                  e.currentTarget.style.visibility = 'hidden';
+                }}
               />
             ) : null}
 
@@ -1000,9 +1004,12 @@ export default function CanvasPreview({
               <img
                 key={clip.id}
                 src={url}
-                alt={clip.label}
+                alt=""
                 className="block"
                 style={style}
+                onError={(e) => {
+                  e.currentTarget.style.visibility = 'hidden';
+                }}
               />
             );
           })}
@@ -1012,7 +1019,6 @@ export default function CanvasPreview({
               .filter(([, clip]) => clip != null)
               .map(([slot, clip]) => {
                 const c = clip as CharacterClip;
-                const emo = resolveCharacterClipEmotion(project, c);
                 return (
                   // Stable key per slot → same <img> element across clip transitions, so the
                   // browser re-uses the cached bitmap (no flicker / "cycling" through all sprites).
@@ -1020,9 +1026,12 @@ export default function CanvasPreview({
                   <img
                     key={`character_slot_${slot}`}
                     src={characterImageUrl(c)}
-                    alt={`${voiceDisplayName(c.character)} ${emo}`}
+                    alt=""
                     className="block pointer-events-none"
                     style={{ ...characterStyle(c), zIndex: 28 }}
+                    onError={(e) => {
+                      e.currentTarget.style.visibility = 'hidden';
+                    }}
                   />
                 );
               })}
