@@ -48,6 +48,8 @@ export type OverlayClip = BaseClip & {
   displayMode?: 'overlay' | 'replace';
   /** When set, export uses this path instead of storage/images/{sessionId}/{assetId}.png */
   path?: string;
+  /** Set on upload; used when path/label lack a file extension. */
+  mediaKind?: 'image' | 'video';
   planStatus?: 'draft' | 'approved';
   promptText?: string;
   promptEdited?: boolean;

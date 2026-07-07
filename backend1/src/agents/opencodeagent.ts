@@ -37,6 +37,35 @@ export interface OpenCodeRunOptions {
   cwd?: string;
   /** When true, resolve early once the stream contains valid GeneratedClip component code — avoids hanging after output is ready. */
   earlyCompleteForClipCode?: boolean;
+  /** When true, resolve early once the stream contains valid HyperFrames clip HTML (JSON html or full document). */
+  earlyCompleteForHyperframesClipHtml?: boolean;
+  /** Throttled stream diagnostics (stdout/stderr growth, tools, HTML readiness). */
+  onProgress?: (snapshot: OpenCodeStreamProgressSnapshot) => void;
+  /** Minimum ms between onProgress calls (default 5000). */
+  progressThrottleMs?: number;
+}
+
+export interface OpenCodeStreamProgressSnapshot {
+  elapsedMs: number;
+  stdoutChars: number;
+  stderrChars: number;
+  parsedEvents: number;
+  eventTypeCounts: Record<string, number>;
+  toolUseNames: string[];
+  skillInvocations: string[];
+  assistantTextChars: number;
+  hasCompositionId: boolean;
+  hasGsapTimeline: boolean;
+  hasDoctype: boolean;
+  hasClosedHtml: boolean;
+  hasJsonHtmlField: boolean;
+  earlyCompleteHyperframesHtml: boolean;
+  earlyCompleteClipCode: boolean;
+  lastEventType: string | null;
+  lastToolName: string | null;
+  lastSkillName: string | null;
+  stderrTail: string | null;
+  assistantTail: string | null;
 }
 
 export interface OpenCodeResult {
@@ -92,7 +121,7 @@ export type OpenCodeEnvironmentCheck = {
   skillsRaw: string;
 };
 
-function summarizeForLog(text: string, max = 240): string {
+export function summarizeForLog(text: string, max = 240): string {
   const compact = text.replace(/\s+/g, ' ').trim();
   if (compact.length <= max) return compact;
   return `${compact.slice(0, max)}...`;
@@ -282,6 +311,23 @@ function extractToolUseEvents(output: string): Array<Record<string, any>> {
   return toolEvents;
 }
 
+/** Skill names from OpenCode `skill` tool_use events (input.name). */
+export function listOpenCodeSkillInvocations(output: string): string[] {
+  const invocations: string[] = [];
+  for (const event of extractToolUseEvents(output)) {
+    const requestedName = [
+      event.part?.state?.input?.name,
+      event.part?.input?.name,
+      event.state?.input?.name,
+      event.input?.name,
+    ].find((value) => typeof value === 'string' && value.trim()) as string | undefined;
+    if (requestedName?.trim()) {
+      invocations.push(requestedName.trim().toLowerCase());
+    }
+  }
+  return invocations;
+}
+
 function detectExaUsage(diagnostics: OpenCodeOutputDiagnostics, output: string): boolean {
   const hasExaToolName = (name: string): boolean => {
     const normalized = name.toLowerCase();
@@ -345,7 +391,7 @@ function detectRemotionSkillUsage(diagnostics: OpenCodeOutputDiagnostics, output
   return false;
 }
 
-function extractEventStreamText(output: string): string {
+export function extractEventStreamText(output: string): string {
   const trimmed = output.trim();
   if (!trimmed) return '';
 
@@ -373,6 +419,21 @@ function extractEventStreamText(output: string): string {
  * (before the OpenCode process exits) so we don't hang waiting for cleanup/extra output
  * after the useful result has already arrived.
  */
+/** Lightweight stream detector for HyperFrames index.html (avoids waiting for OpenCode process exit). */
+function hasCompleteHyperframesClipHtmlInStream(output: string): boolean {
+  if (!output || output.length < 600) return false;
+  const hasComposition = /data-composition-id\s*=\s*["'][^"']+["']/i.test(output);
+  const hasTimeline = /gsap\.timeline\s*\(/i.test(output);
+  if (!hasComposition || !hasTimeline) return false;
+
+  const hasClosedDoc = /<!DOCTYPE\s+html>/i.test(output) && /<\/html>/i.test(output);
+  const hasJsonHtml =
+    /"html"\s*:\s*"<!DOCTYPE/i.test(output) ||
+    (/"html"\s*:\s*"/.test(output) && /data-composition-id/i.test(output) && output.length > 2500);
+
+  return hasClosedDoc || hasJsonHtml;
+}
+
 function hasCompleteClipCodeInStream(output: string): boolean {
   if (!output || output.length < 200) return false;
   let textContent = '';
@@ -501,6 +562,97 @@ export async function inspectOpenCodeEnvironment(cwd: string): Promise<OpenCodeE
   };
 }
 
+function extractAssistantTextFromEventStream(output: string): string {
+  let text = '';
+  for (const line of output.split('\n')) {
+    try {
+      const event = JSON.parse(line) as { type?: string; part?: { text?: string } };
+      if (event.type === 'text' && typeof event.part?.text === 'string') {
+        text += event.part.text;
+      }
+    } catch {
+      // ignore non-JSON lines
+    }
+  }
+  return text;
+}
+
+function findLastStreamEventHints(output: string): {
+  lastEventType: string | null;
+  lastToolName: string | null;
+  lastSkillName: string | null;
+} {
+  const lines = output.trim().split('\n').filter(Boolean);
+  let lastEventType: string | null = null;
+  let lastToolName: string | null = null;
+  let lastSkillName: string | null = null;
+  for (let i = lines.length - 1; i >= 0 && i >= lines.length - 120; i--) {
+    try {
+      const event = JSON.parse(lines[i]) as Record<string, any>;
+      const eventType = typeof event.type === 'string' ? event.type : null;
+      if (!lastEventType && eventType) lastEventType = eventType;
+      if (eventType === 'tool_use') {
+        const toolName = extractToolName(event);
+        if (toolName && !lastToolName) lastToolName = toolName;
+        const skillName = [
+          event.part?.state?.input?.name,
+          event.part?.input?.name,
+          event.state?.input?.name,
+          event.input?.name,
+        ].find((v) => typeof v === 'string' && v.trim()) as string | undefined;
+        if (skillName?.trim() && !lastSkillName) lastSkillName = skillName.trim();
+      }
+      if (lastEventType && lastToolName) break;
+    } catch {
+      // ignore
+    }
+  }
+  return { lastEventType, lastToolName, lastSkillName };
+}
+
+export function describeOpenCodeStreamProgress(
+  output: string,
+  extra?: {
+    elapsedMs?: number;
+    stderr?: string;
+    earlyCompleteForHyperframesClipHtml?: boolean;
+    earlyCompleteForClipCode?: boolean;
+  }
+): OpenCodeStreamProgressSnapshot {
+  const diagnostics = summarizeOpenCodeOutput(output);
+  const skillInvocations = listOpenCodeSkillInvocations(output);
+  const assistantText = extractAssistantTextFromEventStream(output);
+  const lastHints = findLastStreamEventHints(output);
+  const stderrRaw = extra?.stderr ?? '';
+  const tailMax = Math.max(80, Number(process.env.HYPERFRAMES_STREAM_TAIL_CHARS || 220));
+
+  return {
+    elapsedMs: extra?.elapsedMs ?? 0,
+    stdoutChars: output.length,
+    stderrChars: stderrRaw.length,
+    parsedEvents: diagnostics.parsedEvents,
+    eventTypeCounts: diagnostics.eventTypeCounts,
+    toolUseNames: diagnostics.toolUseNames,
+    skillInvocations,
+    assistantTextChars: assistantText.length,
+    hasCompositionId: /data-composition-id\s*=/i.test(output),
+    hasGsapTimeline: /gsap\.timeline\s*\(/i.test(output),
+    hasDoctype: /<!DOCTYPE\s+html>/i.test(output),
+    hasClosedHtml: /<\/html>/i.test(output),
+    hasJsonHtmlField: /"html"\s*:\s*"/.test(output),
+    earlyCompleteHyperframesHtml:
+      Boolean(extra?.earlyCompleteForHyperframesClipHtml) &&
+      hasCompleteHyperframesClipHtmlInStream(output),
+    earlyCompleteClipCode:
+      Boolean(extra?.earlyCompleteForClipCode) && hasCompleteClipCodeInStream(output),
+    lastEventType: lastHints.lastEventType,
+    lastToolName: lastHints.lastToolName,
+    lastSkillName: lastHints.lastSkillName,
+    stderrTail: stderrRaw.trim() ? summarizeForLog(stderrRaw.trim(), tailMax) : null,
+    assistantTail: assistantText.trim() ? summarizeForLog(assistantText.trim(), tailMax) : null,
+  };
+}
+
 export function summarizeOpenCodeOutput(output: string): OpenCodeOutputDiagnostics {
   const trimmed = output.trim();
   const lines = trimmed ? trimmed.split('\n') : [];
@@ -603,9 +755,30 @@ export async function opencodeRun(options: OpenCodeRunOptions): Promise<string> 
     let stderr = '';
     let closed = false;
     let timedOut = false;
+    let lastProgressEmitAt = 0;
+    const progressThrottleMs = Math.max(
+      2000,
+      options.progressThrottleMs ?? Number(process.env.OPENCODE_PROGRESS_THROTTLE_MS || 5000)
+    );
+
+    const emitStreamProgress = (force = false) => {
+      if (!options.onProgress || closed) return;
+      const now = Date.now();
+      if (!force && now - lastProgressEmitAt < progressThrottleMs) return;
+      lastProgressEmitAt = now;
+      options.onProgress(
+        describeOpenCodeStreamProgress(stdout, {
+          elapsedMs: now - startedAt,
+          stderr,
+          earlyCompleteForHyperframesClipHtml: options.earlyCompleteForHyperframesClipHtml,
+          earlyCompleteForClipCode: options.earlyCompleteForClipCode,
+        })
+      );
+    };
 
     const heartbeatTimer = setInterval(() => {
       if (closed) return;
+      emitStreamProgress();
       opencodeInfo('Run heartbeat', {
         elapsedMs: Date.now() - startedAt,
         promptChars: prompt.length,
@@ -617,13 +790,24 @@ export async function opencodeRun(options: OpenCodeRunOptions): Promise<string> 
     const timeoutTimer = setTimeout(() => {
       if (closed) return;
       timedOut = true;
+      emitStreamProgress(true);
+      const timeoutSnapshot = describeOpenCodeStreamProgress(stdout, {
+        elapsedMs: Date.now() - startedAt,
+        stderr,
+        earlyCompleteForHyperframesClipHtml: options.earlyCompleteForHyperframesClipHtml,
+        earlyCompleteForClipCode: options.earlyCompleteForClipCode,
+      });
       opencodeError('Run timed out', {
         elapsedMs: Date.now() - startedAt,
         timeoutMs: OPENCODE_RUN_TIMEOUT_MS,
         promptChars: prompt.length,
         stdoutChars: stdout.length,
         stderrChars: stderr.length,
+        timeoutSnapshot,
       });
+      if (process.env.HYPERFRAMES_LOG_OPENCODE_OUTPUT !== '0') {
+        console.error('[HyperFrames Agent] OpenCode run timed out', timeoutSnapshot);
+      }
       try {
         proc.kill();
       } catch {
@@ -634,36 +818,48 @@ export async function opencodeRun(options: OpenCodeRunOptions): Promise<string> 
     proc.stdout?.on('data', (data) => {
       const chunk = data.toString();
       stdout += chunk;
+      emitStreamProgress();
       if (OPENCODE_LOG_EVERY_WORD) {
         // Verbose logging disabled.
       }
       // Early completion: once valid clip code JSON is in the stream we no longer need
       // to wait for the OpenCode process to exit — resolve now and kill to free resources.
-      if (
-        !closed &&
-        options.earlyCompleteForClipCode &&
-        options.format === 'json' &&
-        hasCompleteClipCodeInStream(stdout)
-      ) {
-        closed = true;
-        clearInterval(heartbeatTimer);
-        clearTimeout(timeoutTimer);
-        opencodeInfo('Early completion: valid clip code detected in stream', {
-          stdoutChars: stdout.length,
-          elapsedMs: Date.now() - startedAt,
-        });
-        try {
-          proc.kill();
-        } catch {
-          // ignore kill failures
+      if (!closed && options.format === 'json') {
+        const earlyClipCode =
+          options.earlyCompleteForClipCode && hasCompleteClipCodeInStream(stdout);
+        const earlyHyperframesHtml =
+          options.earlyCompleteForHyperframesClipHtml &&
+          hasCompleteHyperframesClipHtmlInStream(stdout);
+        if (earlyClipCode || earlyHyperframesHtml) {
+          closed = true;
+          clearInterval(heartbeatTimer);
+          clearTimeout(timeoutTimer);
+          opencodeInfo('Early completion: valid output detected in stream', {
+            kind: earlyHyperframesHtml ? 'hyperframes-html' : 'remotion-clip-code',
+            stdoutChars: stdout.length,
+            elapsedMs: Date.now() - startedAt,
+          });
+          if (process.env.HYPERFRAMES_LOG_OPENCODE_OUTPUT !== '0') {
+            console.log('[HyperFrames Agent] OpenCode early completion', {
+              kind: earlyHyperframesHtml ? 'hyperframes-html' : 'remotion-clip-code',
+              stdoutChars: stdout.length,
+              elapsedMs: Date.now() - startedAt,
+            });
+          }
+          try {
+            proc.kill();
+          } catch {
+            // ignore kill failures
+          }
+          resolve(stdout);
         }
-        resolve(stdout);
       }
     });
 
     proc.stderr?.on('data', (data) => {
       const chunk = data.toString();
       stderr += chunk;
+      emitStreamProgress();
       if (OPENCODE_LOG_EVERY_WORD) {
         // Verbose logging disabled.
       }
@@ -766,40 +962,140 @@ export async function opencodeRunMultiModel(
   return results;
 }
 
-function parseJsonFromText<T = any>(text: string): T | null {
+/** Pull a moments array from common OpenCode / model plan shapes. */
+export function extractRawMomentsFromPlan(raw: unknown): unknown[] {
+  if (Array.isArray(raw)) return raw;
+  if (!raw || typeof raw !== 'object') return [];
+
+  const asObj = raw as Record<string, unknown>;
+  if (Array.isArray(asObj.moments)) return asObj.moments;
+  if (Array.isArray(asObj.animations)) return asObj.animations;
+  if (Array.isArray(asObj.animationMoments)) return asObj.animationMoments;
+  if (asObj.animationPlan && typeof asObj.animationPlan === 'object') {
+    const nested = (asObj.animationPlan as Record<string, unknown>).moments;
+    if (Array.isArray(nested)) return nested;
+  }
+  if (Array.isArray(asObj.plan)) return asObj.plan;
+  if (asObj.plan && typeof asObj.plan === 'object') {
+    const nested = (asObj.plan as Record<string, unknown>).moments;
+    if (Array.isArray(nested)) return nested;
+  }
+  if (asObj.data && typeof asObj.data === 'object') {
+    return extractRawMomentsFromPlan(asObj.data);
+  }
+  if (asObj.result && typeof asObj.result === 'object') {
+    return extractRawMomentsFromPlan(asObj.result);
+  }
+  return [];
+}
+
+export function countRawMomentsInPlan(raw: unknown): number {
+  return extractRawMomentsFromPlan(raw).length;
+}
+
+function scoreParsedPlanCandidate(candidate: unknown): number {
+  return countRawMomentsInPlan(candidate);
+}
+
+function extractBalancedJsonObject(text: string, openBraceIndex: number): string | null {
+  if (openBraceIndex < 0 || text[openBraceIndex] !== '{') return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = openBraceIndex; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(openBraceIndex, i + 1);
+    }
+  }
+  return null;
+}
+
+function collectJsonCandidates(text: string): unknown[] {
   const trimmed = text.trim();
-  if (!trimmed) return null;
+  if (!trimmed) return [];
+
+  const candidates: unknown[] = [];
+  const pushCandidate = (value: unknown) => {
+    if (value !== null && value !== undefined) candidates.push(value);
+  };
 
   try {
-    return JSON.parse(trimmed);
+    pushCandidate(JSON.parse(trimmed));
   } catch {
-    // Continue to permissive parsing
+    // continue
   }
 
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  if (fenced?.[1]) {
+  for (const fence of trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/gi)) {
     try {
-      return JSON.parse(fenced[1].trim());
+      pushCandidate(JSON.parse(fence[1].trim()));
     } catch {
-      // Continue
+      // continue
     }
   }
 
   const objectMatch = trimmed.match(/\{[\s\S]*\}/);
   const arrayMatch = trimmed.match(/\[[\s\S]*\]/);
-  const raw = objectMatch?.[0] || arrayMatch?.[0];
-  if (!raw) return null;
-
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
+  const greedy = objectMatch?.[0] || arrayMatch?.[0];
+  if (greedy) {
+    try {
+      pushCandidate(JSON.parse(greedy));
+    } catch {
+      // continue
+    }
   }
+
+  const momentsKey = '"moments"';
+  let searchFrom = trimmed.length;
+  while (searchFrom > 0) {
+    const keyIdx = trimmed.lastIndexOf(momentsKey, searchFrom);
+    if (keyIdx < 0) break;
+    let openIdx = -1;
+    for (let i = keyIdx; i >= 0; i--) {
+      if (trimmed[i] !== '{') continue;
+      const slice = extractBalancedJsonObject(trimmed, i);
+      if (!slice || !slice.includes(momentsKey)) continue;
+      try {
+        pushCandidate(JSON.parse(slice));
+        openIdx = i;
+        break;
+      } catch {
+        // try an earlier object
+      }
+    }
+    searchFrom = (openIdx >= 0 ? openIdx : keyIdx) - 1;
+  }
+
+  return candidates;
+}
+
+function pickBestJsonCandidate<T>(candidates: unknown[]): T | null {
+  if (candidates.length === 0) return null;
+  const ranked = [...candidates].sort((a, b) => scoreParsedPlanCandidate(b) - scoreParsedPlanCandidate(a));
+  return ranked[0] as T;
+}
+
+function parseJsonFromText<T = any>(text: string): T | null {
+  const candidates = collectJsonCandidates(text);
+  if (candidates.length === 0) return null;
+  return pickBestJsonCandidate<T>(candidates);
 }
 
 export function parseOpenCodeJSON<T = any>(output: string): T | null {
   const direct = parseJsonFromText<T>(output);
-  if (direct) return direct;
+  if (direct && scoreParsedPlanCandidate(direct) > 0) return direct;
 
   const lines = output.trim().split('\n').filter(Boolean);
   if (lines.length <= 1) {
@@ -812,12 +1108,13 @@ export function parseOpenCodeJSON<T = any>(output: string): T | null {
   for (const line of lines) {
     try {
       const event = JSON.parse(line) as Record<string, any>;
-      if (event.type === 'text' || event.type === 'step_start' || event.type === 'tool_use') {
+      const eventType = typeof event.type === 'string' ? event.type : null;
+      if (eventType === 'text' || eventType === 'step_start' || eventType === 'tool_use') {
         hasEventStreamHints = true;
       }
-      if (event.type === 'text' && typeof event.part?.text === 'string') {
-        textContent += event.part.text;
-      }
+      if (eventType === 'tool_use') continue;
+      const chunk = collectEventText(event);
+      if (chunk) textContent += `${chunk}\n`;
     } catch {
       // ignore
     }
@@ -825,15 +1122,17 @@ export function parseOpenCodeJSON<T = any>(output: string): T | null {
 
   if (!hasEventStreamHints) {
     opencodeWarn('Could not parse JSON from output');
-    return null;
+    return direct ?? null;
   }
 
   opencodeInfo('Detected event stream output', { events: lines.length, extractedChars: textContent.length });
   const parsed = parseJsonFromText<T>(textContent);
   if (!parsed) {
     opencodeWarn('Event stream had no parseable JSON text');
+    return direct;
   }
-  return parsed;
+  if (scoreParsedPlanCandidate(parsed) > 0) return parsed;
+  return (direct ?? parsed) as T;
 }
 
 type AnimationBudgetPlan = {

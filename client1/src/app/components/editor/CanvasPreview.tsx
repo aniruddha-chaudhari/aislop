@@ -8,6 +8,8 @@ import { CanvasCompositor } from '../../../lib/canvasCompositor';
 import { AudioEngine } from '../../../lib/audioEngine';
 import { voiceDisplayName } from '../../../features/editor/voiceDisplayName';
 import { resolveCharacterClipEmotion } from '../../../features/editor/characterClipEmotion';
+import { isOverlayClipVideo, probeOverlayUrlIsVideo } from '../../../features/editor/overlayMedia';
+import { computeOverlayPlacement } from '../../../features/editor/overlayTransform';
 
 export type PreviewPlayerApi = {
   /** Optional: seek to this time (seconds) before playing. Use current playhead so video starts from timeline position. */
@@ -41,16 +43,40 @@ type Props = {
 
 const FRAME_W = 1080;
 const FRAME_H = 1920;
+const SUBTITLE_SAFE_BOTTOM = 700;
+
 function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n));
 }
 
-function isStillMedia(src: string): boolean {
-  return /\.(png|jpe?g|webp|gif|bmp|avif)(?:$|[?#])/i.test(src);
+/** Still-image overlays: legacy placement (centered X, ~40px top inset at 1080×1920). */
+function overlayImageDomStyle(clip: OverlayClip): CSSProperties {
+  const placement = computeOverlayPlacement(clip, FRAME_W, FRAME_H);
+  return {
+    position: 'absolute',
+    left: `${(placement.x / FRAME_W) * 100}%`,
+    top: `${(placement.y / FRAME_H) * 100}%`,
+    width: `${(placement.width / FRAME_W) * 100}%`,
+    height: `${(placement.height / FRAME_H) * 100}%`,
+    objectFit: 'contain',
+    zIndex: 26,
+    pointerEvents: 'none',
+  };
 }
 
-function isVideoMedia(src: string): boolean {
-  return /\.(mp4|webm|mov|m4v)(?:$|[?#])/i.test(src);
+/** Video B-roll above the subtitle band (matches backend top-region pad). */
+function overlayTopRegionVideoStyle(): CSSProperties {
+  return {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    width: '100%',
+    height: `${((FRAME_H - SUBTITLE_SAFE_BOTTOM) / FRAME_H) * 100}%`,
+    objectFit: 'contain',
+    objectPosition: 'top center',
+    zIndex: 26,
+    pointerEvents: 'none',
+  };
 }
 
 function isHyperframesOverlay(clip: OverlayClip): boolean {
@@ -463,6 +489,8 @@ export default function CanvasPreview({
     return API_ENDPOINTS.serveProjectImage(project.id, clip.assetId);
   }, [project.id]);
 
+  const [probedVideoAssetIds, setProbedVideoAssetIds] = useState<Set<string>>(() => new Set());
+
   const characterImageUrl = useCallback((clip: CharacterClip): string => {
     const name = encodeURIComponent(voiceDisplayName(clip.character));
     const emotion = encodeURIComponent(resolveCharacterClipEmotion(project, clip));
@@ -471,6 +499,35 @@ export default function CanvasPreview({
 
   /** Baked FFmpeg preview (segment/HLS) already composites overlays, characters, subtitles — hide DOM duplicates. */
   const showDomTimelineComposite = !previewVideoSrc;
+
+  useEffect(() => {
+    if (!showDomTimelineComposite) {
+      setProbedVideoAssetIds(new Set());
+      return;
+    }
+    let cancelled = false;
+    const clips = activeOverlayClips.filter((clip) => !isOverlayClipVideo(clip));
+    if (clips.length === 0) {
+      setProbedVideoAssetIds(new Set());
+      return;
+    }
+    void Promise.all(
+      clips.map(async (clip) => {
+        const isVideo = await probeOverlayUrlIsVideo(getOverlayUrl(clip));
+        return [clip.assetId, isVideo] as const;
+      }),
+    ).then((results) => {
+      if (cancelled) return;
+      const next = new Set<string>();
+      for (const [assetId, isVideo] of results) {
+        if (isVideo) next.add(assetId);
+      }
+      setProbedVideoAssetIds(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeOverlayClips, getOverlayUrl, showDomTimelineComposite]);
 
   // Warm the browser image cache with every resolved sprite URL (same resolution as FFmpeg's per-clip inputs).
   useEffect(() => {
@@ -947,12 +1004,11 @@ export default function CanvasPreview({
 
           {showDomTimelineComposite && activeOverlayClips.map((clip) => {
             const url = getOverlayUrl(clip);
-            const hint = clip.path || clip.label || clip.assetId;
-            const isVideo = isVideoMedia(hint) || (!isStillMedia(hint) && isVideoMedia(url));
+            const isVideo = isOverlayClipVideo(clip) || probedVideoAssetIds.has(clip.assetId);
             const isReplace = clip.displayMode === 'replace';
             const isFullFrameVideo = isVideo && (isReplace || isHyperframesOverlay(clip));
             // Mirrors backend: replace = full frame letterboxed; hyperframes = full frame transparent;
-            // everything else (image OR video) fills the top region above the subtitle band.
+            // still images = legacy placement; video B-roll = top region above subtitles.
             const style: CSSProperties = isReplace
               ? {
                   position: 'absolute',
@@ -974,17 +1030,9 @@ export default function CanvasPreview({
                     zIndex: 26,
                     pointerEvents: 'none',
                   }
-                : {
-                    position: 'absolute',
-                    left: 0,
-                    top: 0,
-                    width: '100%',
-                    height: `${((FRAME_H - 700) / FRAME_H) * 100}%`,
-                    objectFit: 'contain',
-                    objectPosition: 'top center',
-                    zIndex: 26,
-                    pointerEvents: 'none',
-                  };
+                : isVideo
+                  ? overlayTopRegionVideoStyle()
+                  : overlayImageDomStyle(clip);
 
             if (isVideo) {
               return (

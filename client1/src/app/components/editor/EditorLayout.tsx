@@ -10,6 +10,7 @@ import TextPropertiesPanel, { type TextPropertiesPanelHandle } from './TextPrope
 import VideoTimelinePanel from './VideoTimelinePanel';
 import { API_ENDPOINTS, API_BASE_URL } from '../../../config/api';
 import { editorProjectFromApi, sortEditorTracks as sortTracks } from '../../../features/editor/mapApiProject';
+import { mediaKindFromFilename } from '../../../features/editor/overlayMedia';
 
 const TEMPLATE_OVERLAY_TRACK_ID = 't_overlay_template';
 /** Smallest segment length (seconds) allowed when splitting — avoids zero-length clips */
@@ -113,6 +114,7 @@ type AudioSession = {
 type ProjectImageAsset = {
   assetId: string;
   filename: string;
+  path: string;
   size: number;
 };
 
@@ -874,6 +876,7 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
       const duration = Math.max(1, p.duration || 1);
       const clipDuration = Math.max(0.2, Math.min(defaultDuration, duration - start || defaultDuration));
       const clipId = `overlay_media_img_${Date.now()}`;
+      const mediaKind = mediaKindFromFilename(asset.filename);
       const clip: Clip = {
         id: clipId,
         kind: 'overlay',
@@ -881,6 +884,8 @@ export default function EditorLayout({ project, onProjectUpdate }: Props) {
         duration: clipDuration,
         assetId: asset.assetId,
         label: asset.filename,
+        path: asset.path,
+        ...(mediaKind && { mediaKind }),
         x: IMAGE_PLAN_DEFAULT_X,
         y: IMAGE_PLAN_DEFAULT_Y,
         scale: IMAGE_PLAN_DEFAULT_SCALE,

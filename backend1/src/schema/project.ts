@@ -62,6 +62,7 @@ export const OverlayClipSchema = z.object({
   // overlay = regular positioned overlay, replace = full-frame B-roll replacement
   displayMode: z.enum(['overlay', 'replace']).optional(),
   path: z.string().optional(),
+  mediaKind: z.enum(['image', 'video']).optional(),
   planStatus: z.enum(['draft', 'approved']).optional(),
   promptText: z.string().optional(),
   promptEdited: z.boolean().optional(),

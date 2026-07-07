@@ -81,8 +81,9 @@ async function parseBody(
 }
 
 function findRoute(method: string, pathname: string): { route: Route; params: Record<string, string> } | null {
+  const matchMethod = method === 'HEAD' ? 'GET' : method;
   for (const route of routes) {
-    if (route.method !== method) continue;
+    if (route.method !== matchMethod) continue;
     const params = matchPath(route.pattern, pathname);
     if (params !== null) return { route, params };
   }
@@ -186,5 +187,8 @@ export async function handleRequest(request: Request, server?: BunServer): Promi
   const res = toResponse(result);
   const outHeaders = new Headers(res.headers);
   Object.entries(cors).forEach(([k, v]) => outHeaders.set(k, v));
+  if (method === 'HEAD') {
+    return new Response(null, { status: res.status, headers: outHeaders });
+  }
   return new Response(res.body, { status: res.status, headers: outHeaders });
 }

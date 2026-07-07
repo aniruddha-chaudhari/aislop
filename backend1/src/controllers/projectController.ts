@@ -2067,16 +2067,29 @@ export async function serveProjectImage(ctx: HttpContext): Promise<HandlerResult
       });
     }
 
-    const buf = fs.readFileSync(filePath);
     const contentType = mimeForOverlayFile(filePath);
+    const contentLength = String(fs.statSync(filePath).size);
+    const cacheControl = 'no-store';
 
+    if (ctx.method === 'HEAD') {
+      return new Response(null, {
+        status: 200,
+        headers: {
+          'Content-Type': contentType,
+          'Content-Length': contentLength,
+          'Cache-Control': cacheControl,
+        },
+      });
+    }
+
+    const buf = fs.readFileSync(filePath);
     return new Response(buf, {
       status: 200,
       headers: {
         'Content-Type': contentType,
-        'Content-Length': String(buf.length),
+        'Content-Length': contentLength,
         // Avoid stale overlay media after re-uploading into the same assetId.
-        'Cache-Control': 'no-store',
+        'Cache-Control': cacheControl,
       },
     });
   } catch (error) {

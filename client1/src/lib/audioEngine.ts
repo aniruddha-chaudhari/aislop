@@ -44,8 +44,8 @@ export class AudioEngine {
   /** Cache decoded buffers so re-plays don't re-fetch. */
   private bufferCache = new Map<string, AudioBuffer>();
   private sessionDialogues: any[] | null = null;
-  /** Fade-out at end of each music/SFX clip (seconds, capped by remaining clip length). */
-  private clipFadeOutSeconds = 1.0;
+  /** Fade-out at end of music clips only (seconds, capped by remaining clip length). */
+  private musicFadeOutSeconds = 1.0;
 
   /** Current playback position in seconds along the project timeline. */
   getCurrentTime(): number {
@@ -149,8 +149,8 @@ export class AudioEngine {
         const startAt = this.startAudioTime + whenToStart;
         const endAt = startAt + playFor;
 
-        if (playFor > 0) {
-          const fade = Math.max(0.03, Math.min(this.clipFadeOutSeconds, playFor));
+        if (playFor > 0 && clip.kind === 'music') {
+          const fade = Math.max(0.03, Math.min(this.musicFadeOutSeconds, playFor));
           const fadeStart = Math.max(startAt, endAt - fade);
           try {
             gainNode.gain.cancelScheduledValues(startAt);
@@ -194,17 +194,6 @@ export class AudioEngine {
 
               sourceNode.connect(gainNode);
               const startAt = this.startAudioTime + whenToStart;
-              const endAt = startAt + playFor;
-              if (playFor > 0) {
-                const fade = Math.max(0.03, Math.min(this.clipFadeOutSeconds, playFor));
-                const fadeStart = Math.max(startAt, endAt - fade);
-                try {
-                  gainNode.gain.cancelScheduledValues(startAt);
-                  gainNode.gain.setValueAtTime(1.0, startAt);
-                  gainNode.gain.setValueAtTime(1.0, fadeStart);
-                  gainNode.gain.setTargetAtTime(0.0001, fadeStart, Math.max(0.03, fade / 3));
-                } catch {}
-              }
               sourceNode.start(startAt, readOffset, playFor);
               this.scheduledNodes.push({ node: sourceNode, gainNode });
             }

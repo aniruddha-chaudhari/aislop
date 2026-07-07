@@ -8,7 +8,12 @@ import {
   inspectHyperframesOpenCodeEnvironment,
   type HyperframesOpenCodeEnvironmentCheck,
 } from '../agents/hyperframesAgent';
-import { parseOpenCodeJSON, ANIMATION_GLOBAL_MOMENT_CEILING } from '../agents/opencodeagent';
+import {
+  parseOpenCodeJSON,
+  ANIMATION_GLOBAL_MOMENT_CEILING,
+  countRawMomentsInPlan,
+  extractRawMomentsFromPlan,
+} from '../agents/opencodeagent';
 
 const HYPERFRAMES_ROOT_DIR = path.join(process.cwd(), 'storage', 'hyperframes-animation');
 const RENDERED_HYPERFRAMES_ROOT_DIR = path.join(process.cwd(), 'storage', 'rendered-hyperframes-animations');
@@ -576,36 +581,123 @@ function buildBootstrapReviewFromTimeline(params: {
   return review;
 }
 
+function fallbackMomentsFromSubtitles(
+  subtitleClips: SubtitleClip[],
+  videoDurationSeconds: number,
+  maxMoments: number
+): AnimationMoment[] {
+  if (subtitleClips.length === 0 || videoDurationSeconds <= 0) return [];
+
+  const sorted = [...subtitleClips].sort((a, b) => a.start - b.start);
+  const desired = clamp(Math.ceil(videoDurationSeconds / 12), 1, Math.max(1, maxMoments));
+  const stride = Math.max(1, Math.floor(sorted.length / desired));
+  const moments: AnimationMoment[] = [];
+
+  for (let i = 0; i < sorted.length && moments.length < Math.max(1, maxMoments); i += stride) {
+    const clip = sorted[i];
+    const start = clamp(clip.start, 0, Math.max(0, videoDurationSeconds - 0.05));
+    const maxDuration = Math.max(0.2, videoDurationSeconds - start);
+    const duration = clamp(Math.min(Math.max(clip.duration, 1.6), 4), 1.2, maxDuration);
+    const text = cleanText(clip.text);
+    const displayText = text.split(' ').slice(0, 4).join(' ') || `Beat ${moments.length + 1}`;
+    const content =
+      text.split(' ').slice(0, 5).join(' ') || `Animation moment ${moments.length + 1}`;
+    moments.push({
+      animationMomentId: `anim_moment_${moments.length + 1}`,
+      start: Number(start.toFixed(3)),
+      duration: Number(duration.toFixed(3)),
+      type: 'kinetic-type',
+      narratorText: text,
+      displayText,
+      content,
+      subtitle: text.slice(0, 120) || `Animation moment ${moments.length + 1}`,
+      emphasis: text.split(' ').slice(0, 2).join(' '),
+      animationPrompt: [
+        `HyperFrames 9:16 kinetic beat — hero: "${displayText}".`,
+        'Phase map: pre-punch ambient + context anchor; punch-sync hero (T-series); hold with subtle breathe.',
+        'Name B/G/L/T technique codes from hyperframes skill; spell GSAP from/to, duration, ease per phase.',
+        'Do not render narrator/subtitle text on screen.',
+      ].join(' '),
+    });
+  }
+
+  return moments.sort((a, b) => a.start - b.start);
+}
+
 function normalizePlan(raw: unknown, subtitleClips: SubtitleClip[], videoDurationSeconds: number): AnimationPlan {
   const rawObj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-  const rawMoments = Array.isArray(rawObj.moments) ? rawObj.moments : Array.isArray(raw) ? raw : [];
-  const duration = Math.max(1, videoDurationSeconds || toNumber(rawObj.videoDurationSeconds) || 60);
+  const rawMoments = extractRawMomentsFromPlan(raw);
+  const duration = Math.max(
+    1,
+    videoDurationSeconds ||
+      toNumber(rawObj.videoDurationSeconds) ||
+      toNumber(rawObj.durationSeconds) ||
+      toNumber(rawObj.videoDuration) ||
+      60
+  );
   const moments: AnimationMoment[] = [];
 
   for (const [index, item] of rawMoments.entries()) {
     if (!item || typeof item !== 'object') continue;
     const obj = item as Record<string, unknown>;
-    const start = clamp(toNumber(obj.start) ?? 0, 0, Math.max(0, duration - 0.1));
-    const itemDuration = clamp(toNumber(obj.duration) ?? 3, 1.2, Math.min(7, duration - start));
-    if (itemDuration <= 0) continue;
+    const rawStart =
+      toNumber(obj.start) ??
+      toNumber(obj.startSeconds) ??
+      toNumber(obj.startTime) ??
+      toNumber(obj.timestamp) ??
+      toNumber(obj.time) ??
+      0;
+    const rawDurationValue =
+      toNumber(obj.duration) ??
+      toNumber(obj.durationSeconds) ??
+      toNumber(obj.lengthSeconds) ??
+      3;
+    const start = clamp(rawStart, 0, Math.max(0, duration - 0.1));
+    const maxAllowedDuration = Math.max(0, duration - start);
+    if (maxAllowedDuration < 1.2) continue;
+    const itemDuration = clamp(rawDurationValue, 1.2, Math.min(7, maxAllowedDuration));
+    if (itemDuration < 1.2) continue;
+    const content =
+      cleanText(obj.content) ||
+      cleanText(obj.displayText) ||
+      cleanText(obj.headline) ||
+      cleanText(obj.text) ||
+      cleanText(obj.description) ||
+      'Animated callout';
     moments.push({
       animationMomentId: cleanText(obj.animationMomentId) || `anim_moment_${index + 1}`,
       start: Number(start.toFixed(3)),
       duration: Number(itemDuration.toFixed(3)),
-      type: cleanText(obj.type) || 'kinetic-type',
-      narratorText: cleanText(obj.narratorText),
+      type: cleanText(obj.type) || cleanText(obj.animationType) || 'kinetic-type',
+      narratorText: cleanText(obj.narratorText) || cleanText(obj.scriptLine),
       displayText: cleanText(obj.displayText).split(' ').slice(0, 4).join(' '),
-      content: cleanText(obj.content) || cleanText(obj.displayText) || 'Animated callout',
-      subtitle: cleanText(obj.subtitle) || cleanText(obj.narratorText),
-      emphasis: cleanText(obj.emphasis),
-      animationPrompt: cleanPromptText(obj.animationPrompt),
+      content,
+      subtitle:
+        cleanText(obj.subtitle) ||
+        cleanText(obj.subtitleContent) ||
+        cleanText(obj.narratorText) ||
+        content,
+      emphasis: cleanText(obj.emphasis) || cleanText(obj.keyword),
+      animationPrompt:
+        cleanPromptText(obj.animationPrompt) ||
+        cleanPromptText(obj.scenePrompt) ||
+        cleanPromptText(obj.directionPrompt),
       colorPalette: obj.colorPalette && typeof obj.colorPalette === 'object' ? (obj.colorPalette as Record<string, unknown>) : undefined,
       composition: obj.composition && typeof obj.composition === 'object' ? (obj.composition as Record<string, unknown>) : undefined,
     });
   }
 
   if (moments.length === 0) {
-    throw new Error('HyperFrames animation plan has no usable moments.');
+    const fallback = fallbackMomentsFromSubtitles(subtitleClips, duration, MAX_MOMENTS);
+    if (fallback.length === 0) {
+      throw new Error('HyperFrames animation plan has no usable moments.');
+    }
+    console.warn('[HyperFrames Service] AI plan had no parseable moments; using subtitle-derived fallback', {
+      parsedKeys: raw && typeof raw === 'object' ? Object.keys(raw as Record<string, unknown>).slice(0, 12) : [],
+      subtitleClipCount: subtitleClips.length,
+      fallbackMomentCount: fallback.length,
+    });
+    return normalizePlan({ videoDurationSeconds: duration, moments: fallback }, subtitleClips, duration);
   }
 
   const budget = buildHyperframesAnimationBudget(duration);
@@ -666,11 +758,7 @@ function normalizePlan(raw: unknown, subtitleClips: SubtitleClip[], videoDuratio
 }
 
 function countRawMoments(raw: unknown): number {
-  if (Array.isArray(raw)) return raw.length;
-  if (raw && typeof raw === 'object' && Array.isArray((raw as Record<string, unknown>).moments)) {
-    return ((raw as Record<string, unknown>).moments as unknown[]).length;
-  }
-  return 0;
+  return countRawMomentsInPlan(raw);
 }
 
 function getNpxBin(): string {
@@ -1395,10 +1483,29 @@ async function prepareHyperframesAnimationPlanReview(params: {
     maxMoments: MAX_MOMENTS,
     environment,
   });
-  fs.writeFileSync(path.join(hyperframesProjectDir, OPENCODE_OUTPUT_FILENAME), aiResult.output, 'utf8');
+  const opencodeRawPath = path.join(hyperframesProjectDir, OPENCODE_OUTPUT_FILENAME);
+  fs.writeFileSync(opencodeRawPath, aiResult.output, 'utf8');
+  console.log('[HyperFrames Service] OpenCode raw output saved for analysis', {
+    projectId: params.projectId,
+    path: opencodeRawPath,
+    outputChars: aiResult.output.length,
+    hint: 'Set HYPERFRAMES_LOG_OPENCODE_OUTPUT=1 (default) to print assistant text in agent logs during generation',
+  });
 
   const parsedPlan = parseOpenCodeJSON(aiResult.output);
   const parsedMomentCount = countRawMoments(parsedPlan);
+  if (parsedMomentCount === 0) {
+    console.warn(
+      '[HyperFrames Service] OpenCode output parsed without moments array — inspect raw file at path above',
+      {
+        projectId: params.projectId,
+        outputChars: aiResult.output.length,
+        parsedTopLevelKeys:
+          parsedPlan && typeof parsedPlan === 'object' ? Object.keys(parsedPlan as Record<string, unknown>) : [],
+        hasMomentsKeyInRaw: /"moments"\s*:/.test(aiResult.output),
+      }
+    );
+  }
   const animationPlan = normalizePlan(parsedPlan, params.subtitleClips, params.videoDurationSeconds);
   console.log('[HyperFrames Service] plan normalized', {
     projectId: params.projectId,

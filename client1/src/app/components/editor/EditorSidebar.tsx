@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { FolderOpen, Music, ImageIcon, Users, ChevronRight, Upload, Mic, Film, Volume2, Trash2, Video, Sparkles } from 'lucide-react';
 import type { EditorProject } from '../../../features/editor/types';
 import { API_ENDPOINTS } from '../../../config/api';
+import { pathLooksLikeVideo } from '../../../features/editor/overlayMedia';
 
 export type SidebarTab = 'audioSession' | 'template' | 'assets' | 'animation' | 'audio' | 'sfx' | 'images' | 'video' | 'chars';
 
@@ -673,15 +674,28 @@ export default function EditorSidebar({
                           <div className="flex items-center gap-2 min-w-0">
                             <div className="h-10 w-10 shrink-0 rounded-md bg-muted overflow-hidden border border-border">
                               {!brokenProjectImageThumbs[asset.assetId] ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img
-                                  src={`${API_ENDPOINTS.serveProjectImage(project.id, asset.assetId)}?t=${encodeURIComponent(String(asset.createdAt ?? Date.now()))}`}
-                                  alt={asset.filename}
-                                  className="h-full w-full object-cover"
-                                  onError={() => {
-                                    setBrokenProjectImageThumbs((prev) => ({ ...prev, [asset.assetId]: true }));
-                                  }}
-                                />
+                                pathLooksLikeVideo(asset.filename) ? (
+                                  <video
+                                    src={`${API_ENDPOINTS.serveProjectImage(project.id, asset.assetId)}?t=${encodeURIComponent(String(asset.createdAt ?? Date.now()))}`}
+                                    className="h-full w-full object-cover"
+                                    muted
+                                    playsInline
+                                    preload="metadata"
+                                    onError={() => {
+                                      setBrokenProjectImageThumbs((prev) => ({ ...prev, [asset.assetId]: true }));
+                                    }}
+                                  />
+                                ) : (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={`${API_ENDPOINTS.serveProjectImage(project.id, asset.assetId)}?t=${encodeURIComponent(String(asset.createdAt ?? Date.now()))}`}
+                                    alt={asset.filename}
+                                    className="h-full w-full object-cover"
+                                    onError={() => {
+                                      setBrokenProjectImageThumbs((prev) => ({ ...prev, [asset.assetId]: true }));
+                                    }}
+                                  />
+                                )
                               ) : (
                                 <div className="h-full w-full flex items-center justify-center text-muted-foreground">
                                   <ImageIcon size={16} />

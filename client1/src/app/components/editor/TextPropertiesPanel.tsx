@@ -4,6 +4,11 @@ import { useState, useEffect, useRef, useImperativeHandle, forwardRef } from 're
 import type { Clip, ClipRef, EditorProject, OverlayClip } from '../../../features/editor/types';
 import { voiceDisplayName } from '../../../features/editor/voiceDisplayName';
 import { API_ENDPOINTS } from '../../../config/api';
+import {
+  isOverlayClipVideo,
+  mediaKindFromFilename,
+  probeOverlayUrlIsVideo,
+} from '../../../features/editor/overlayMedia';
 
 export type TextPropertiesPanelHandle = {
   openFileDialog: () => void;
@@ -179,25 +184,33 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
     };
   }, [isResizing, onWidthChange]);
 
-  // Load overlay preview URL; video vs image from saved path (export/upload writes extension).
+  // Load overlay preview URL; detect video via path/label/mediaKind or Content-Type probe.
   useEffect(() => {
-    if (selected?.kind === 'overlay' && projectId && !isAnimationOverlayClip) {
-      const overlay = selected as OverlayClip;
-      const hasSavedMediaPath = typeof overlay.path === 'string' && overlay.path.trim() !== '';
-      if (!hasSavedMediaPath) {
-        setImagePreview(null);
-        setOverlayPreviewIsVideo(false);
-        return;
-      }
-      const url = API_ENDPOINTS.serveProjectImage(projectId, overlay.assetId);
-      setImagePreview(url);
-      const p = overlay.path || '';
-      setOverlayPreviewIsVideo(/\.(mp4|webm|mov|m4v)$/i.test(p));
-    } else {
+    if (selected?.kind !== 'overlay' || !projectId || isAnimationOverlayClip) {
       setImagePreview(null);
       setOverlayPreviewIsVideo(false);
+      return;
     }
-  }, [selected?.kind, selected?.id, selectedOverlay?.assetId, selectedOverlay?.path, projectId, isAnimationOverlayClip]);
+    const overlay = selected as OverlayClip;
+    if (!overlay.assetId?.trim()) {
+      setImagePreview(null);
+      setOverlayPreviewIsVideo(false);
+      return;
+    }
+    const url = API_ENDPOINTS.serveProjectImage(projectId, overlay.assetId);
+    setImagePreview(url);
+    if (isOverlayClipVideo(overlay)) {
+      setOverlayPreviewIsVideo(true);
+      return;
+    }
+    let cancelled = false;
+    void probeOverlayUrlIsVideo(url).then((isVideo) => {
+      if (!cancelled) setOverlayPreviewIsVideo(isVideo);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected?.kind, selected?.id, selectedOverlay?.assetId, selectedOverlay?.path, selectedOverlay?.label, selectedOverlay?.mediaKind, projectId, isAnimationOverlayClip]);
 
   const handleUploadImage = async (file: File) => {
     if (!selected || selected.kind !== 'overlay' || isAnimationOverlayClip) return;
@@ -224,7 +237,10 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
         const isVid =
           data.assetKind === 'video' ||
           (typeof data.filename === 'string' && /\.(mp4|webm|mov|m4v)$/i.test(data.filename));
-        const patch: Partial<Clip> = { path: data.imagePath } as Partial<Clip>;
+        const patch: Partial<Clip> = {
+          path: data.imagePath,
+          mediaKind: isVid ? 'video' : 'image',
+        } as Partial<Clip>;
         if (isVid && uploadedVideoDuration && project?.duration) {
           const remainingTimeline = Math.max(0.1, project.duration - selected.start);
           patch.duration = Number(Math.min(uploadedVideoDuration, remainingTimeline).toFixed(3));
@@ -251,7 +267,7 @@ const TextPropertiesPanel = forwardRef<TextPropertiesPanelHandle, Props>(functio
         method: 'DELETE',
       });
       if (!response.ok) throw new Error('Failed to remove media');
-      onUpdateClip({ path: undefined } as Partial<Clip>);
+      onUpdateClip({ path: undefined, mediaKind: undefined } as Partial<Clip>);
       setImagePreview(null);
       setOverlayPreviewIsVideo(false);
       onProjectUpdate?.();
